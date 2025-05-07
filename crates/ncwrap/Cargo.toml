@@ -1,0 +1,39 @@
+[package]
+name = "ncwrap"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+nockchain = { path = "../nockchain" }
+choo = { workspace = true }
+crown = { workspace = true }
+kernels = { workspace = true, features = ["dumb"] }
+nockchain-bitcoin-sync = { workspace = true }
+sword = { workspace = true }
+sword_macros = { workspace = true }
+
+bitcoincore-rpc = { workspace = true }
+bs58 = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+equix = { workspace = true }
+libp2p = { workspace = true, features = [
+    "ping",
+    "kad",
+    "identify",
+    "quic",
+    "tls",
+    "dns",
+    "tokio",
+    "macros",
+    "request-response",
+    "cbor",
+] }
+nockchain-libp2p-io = { workspace = true }
+tempfile = { workspace = true }
+termcolor = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tracing = { workspace = true }
+tracing-test = { workspace = true }
+
+zkvm-jetpack = { workspace = true }
+ctrlc = "3.4.6"

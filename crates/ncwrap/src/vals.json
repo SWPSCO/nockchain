@@ -1,0 +1,11 @@
+{
+    "npc_socket": "nockchain.sock",
+    "mine": true,
+    "fakenet": true,
+    "genesis_leader": true,
+    "genesis_message": "hail zorp",
+    "peer": ["/ip4/10.254.254.7/udp/3006/quic-v1"],
+    "no_default_peers": true,
+    "bind": ["/ip4/0.0.0.0/udp/3006/quic-v1"],
+    "new_peer_id": true
+  }

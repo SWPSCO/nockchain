@@ -63,7 +63,10 @@ run-nockchain-follower:  # Run nockchain mode in follower mode
 	$(call show_env_vars)
 	mkdir -p test-follower && cd test-follower && RUST_BACKTRACE=1 cargo run --release --bin nockchain -- --fakenet --genesis-watcher --npc-socket nockchain.sock --mining-pubkey $(MINING_PUBKEY) --bind /ip4/0.0.0.0/udp/3006/quic-v1 --peer /ip4/127.0.0.1/udp/3005/quic-v1 --new-peer-id --no-default-peers
 
-
+.PHONY: run-nockchain-wrapper
+run-nockchain-wrapper:
+	$(call show_env_vars)
+	RUST_BACKTRACE=1 cargo run --release --bin nockchain_wrapper
 
 HOON_SRCS := $(find hoon -type file -name '*.hoon')
 
