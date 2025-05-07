@@ -11,29 +11,24 @@ jobs:
       hashes: ${{ steps.hash.outputs.hashes }}
     steps:
       - uses: actions/checkout@v3
-
       - name: Setup Rust with musl target
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           profile: minimal
           target: x86_64-unknown-linux-musl
-
       - name: Install musl-tools
         run: sudo apt-get update && sudo apt-get install -y musl-tools
-
       - name: Install choo
         run: make install-choo
-
       - name: Build hoon assets
         run: make build-hoon-all
-
       - name: Build binary
         run: make build
-
       - name: Generate linux hashes
         id: hash
         run: |
+          set -euo pipefail
           files="assets/wal.jam assets/dumb.jam target/release/nockchain"
           echo "hashes=$(sha256sum $files | base64 -w0)" >> $GITHUB_OUTPUT
 
@@ -43,40 +38,37 @@ jobs:
       hashes: ${{ steps.hash.outputs.hashes }}
     steps:
       - uses: actions/checkout@v3
-
       - name: Setup Rust (Darwin)
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           profile: minimal
           target: x86_64-apple-darwin
-
       - name: Install choo
         run: make install-choo
-
       - name: Build hoon assets
         run: make build-hoon-all
-
       - name: Build binary
         run: make build
-
       - name: Generate macOS hashes
         id: hash
         run: |
+          set -euo pipefail
           files="assets/wal.jam assets/dumb.jam target/release/nockchain"
           echo "hashes=$(shasum -a 256 $files | base64 -b 0)" >> $GITHUB_OUTPUT
 
   provenance:
     needs: [build-linux, build-macos]
-    runs-on: ubuntu-latest
-    permissions:
-      actions: read
-      id-token: write
-      contents: write
     uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
     with:
       base64-subjects: ${{ needs.build-linux.outputs.hashes }},${{ needs.build-macos.outputs.hashes }}
       upload-assets: true
+    permissions:
+      actions: read
+      id-token: write
+      contents: write
+    secrets:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   release:
     needs: provenance
