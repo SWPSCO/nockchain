@@ -55,6 +55,7 @@ jobs:
             target/release/nockchain-bitcoin-sync
             target/release/choo
             target/release/equix-latency
+            target/release/wallet
 
   build-macos:
     needs: vars
@@ -80,6 +81,7 @@ jobs:
             target/release/nockchain-bitcoin-sync
             target/release/choo
             target/release/equix-latency
+            target/release/wallet
 
   package:
     needs: [build-linux, build-macos]
@@ -98,8 +100,8 @@ jobs:
       - name: make zips
         run: |
           mkdir -p out/linux_x64 out/macos_aarch64 out/jams
-          cp linux/target/release/nockchain linux/target/release/nockchain-bitcoin-sync linux/target/release/choo linux/target/release/equix-latency out/linux_x64/
-          cp mac/target/release/nockchain mac/target/release/nockchain-bitcoin-sync mac/target/release/choo mac/target/release/equix-latency out/macos_aarch64/
+          cp linux/target/release/nockchain linux/target/release/nockchain-bitcoin-sync linux/target/release/choo linux/target/release/equix-latency linux/target/release/wallet out/linux_x64/
+          cp mac/target/release/nockchain mac/target/release/nockchain-bitcoin-sync mac/target/release/choo mac/target/release/equix-latency mac/target/release/choo mac/target/release/wallet out/macos_aarch64/
           cp linux/assets/*.jam out/jams/
           (cd out/linux_x64 && zip -j ../linux_x64.zip *)
           (cd out/macos_aarch64 && zip -j ../macos_aarch64.zip *)
