@@ -1,95 +1,159 @@
 name: Nockchain SLSA3 release
+
 on:
-  workflow_dispatch:
   push:
     branches: [ master ]
+  workflow_dispatch:
+    inputs:
+      create_release:
+        description: "create github release when manually triggered"
+        required: false
+        default: true
+        type: boolean
+
+permissions: write-all
+env:
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
 jobs:
-  build-linux:
+  vars:
     runs-on: ubuntu-latest
     outputs:
-      hashes: ${{ steps.hash.outputs.hashes }}
+      short_sha: ${{ steps.set.outputs.short_sha }}
     steps:
       - uses: actions/checkout@v3
+      - name: set short git commit sha
+        id: set
+        run: |
+          calculatedSha=$(git rev-parse --short ${GITHUB_SHA})
+          echo "short_sha=$calculatedSha" >> $GITHUB_OUTPUT
 
-      - name: Setup Rust with musl target
-        uses: actions-rs/toolchain@v1
+  build-linux:
+    needs: vars
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           profile: minimal
           target: x86_64-unknown-linux-musl
-
-      - name: Install musl-tools
+      - name: deps
         run: sudo apt-get update && sudo apt-get install -y musl-tools
-
-      - name: Install choo
+      - name: install choo
         run: make install-choo
-
-      - name: Build hoon assets
+      - name: build hoon assets
         run: make build-hoon-all
-
-      - name: Build binary
+      - name: build binaries
         run: make build
-
-      - name: Generate linux hashes
-        id: hash
-        run: |
-          files="assets/wal.jam assets/dumb.jam target/release/nockchain"
-          echo "hashes=$(sha256sum $files | base64 -w0)" >> $GITHUB_OUTPUT
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-artifacts
+          path: |
+            assets/*.jam
+            target/release/nockchain
+            target/release/nockchain-bitcoin-sync
+            target/release/choo
+            target/release/equix-latency
 
   build-macos:
+    needs: vars
     runs-on: macos-latest
-    outputs:
-      hashes: ${{ steps.hash.outputs.hashes }}
     steps:
       - uses: actions/checkout@v3
-
-      - name: Setup Rust (Darwin)
-        uses: actions-rs/toolchain@v1
+      - uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           profile: minimal
-          target: x86_64-apple-darwin
-
-      - name: Install choo
+      - name: install choo
         run: make install-choo
-
-      - name: Build hoon assets
+      - name: build hoon assets
         run: make build-hoon-all
-
-      - name: Build binary
+      - name: build binaries
         run: make build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac-artifacts
+          path: |
+            assets/*.jam
+            target/release/nockchain
+            target/release/nockchain-bitcoin-sync
+            target/release/choo
+            target/release/equix-latency
 
-      - name: Generate macOS hashes
-        id: hash
-        run: |
-          files="assets/wal.jam assets/dumb.jam target/release/nockchain"
-          echo "hashes=$(shasum -a 256 $files | base64 -b 0)" >> $GITHUB_OUTPUT
-
-  provenance:
+  package:
     needs: [build-linux, build-macos]
     runs-on: ubuntu-latest
+    outputs:
+      content_hashes: ${{ steps.content-hash.outputs.content_hashes }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-artifacts
+          path: ./linux
+      - uses: actions/download-artifact@v4
+        with:
+          name: mac-artifacts
+          path: ./mac
+      - name: make zips
+        run: |
+          mkdir -p out/linux_x64 out/macos_aarch64 out/jams
+          cp linux/target/release/nockchain linux/target/release/nockchain-bitcoin-sync linux/target/release/choo linux/target/release/equix-latency out/linux_x64/
+          cp mac/target/release/nockchain mac/target/release/nockchain-bitcoin-sync mac/target/release/choo mac/target/release/equix-latency out/macos_aarch64/
+          cp linux/assets/*.jam out/jams/
+          (cd out/linux_x64 && zip -j ../linux_x64.zip *)
+          (cd out/macos_aarch64 && zip -j ../macos_aarch64.zip *)
+          (cd out/jams && zip -j ../jams.zip *)
+      - name: compute content hashes
+        id: content-hash
+        run: |
+          mkdir -p tmp/linux tmp/macos tmp/jams
+          unzip -j out/linux_x64.zip -d tmp/linux
+          unzip -j out/macos_aarch64.zip -d tmp/macos
+          unzip -j out/jams.zip -d tmp/jams
+          files=$(ls tmp/linux/* tmp/macos/* tmp/jams/*)
+          echo "content_hashes=$(sha256sum $files | base64 -w0)" >> $GITHUB_OUTPUT
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packaged-zips
+          path: out/*.zip
+
+  provenance:
+    needs: package
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
     permissions:
       actions: read
       id-token: write
       contents: write
-    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
     with:
-      base64-subjects: ${{ needs.build-linux.outputs.hashes }},${{ needs.build-macos.outputs.hashes }}
-      upload-assets: true
+      base64-subjects: ${{ needs.package.outputs.content_hashes }}
+      upload-assets: false
 
   release:
-    needs: provenance
+    if: |
+      (github.event_name == 'push' && github.ref == 'refs/heads/master') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.create_release == 'true')
+    needs: [vars, package, provenance]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: softprops/action-gh-release@v1
+      - uses: actions/download-artifact@v4
         with:
-          tag_name: ${{ github.sha }}
-          release_name: release ${{ github.sha }}
-          files: |
-            assets/wal.jam
-            assets/dumb.jam
-            target/release/nockchain
+          name: packaged-zips
+          path: ./out
+      - name: download provenance
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.provenance.outputs.provenance-name }}
+          path: ./prov
+      - uses: softprops/action-gh-release@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ needs.vars.outputs.short_sha }}
+          name: Release ${{ needs.vars.outputs.short_sha }}
+          draft: false
+          files: |
+            out/linux_x64.zip
+            out/macos_aarch64.zip
+            out/jams.zip
+            prov/${{ needs.provenance.outputs.provenance-name }}
