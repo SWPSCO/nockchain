@@ -2,7 +2,7 @@ name: Nockchain SLSA3 release
 
 on:
   push:
-    branches: [ master ]
+    branches: [ release ]
   workflow_dispatch:
     inputs:
       create_release:
