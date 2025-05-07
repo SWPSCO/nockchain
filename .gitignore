@@ -3,3 +3,4 @@ target
 Cargo.lock
 .nockchain_identity
 .nockchain_identity.peerid
+.data.nockchain/
