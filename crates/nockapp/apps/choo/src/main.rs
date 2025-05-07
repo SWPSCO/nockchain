@@ -1,13 +1,13 @@
+use choo::*;
 use clap::Parser;
 use crown::kernel::boot;
 use futures::FutureExt;
-
-use choo::*;
 use sword::mem::{AllocationError, NewStackError};
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     let cli = ChooCli::parse();
+
     boot::init_default_tracing(&cli.boot.clone());
     let result = std::panic::AssertUnwindSafe(async {
         let (nockapp, _) = initialize_choo(cli).await?;

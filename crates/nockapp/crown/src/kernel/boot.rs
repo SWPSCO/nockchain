@@ -246,17 +246,17 @@ pub async fn setup_(
 
     if !jams_dir.exists() {
         std::fs::create_dir_all(&jams_dir)?;
-        info!("Created jams directory: {:?}", jams_dir);
+        debug!("Created jams directory: {:?}", jams_dir);
     }
 
     if pma_dir.exists() {
         std::fs::remove_dir_all(&pma_dir)?;
-        info!("Deleted existing pma directory: {:?}", pma_dir);
+        debug!("Deleted existing pma directory: {:?}", pma_dir);
     }
 
     if cli.new && jams_dir.exists() {
         std::fs::remove_dir_all(&jams_dir)?;
-        info!("Deleted existing checkpoint directory: {:?}", jams_dir);
+        debug!("Deleted existing checkpoint directory: {:?}", jams_dir);
     }
 
     let jam_paths = JamPaths::new(&jams_dir);

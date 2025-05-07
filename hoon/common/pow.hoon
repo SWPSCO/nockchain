@@ -13,10 +13,10 @@
 ::
 ::  +prove-block-inner
 ++  prove-block-inner
-  |=  [length=@ block-commitment=noun-digest:tip5 nonce=noun-digest:tip5 sc=stark-config]
+  |=  [length=@ block-commitment=noun-digest:tip5 nonce=noun-digest:tip5]
   ^-  [proof:sp tip5-hash-atom]
   =/  =prove-result:sp
-    (~(prove np sc) block-commitment nonce length ~)
+    (prove:np block-commitment nonce length ~)
   ?>  ?=(%& -.prove-result)
   =/  =proof:sp  p.prove-result
   =/  proof-hash=tip5-hash-atom  (digest-to-atom:tip5 (hash-proof proof))

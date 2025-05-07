@@ -50,7 +50,7 @@
           ::  which a new block's timestamp must be after to be considered valid
           min-past-blocks=11
           ::TODO determine appropriate genesis target
-          genesis-target-atom=^~((div max-tip5-atom:tip5 (bex 0)))
+          genesis-target-atom=^~((div max-tip5-atom:tip5 (bex 2)))
           ::TODO determine a real max-target-atom. BTC uses 32 leading zeroes
           max-target-atom=max-tip5-atom:tip5
           ::  whether or not to check the pow of blocks

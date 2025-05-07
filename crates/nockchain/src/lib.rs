@@ -444,10 +444,6 @@ pub async fn init_with_kernel(
             Some(memory_connection_limits::Behaviour::with_max_bytes(max_bytes))
         } else { c.max_system_memory_fraction.map(memory_connection_limits::Behaviour::with_max_percentage) }
     });
-    // TODO parse CLI
-    let mut swarm = nockchain_libp2p_io::p2p::start_swarm(
-        keypair, bind_multiaddrs, allowed, limits, memory_limits,
-    )?;
 
     let backbone_peers = BACKBONE_NODES
         .iter()
@@ -480,12 +476,6 @@ pub async fn init_with_kernel(
     }
 
     debug!("peer_multiaddrs: {:?}", peer_multiaddrs);
-
-    // Dial initial peers
-    for remote in peer_multiaddrs {
-        swarm.dial(remote.clone())?;
-        info!("Dialed initial peer {remote}");
-    }
 
     let equix_builder = equix::EquiXBuilder::new();
 
@@ -534,7 +524,12 @@ pub async fn init_with_kernel(
     }
 
     let libp2p_driver = nockchain_libp2p_io::nc::make_libp2p_driver(
-        swarm,
+        keypair,
+        bind_multiaddrs,
+        allowed,
+        limits,
+        memory_limits,
+        &peer_multiaddrs,
         equix_builder,
         cli.as_ref().and_then(|c| {
             if let Some(pubkey) = &c.mining_pubkey {

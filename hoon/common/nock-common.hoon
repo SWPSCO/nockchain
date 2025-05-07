@@ -154,8 +154,8 @@
   ==
 ::
 ++  remove-unused-constraints
-  |=  [pre=preprocess table-names=(list term) override=(unit (list term))]
-  ^-  preprocess
+  |=  [pre=preprocess-0 table-names=(list term) override=(unit (list term))]
+  ^-  preprocess-0
   ::
   =?  cd.pre  !=(~ override)
     %-  ~(gas by *table-to-constraint-degree)

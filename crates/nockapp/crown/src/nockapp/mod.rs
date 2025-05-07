@@ -17,7 +17,7 @@ use tokio::sync::{broadcast, mpsc, Mutex, OwnedMutexGuard};
 use tokio::time::{interval, Duration, Interval};
 use tokio::{fs, select};
 use tokio_util::task::TaskTracker;
-use tracing::{debug, error, info, instrument, trace};
+use tracing::{debug, error, instrument, trace};
 
 use crate::kernel::form::Kernel;
 use crate::noun::slab::NounSlab;
@@ -259,7 +259,7 @@ impl NockApp {
                 Err(NockAppError::Exit(code)) => {
                     if code == 0 {
                         // zero is success, we're simply done.
-                        info!("nockapp exited successfully with code: {}", code);
+                        debug!("nockapp exited successfully with code: {}", code);
                         break Ok(());
                     } else {
                         error!("nockapp exited with error code: {}", code);
@@ -275,14 +275,14 @@ impl NockApp {
     }
 
     pub async fn join(self) -> NockAppResult {
-        info!("Awaiting serf stop");
+        debug!("Awaiting serf stop");
         self.kernel.serf.stop().await;
-        info!("Joining serf thread");
+        debug!("Joining serf thread");
         self.kernel
             .serf
             .join()
             .map_err(|e| NockAppError::SerfThreadError(e))?;
-        info!("Serf thread joined");
+        debug!("Serf thread joined");
         Ok(())
     }
 
@@ -322,12 +322,12 @@ impl NockApp {
                 Ok(NockAppRun::Done)
             },
             shutdown = &mut self.shutdown_recv => {
-                info!("Shutdown channel received");
+                debug!("Shutdown channel received");
                 self.metrics.handle_shutdown.increment();
                 self.cleanup_socket();
                 match shutdown {
                     Ok(Ok(())) => {
-                        info!("Shutdown triggered, exiting");
+                        debug!("Shutdown triggered, exiting");
                         Ok(NockAppRun::Done)
                     },
                     Ok(Err(e)) => {
@@ -347,7 +347,7 @@ impl NockApp {
             },
             exit = self.exit_recv.recv() => {
                 self.metrics.handle_exit.increment();
-                info!("Exit signal received");
+                debug!("Exit signal received");
                 if let Some(code) = exit {
                     self.handle_exit(code).await
                 } else {
@@ -469,9 +469,9 @@ impl NockApp {
         // TODO: See if exit_status is duplicative of what the cancel token is for.
         self.exit_status.store(true, Ordering::SeqCst);
         let exit_event_num = self.kernel.serf.event_number.load(Ordering::SeqCst);
-        info!(
-            "Exit request received, waiting for save checkpoint with event_num {}",
-            exit_event_num
+        debug!(
+            "Exit request received, waiting for save checkpoint with event_num {} (code {})",
+            exit_event_num, code
         );
 
         let mut recv = self.watch_recv.clone();
@@ -501,7 +501,7 @@ impl NockApp {
             .await
             .expect("Failed to wait for saves to catch up to exit_event_num");
             Self::cleanup_socket_(&socket_path);
-            info!("Save event_num reached, finishing with code {}", code);
+            debug!("Save event_num reached, finishing with code {}", code);
             let shutdown_result = if code == 0 {
                 Ok(())
             } else {
@@ -510,7 +510,7 @@ impl NockApp {
             // Ensure we send the shutdown result before canceling so that
             // we don't get a race condition where the yielded result is
             // "canceled" instead of the actual result.
-            info!("Sending shutdown result");
+            debug!("Sending shutdown result");
             let _ = shutdown_send.send(shutdown_result);
         });
         Ok(NockAppRun::Pending)

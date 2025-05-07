@@ -1,16 +1,17 @@
 /=  *  /common/zeke
 /=  stark-prover  /common/stark/prover
 /=  common  /common/nock-common
+/#  sc=stark-config
 ::
-|_  stark-config
-++  sam  +<
+|%
+::
 ++  prover
   =|  in=stark-input
   ::  +<+< = stark-engine door sample wrt stark-verifier core
   %_    stark-prover
       +<+<
     %_  in
-      stark-config        sam
+      stark-config        sc
       all-verifier-funcs  all-verifier-funcs:common
     ==
   ==

@@ -3,6 +3,7 @@
 ~%  %table-lib  ..fri-door  ~
 ::    table-lib
 |%
+::
 +|  %jute-types
 +$  jute-data  [name=@tas sam=tree-data prod=tree-data]
 +$  jute-map  (map @tas @)

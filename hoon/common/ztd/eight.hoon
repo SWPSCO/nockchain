@@ -27,9 +27,10 @@
       terminal=@
   ==
 ::
-::  $preprocess: This holds everything that must be precomputed before we generate proofs.
-+$  preprocess
-  $:  cd=table-to-constraint-degree       :: maximum degree of constraints for each table
+::  $preprocess-0: preprocess with a version tag attached
++$  preprocess-0
+  $:  %0
+      cd=table-to-constraint-degree       :: maximum degree of constraints for each table
       constraint-map=(map @ constraints)  :: map from table number -> constraints
       count-map=(map @ constraint-counts) :: map from table number -> constraint-counts
   ==
@@ -37,7 +38,7 @@
 ::  $stark-config: prover+verifier parameters unrelated to a particular computation
 +$  stark-config
   $:  conf=[log-expand-factor=_6 security-level=_100]
-      prep=(unit preprocess)
+      prep=preprocess-0
   ==
 ::TODO this type could potentially be improved
 +$  stark-input
@@ -848,7 +849,6 @@
 ~%  %stark-engine  ..puzzle-nock  ~
 ::    stark-engine
 |%
-::
 ++  stark-engine-jet-hook
   ~/  %stark-engine-jet-hook
   |=  n=@
@@ -931,18 +931,6 @@
     |=  [a=@ d=_d]
     (max d a)
   ::
-  ::
-  ::    compute max degree of the constraints for each table
-  ++  compute-table-to-constraint-degree
-    ^-  table-to-constraint-degree
-    %-  ~(gas by *(map @ constraint-degrees))
-    ::  turn over all verifier funcs except for the %jute table
-    ::%+  iturn  (scag (dec (lent all-verifier-funcs)) all-verifier-funcs)
-    %+  iturn  all-verifier-funcs
-    |=  [i=@ funcs=verifier-funcs]
-    ^-  [@ constraint-degrees]
-    [i (compute-constraint-degree funcs ~)]
-  ::
   ++  get-max-constraint-degree
     ~/  %get-max-constraint-degree
     |=  tab=table-to-constraint-degree
@@ -951,67 +939,5 @@
     %+  roll  ~(val by tab)
     |=  [cd=constraint-degrees acc=@]
     (max acc (max boundary.cd (max row.cd (max [transition terminal]:cd))))
-  ::
-  ++  compute-constraints
-    ^-  (map @ constraints)
-    |^
-    %-  ~(gas by *(map @ constraints))
-    ::  turn over all verifier funcs except for the %jute table
-    ::%+  iturn  (scag (dec (lent all-verifier-funcs)) all-verifier-funcs)
-    %+  iturn  all-verifier-funcs
-    |=  [i=@ funcs=verifier-funcs]
-    :-  i
-    :*  (build-constraint-data boundary-constraints:funcs)
-        (build-constraint-data row-constraints:funcs)
-        (build-constraint-data transition-constraints:funcs)
-        (build-constraint-data terminal-constraints:funcs)
-    ==
-    ::
-    ++  build-constraint-data
-      |=  cs=(map term mp-ultra)
-      ^-  (list constraint-data)
-      %+  turn  (unlabel-constraints:util cs)
-      |=  c=mp-ultra
-      [c (mp-degree-ultra c)]
-    --
-  ::
-  ++  count-constraints
-    ^-  (map @ constraint-counts)
-    |^
-    =/  vrf-funcs  all-verifier-funcs
-    %-  ~(gas by *(map @ constraint-counts))
-    %+  iturn
-      all-verifier-funcs
-    |=  [i=@ funcs=verifier-funcs]
-    :-  i
-    :*  (count (unlabel-constraints:util boundary-constraints:funcs))
-        (count (unlabel-constraints:util row-constraints:funcs))
-        (count (unlabel-constraints:util transition-constraints:funcs))
-        (count (unlabel-constraints:util terminal-constraints:funcs))
-    ==
-    ++  count
-      |=  cs=(list mp-ultra)
-      ^-  @
-      %+  roll
-        cs
-      |=  [mp=mp-ultra num=@]
-      ?-    -.mp
-          %mega  +(num)
-          %comp  (add num (lent com.mp))
-      ==
-    --
-  ::
-  ::  +preprocess-data: precompute all data necessary to run the prover/verifier
-  ++  preprocess-data
-    ^-  preprocess
-    ~&  %generating-preprocess-data
-    =/  cd  compute-table-to-constraint-degree
-    =/  constraints  compute-constraints
-    =/  count-map  count-constraints
-    :*  cd
-        constraints
-        count-map
-    ==
-  ::
-  --
---  ::stark-engine
+  --  ::stark-engine
+--

@@ -1,6 +1,6 @@
 use crate::nockapp::driver::{make_driver, IODriverFn};
 use crate::NounExt;
-use tracing::{error, info};
+use tracing::{debug, error};
 
 /// Creates an IO driver function for handling exit signals.
 ///
@@ -12,7 +12,7 @@ use tracing::{error, info};
 /// An `IODriverFn` that can be used with the NockApp to handle exit signals.
 pub fn exit() -> IODriverFn {
     make_driver(|handle| async move {
-        info!("exit_driver: waiting for effect");
+        debug!("exit_driver: waiting for effect");
         loop {
             tokio::select! {
                 eff = handle.next_effect() => {

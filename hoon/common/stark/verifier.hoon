@@ -48,7 +48,8 @@
   ?>  =(num-tables (lent core-table-names:nock-common))
   ::~&  table-heights+heights
   ::
-  =/  pre  ?~(prep.stark-config preprocess-data u.prep.stark-config)
+  =/  c  constraints
+  =/  pre=preprocess-0  prep.stark-config
   ::
   ::
   ::  remove preprocess data for unused tables

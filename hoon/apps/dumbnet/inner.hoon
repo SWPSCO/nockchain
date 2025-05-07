@@ -2,7 +2,6 @@
 /=  sp  /common/stark/prover
 /=  c-transact  /common/tx-engine
 /=  dumb-miner  /apps/dumbnet/lib/miner
-/=  dumb-admin  /apps/dumbnet/lib/admin
 /=  dumb-pending  /apps/dumbnet/lib/pending
 /=  dumb-derived  /apps/dumbnet/lib/derived
 /=  dumb-consensus  /apps/dumbnet/lib/consensus
@@ -21,11 +20,9 @@
 ++  inner
   |_  k=kernel-state:dk
   +*  min      ~(. dumb-miner m.k constants.k)
-      adm      ~(. dumb-admin a.k)
       pen      ~(. dumb-pending p.k constants.k)
       der      ~(. dumb-derived d.k constants.k)
       con      ~(. dumb-consensus c.k constants.k)
-      ver      ~(. nv stark-config.a.k)
       t        ~(. c-transact constants.k)
   ::
   ::  We should be calling the inner kernel load in case of update
@@ -373,7 +370,7 @@
       ::
       ::  validate the powork. this is done separately since the
       ::  other checks are much cheaper.
-      =/  pow-res=?  (verify:ver u.pow.pag ~ eny)
+      =/  pow-res=?  (verify:nv u.pow.pag ~ eny)
       ?.  pow-res
         [%.n %pow-failed-to-verify]
       [%.y ~]
@@ -653,9 +650,6 @@
           %btc-data
         do-btc-data
       ::
-          %init-stark-config
-        `k(a produce-stark-config:adm)
-      ::
           %set-constants
         `k(constants p.command)
       ==
@@ -696,9 +690,8 @@
           `k
         =/  commit=block-commitment:t
           (block-commitment:page:t candidate-block.m.k)
-        =.  a.k  produce-stark-config:adm
         =/  [prf=proof:sp dig=tip5-hash-atom:zeke]
-          (prove-block:mine commit p.command stark-config.a.k)
+          (prove-block:mine commit p.command)
         ?:  %+  check-target:mine  dig
             (~(got z-by targets.c.k) parent.candidate-block.m.k)
           =.  m.k  (set-pow:min prf)

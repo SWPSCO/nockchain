@@ -17,41 +17,49 @@ use tracing::{debug, trace};
 
 use crate::nc::*;
 
+// Kademlia constants
 /** How often we should run a kademlia bootstrap to keep our peer table fresh */
-pub const KADEMLIA_BOOTSTRAP_INTERVAL_SECS: Duration = Duration::from_secs(25);
+pub const KADEMLIA_BOOTSTRAP_INTERVAL: Duration = Duration::from_secs(300);
 
 /** How long we should keep a peer connection alive with no traffic */
-pub const PEER_TIMEOUT_SECS: u64 = 300;
+pub const SWARM_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 
+// Core protocol (QUIC/ping/etc) constants
+/** How many times we should retry dialing our initial peers if we can't get Kademlia initialized */
+// TODO: Make command-line configurable
+pub const INITIAL_PEER_RETRIES: u32 = 5;
+/** How often we should send a keep-alive message to a peer */
+pub const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(15);
 /** How long should we wait before timing out the connection */
-pub const CONNECTION_TIMEOUT_SECS: u64 = PEER_TIMEOUT_SECS;
-pub const MAX_IDLE_TIMEOUT_MILLISECS: u32 = PEER_TIMEOUT_SECS as u32 * 1_000;
-pub const KEEP_ALIVE_INTERVAL_SECS: u64 = 30;
-pub const HANDSHAKE_TIMEOUT_SECS: u64 = PEER_TIMEOUT_SECS;
+pub const CONNECTION_TIMEOUT: Duration = SWARM_IDLE_TIMEOUT;
+/** How long should we wait before timing out the handshake */
+pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
+/** How long QUIC should wait before timing out an idle connection */
+pub const MAX_IDLE_TIMEOUT_MILLISECS: u32 = CONNECTION_TIMEOUT.as_millis() as u32;
+/** How often we should send an identify message to a peer */
+pub const IDENTIFY_INTERVAL: Duration = KADEMLIA_BOOTSTRAP_INTERVAL;
 
-// TODO: command-line/configure
 /** Maximum number of established *incoming* connections */
 pub const MAX_ESTABLISHED_INCOMING_CONNECTIONS: u32 = 32;
 
-// TODO: command-line/configure
 /** Maximum number of established *incoming* connections */
 pub const MAX_ESTABLISHED_OUTGOING_CONNECTIONS: u32 = 32;
 
-// TODO: command-line/configure
 /** Maximum number of established connections */
 pub const MAX_ESTABLISHED_CONNECTIONS: u32 = 64;
 
-// TODO: command-line/configure
 /** Maximum number of established connections with a single peer ID */
 pub const MAX_ESTABLISHED_CONNECTIONS_PER_PEER: u32 = 2;
 
-// TODO: command-line/configure
 /** Maximum pending incoming connections */
 pub const MAX_PENDING_INCOMING_CONNECTIONS: u32 = 16;
 
-// TODO: command-line/configure
 /** Maximum pending outcoing connections */
 pub const MAX_PENDING_OUTGOING_CONNECTIONS: u32 = 16;
+
+// Request/response constants
+pub const REQUEST_RESPONSE_MAX_CONCURRENT_STREAMS: usize = MAX_ESTABLISHED_CONNECTIONS as usize * 2;
+pub const REQUEST_RESPONSE_TIMEOUT: Duration = Duration::from_secs(20);
 
 // ALL PROTOCOLS MUST HAVE UNIQUE VERSIONS
 pub const REQ_RES_PROTOCOL_VERSION: &str = "/nockchain-1-req-res";
@@ -106,21 +114,18 @@ impl NockchainBehaviour {
 
             let identify_config =
                 identify::Config::new(IDENTIFY_PROTOCOL_VERSION.to_string(), keypair.public())
-                    .with_interval(Duration::from_secs(15))
+                    .with_interval(IDENTIFY_INTERVAL)
                     .with_hide_listen_addrs(true); // Only send externally confirmed addresses so we don't send loopback addresses
             let identify_behaviour = identify::Behaviour::new(identify_config);
 
             let memory_store = kad::store::MemoryStore::new(peer_id);
 
-            let mut kad_config =
-                kad::Config::new(libp2p::StreamProtocol::new(KAD_PROTOCOL_VERSION));
-            // kademlia config methods return an &mut so we can't do this in the let binding.
-            kad_config.set_periodic_bootstrap_interval(Some(KADEMLIA_BOOTSTRAP_INTERVAL_SECS));
+            let kad_config = kad::Config::new(libp2p::StreamProtocol::new(KAD_PROTOCOL_VERSION));
             let kad_behaviour = kad::Behaviour::with_config(peer_id, memory_store, kad_config);
 
             let request_response_config = request_response::Config::default()
-                .with_max_concurrent_streams(200)
-                .with_request_timeout(std::time::Duration::from_secs(300));
+                .with_max_concurrent_streams(REQUEST_RESPONSE_MAX_CONCURRENT_STREAMS)
+                .with_request_timeout(REQUEST_RESPONSE_TIMEOUT);
 
             let request_response_behaviour = cbor::Behaviour::new(
                 [(
@@ -181,16 +186,14 @@ pub fn start_swarm(
         .with_tokio()
         .with_quic_config(|mut cfg| {
             cfg.max_idle_timeout = MAX_IDLE_TIMEOUT_MILLISECS;
-            cfg.keep_alive_interval = Duration::from_secs(KEEP_ALIVE_INTERVAL_SECS);
-            cfg.handshake_timeout = Duration::from_secs(HANDSHAKE_TIMEOUT_SECS);
+            cfg.keep_alive_interval = KEEP_ALIVE_INTERVAL;
+            cfg.handshake_timeout = HANDSHAKE_TIMEOUT;
             cfg
         })
         .with_dns_config(resolver_config, resolver_opts)
         .with_behaviour(NockchainBehaviour::pre_new(allowed, limits, memory_limits))?
-        .with_swarm_config(|cfg| {
-            cfg.with_idle_connection_timeout(Duration::from_secs(PEER_TIMEOUT_SECS))
-        })
-        .with_connection_timeout(std::time::Duration::from_secs(CONNECTION_TIMEOUT_SECS))
+        .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(SWARM_IDLE_TIMEOUT))
+        .with_connection_timeout(CONNECTION_TIMEOUT)
         .build();
 
     for bind_addr in bind {

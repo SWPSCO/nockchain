@@ -54,12 +54,11 @@
 ::
 +$  admin-state
   $+  admin-state
-  $:  desk-hash=(unit @uvI)           ::  hash of zkvm desk
-      init=init-phase                 ::  boolean flag denoting whether kernel is in the init phase.
-      =stark-config:dt                ::  prover/verifier settings
-      retain=$~([~ 20] (unit @))      ::  how long to retain transactions before dropping
-                                      ::  value of ~ indicates never drop transactions,
-                                      ::  value of [~ 0] indicates drop everything every new block
+  $:  desk-hash=(unit @uvI)               ::  hash of zkvm desk
+      init=init-phase                     ::  boolean flag denoting whether kernel is in the init phase.
+      retain=$~([~ 20] (unit @))          ::  how long to retain transactions before dropping
+                                          ::  value of ~ indicates never drop transactions,
+                                          ::  value of [~ 0] indicates drop everything every new block
   ==
 ::
 +$  derived-state
@@ -98,7 +97,6 @@
       :: set expected btc height and msg hash of genesis block
       [%set-genesis-seal p=[height=page-number:dt msg-hash=@t]]
       [%btc-data p=btc-hash:dt]  ::  data from BTC RPC node
-      [%init-stark-config ~]  :: init stark config
       test-command
   ==
 ::
@@ -115,7 +113,6 @@
       %btc-data
       %genesis
       %born
-      %init-stark-config
   ==
 ::  commands that can only be performed if init-phase is %.n
 +$  non-init-command  ?(%timer)

@@ -55,6 +55,7 @@ runes:
 - `/-` load from `/sur` (currently discouraged in NockApps)
 - `/=` load from specified path (required `%hoon` mark)
 - `/*` load from specified path via specified mark (presumptively `%hoon` or `%jock`)
+- `/#` load and kick from `/dat`. Used when you have some nock computation you want to precompute.
 - `/?` version pinning (ignored)
 
 ## Developer Troubleshooting

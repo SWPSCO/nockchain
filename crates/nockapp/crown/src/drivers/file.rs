@@ -5,7 +5,7 @@ use crate::noun::FromAtom;
 use crate::AtomExt;
 use sword::noun::{IndirectAtom, Noun, D, NO, T, YES};
 use sword_macros::tas;
-use tracing::{error, info};
+use tracing::{debug, error};
 
 pub enum FileWire {
     Read,
@@ -110,7 +110,7 @@ pub fn file() -> IODriverFn {
                     };
                     let path = path_atom.into_string()?;
                     let contents = contents_atom.as_ne_bytes();
-                    info!("file driver: writing {} bytes to: {}", contents.len(), path);
+                    debug!("file driver: writing {} bytes to: {}", contents.len(), path);
 
                     // Create parent directories if they don't exist
                     if let Some(parent) = std::path::Path::new(&path).parent() {

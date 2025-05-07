@@ -13,12 +13,17 @@ use crown::utils::scry::*;
 use crown::{AtomExt, NounExt};
 use either::{Either, Left, Right};
 use futures::{Future, StreamExt};
+use libp2p::allow_block_list;
+use libp2p::connection_limits;
 use libp2p::identify::Event::Received;
+use libp2p::identity::Keypair;
+use libp2p::kad::NoKnownPeers;
+use libp2p::memory_connection_limits;
 use libp2p::request_response::Event::*;
 use libp2p::request_response::Message::*;
 use libp2p::request_response::{self};
 use libp2p::swarm::SwarmEvent;
-use libp2p::{PeerId, Swarm};
+use libp2p::{Multiaddr, PeerId, Swarm};
 use serde_bytes::ByteBuf;
 use sword::noun::{Atom, Noun, D, T};
 use sword_macros::tas;
@@ -176,23 +181,36 @@ impl FromStr for MiningKeyConfig {
     }
 }
 
-#[instrument(skip(swarm, equix_builder))]
+#[instrument(skip(keypair, bind, allowed, limits, memory_limits, equix_builder))]
 pub fn make_libp2p_driver(
-    mut swarm: Swarm<NockchainBehaviour>,
+    keypair: Keypair,
+    bind: Vec<Multiaddr>,
+    allowed: Option<allow_block_list::Behaviour<allow_block_list::AllowedPeers>>,
+    limits: connection_limits::ConnectionLimits,
+    memory_limits: Option<memory_connection_limits::Behaviour>,
+    initial_peers: &[Multiaddr],
     equix_builder: equix::EquiXBuilder,
     mining_config: Option<Vec<MiningKeyConfig>>,
     init_complete_tx: Option<tokio::sync::oneshot::Sender<()>>,
 ) -> IODriverFn {
+    let initial_peers = Vec::from(initial_peers);
     Box::new(|mut handle| {
         let metrics = NockchainP2PMetrics::register(gnort::global_metrics_registry())
             .expect("Failed to register metrics!");
 
         Box::pin(async move {
+            let mut swarm = crate::p2p::start_swarm(keypair, bind, allowed, limits, memory_limits)
+                .map_err(|e| {
+                    warn!("Could not create swarm: {}", e);
+                    NockAppError::OtherError
+                })?;
             let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmAction>(1000); // number needs to be high enough to send gossips to peers
             let mut join_set = TrackedJoinSet::<Result<(), NockAppError>>::new();
             let message_tracker = Arc::new(Mutex::new(MessageTracker::new()));
+            let mut kad_bootstrap = tokio::time::interval(KADEMLIA_BOOTSTRAP_INTERVAL);
 
-            send_init_stark_config_poke(&handle).await?;
+            let mut initial_peer_retries_remaining = INITIAL_PEER_RETRIES;
+            dial_initial_peers(&mut swarm, &initial_peers)?;
 
             if let Some(configs) = mining_config {
                 if configs.len() == 1
@@ -304,6 +322,18 @@ pub fn make_libp2p_driver(
                                 // Disconnect the peer if they're currently connected
                                 let _ = swarm.disconnect_peer_id(peer_id);
                             },
+                        }
+                    },
+                    _ = kad_bootstrap.tick() => {
+                        // If we don't have any peers, we should retry dialing our initial peers
+                        if let Err(NoKnownPeers())= swarm.behaviour_mut().kad.bootstrap() {
+                            if initial_peer_retries_remaining > 0 {
+                                info!("Failed to bootstrap: {}", NoKnownPeers());
+                                initial_peer_retries_remaining -= 1;
+                                dial_initial_peers(&mut swarm, &initial_peers)?;
+                            } else {
+                                warn!("Failed to bootstrap after {} retries, will not attempt to redial initial peers.", INITIAL_PEER_RETRIES);
+                            }
                         }
                     },
                     Some(result) = join_set.join_next() => {
@@ -507,19 +537,6 @@ async fn enable_mining(handle: &NockAppHandle, enable: bool) -> Result<PokeResul
     enable_mining_slab.set_root(enable_mining_poke);
     let wire = NockchainWire::Local;
     handle.poke(wire.to_wire(), enable_mining_slab).await
-}
-
-#[instrument(skip(handle))]
-async fn send_init_stark_config_poke(handle: &NockAppHandle) -> Result<PokeResult, NockAppError> {
-    let mut init_stark_config_slab = NounSlab::new();
-    let tag = make_tas(&mut init_stark_config_slab, "init-stark-config").as_noun();
-    let poke = T(
-        &mut init_stark_config_slab,
-        &[D(tas!(b"command")), tag, D(0)],
-    );
-    init_stark_config_slab.set_root(poke);
-    let wire = NockchainWire::Local;
-    handle.poke(wire.to_wire(), init_stark_config_slab).await
 }
 
 async fn handle_effect(
@@ -880,69 +897,79 @@ async fn handle_request_response(
                     let request_noun = request_slab.cue_into(message_bytes)?;
                     trace!("handle_request_response: Gossip noun parsed");
 
-                    let head = request_noun.as_cell()?.head();
-                    if head.eq_bytes(b"heard-block") {
-                        let page = request_noun.as_cell()?.tail();
-                        let block_id = page.as_cell()?.head();
-                        let block_id_str = tip5_hash_to_base58(block_id)?;
-                        let tracker = message_tracker.lock().await;
-                        if tracker.seen_blocks.contains(&block_id_str) {
-                            debug!("Block already seen, not processing: {:?}", block_id_str);
-                            metrics.block_seen_cache_hits.increment();
-                            return Ok(());
-                        } else {
-                            debug!("block not seen, processing: {:?}", block_id_str);
-                            metrics.block_seen_cache_misses.increment();
-                        }
-                    }
+                    let send_response: tokio::task::JoinHandle<Result<(), NockAppError>> =
+                        tokio::spawn(async move {
+                            let response = NockchainResponse::Ack;
+                            swarm_tx
+                                .send(SwarmAction::SendResponse { channel, response })
+                                .await
+                                .map_err(|_| NockAppError::OtherError)?;
+                            Ok(())
+                        });
 
-                    if head.eq_bytes(b"heard-tx") {
-                        let raw_tx = request_noun.as_cell()?.tail();
-                        let tx_id = raw_tx.as_cell()?.head();
-                        let tracker = message_tracker.lock().await;
-                        let tx_id_str = tip5_hash_to_base58(tx_id)?;
-                        if tracker.seen_txs.contains(&tx_id_str) {
-                            debug!("Tx already seen, not processing: {:?}", tx_id_str);
-                            metrics.tx_seen_cache_hits.increment();
-                            return Ok(());
-                        } else {
-                            debug!("tx not seen, processing: {:?}", tx_id_str);
-                            metrics.tx_seen_cache_misses.increment();
+                    let poke_kernel = tokio::task::spawn(async move {
+                        let head = request_noun.as_cell()?.head();
+                        if head.eq_bytes(b"heard-block") {
+                            let page = request_noun.as_cell()?.tail();
+                            let block_id = page.as_cell()?.head();
+                            let block_id_str = tip5_hash_to_base58(block_id)?;
+                            let tracker = message_tracker.lock().await;
+                            if tracker.seen_blocks.contains(&block_id_str) {
+                                debug!("Block already seen, not processing: {:?}", block_id_str);
+                                metrics.block_seen_cache_hits.increment();
+                                return Ok(());
+                            } else {
+                                debug!("block not seen, processing: {:?}", block_id_str);
+                                metrics.block_seen_cache_misses.increment();
+                            }
                         }
-                    }
 
-                    let request_fact = prepend_tas(&mut request_slab, "fact", request_noun)?;
-                    request_slab.set_root(request_fact);
-                    let wire = Libp2pWire::Gossip(peer);
+                        if head.eq_bytes(b"heard-tx") {
+                            let raw_tx = request_noun.as_cell()?.tail();
+                            let tx_id = raw_tx.as_cell()?.head();
+                            let tracker = message_tracker.lock().await;
+                            let tx_id_str = tip5_hash_to_base58(tx_id)?;
+                            if tracker.seen_txs.contains(&tx_id_str) {
+                                debug!("Tx already seen, not processing: {:?}", tx_id_str);
+                                metrics.tx_seen_cache_hits.increment();
+                                return Ok(());
+                            } else {
+                                debug!("tx not seen, processing: {:?}", tx_id_str);
+                                metrics.tx_seen_cache_misses.increment();
+                            }
+                        }
 
-                    match nockapp.try_poke(wire.to_wire(), request_slab).await {
-                        Ok(PokeResult::Ack) => {
-                            metrics.gossip_acked.increment();
-                        }
-                        Ok(PokeResult::Nack) => {
-                            metrics.gossip_nacked.increment();
-                            trace!("handle_request_response: gossip poke nacked");
-                            return Ok(());
-                        }
-                        Err(NockAppError::MPSCFullError(act)) => {
-                            metrics.gossip_dropped.increment();
-                            trace!(
+                        let request_fact = prepend_tas(&mut request_slab, "fact", request_noun)?;
+                        request_slab.set_root(request_fact);
+                        let wire = Libp2pWire::Gossip(peer);
+
+                        match nockapp.try_poke(wire.to_wire(), request_slab).await {
+                            Ok(PokeResult::Ack) => {
+                                metrics.gossip_acked.increment();
+                            }
+                            Ok(PokeResult::Nack) => {
+                                metrics.gossip_nacked.increment();
+                                trace!("handle_request_response: gossip poke nacked");
+                                return Ok(());
+                            }
+                            Err(NockAppError::MPSCFullError(act)) => {
+                                metrics.gossip_dropped.increment();
+                                trace!(
                                 "handle_request_response: gossip poke dropped due to backpressure"
                             );
-                            return Err(NockAppError::MPSCFullError(act));
-                        }
-                        Err(err) => {
-                            metrics.gossip_erred.increment();
-                            trace!("handle_request_response: Poke errored");
-                            return Err(err);
-                        }
-                    };
-                    trace!("handle_request_response: Poke successful");
-                    let response = NockchainResponse::Ack;
-                    swarm_tx
-                        .send(SwarmAction::SendResponse { channel, response })
-                        .await
-                        .map_err(|_| NockAppError::OtherError)?;
+                                return Err(NockAppError::MPSCFullError(act));
+                            }
+                            Err(err) => {
+                                metrics.gossip_erred.increment();
+                                trace!("handle_request_response: Poke errored");
+                                return Err(err);
+                            }
+                        };
+                        trace!("handle_request_response: Poke successful");
+                        Ok(())
+                    });
+                    send_response.await??;
+                    poke_kernel.await??;
                 }
             }
         }
@@ -1992,4 +2019,18 @@ mod tests {
         let contains = tracker.seen_txs.contains(&tx_id_str);
         assert!(contains, "tx ID should be marked as seen");
     }
+}
+
+fn dial_initial_peers(
+    swarm: &mut Swarm<NockchainBehaviour>,
+    peers: &[Multiaddr],
+) -> Result<(), NockAppError> {
+    for peer in peers {
+        let peer = peer.clone();
+        swarm.dial(peer.clone()).map_err(|e| {
+            error!("Failed to dial initial peer {}: {}", peer, e);
+            NockAppError::OtherError
+        })?;
+    }
+    Ok(())
 }

@@ -9,7 +9,7 @@ use sword::mem::NockStack;
 use sword::noun::{Noun, T};
 use sword_macros::tas;
 use thiserror::Error;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, warn};
 
 #[derive(Clone)]
 pub struct Checkpoint {
@@ -222,7 +222,7 @@ impl JamPaths {
             }
             (Ok(c), Err(e)) | (Err(e), Ok(c)) => {
                 warn!("{e}");
-                info!("Loading checkpoint, checksum: {}", c.checksum);
+                debug!("Loading checkpoint, checksum: {}", c.checksum);
                 Checkpoint::load(stack, c)
             }
             (Err(e1), Err(e2)) => {

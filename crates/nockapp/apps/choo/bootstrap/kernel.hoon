@@ -1,13 +1,21 @@
 /+  *wrapper
 =>
 |%
-+$  state-0  [%0 cached-hoon=(unit (trap vase)) ~]
-+$  state-1  [%1 cached-hoon=(unit (trap vase)) bc=build-cache pc=parse-cache]
++$  state-0  [%0 *]
++$  state-1  [%1 *]
++$  state-2  [%2 cached-hoon=(unit (trap vase)) bc=build-cache pc=parse-cache]
+::
+++  empty-trap-vase
+  ^-  (trap vase)
+  =>  vaz=!>(~)
+  |.(vaz)
+::
 +$  versioned-state
   $%  state-0
       state-1
+      state-2
   ==
-+$  choo-state  state-1
++$  choo-state  state-2
 ::
 ++  moat  (keep choo-state)
 +$  cause
@@ -33,6 +41,8 @@
 +$  entry  [pat=path tex=(unit cord)]
 ::
 +$  hash  @
+::
+::  $build-cache: holds up to date cached build artifacts, keyed by merkle hash
 +$  build-cache  (map hash (trap vase))
 ::
 ::  $build-result: result of a build
@@ -51,9 +61,11 @@
   $:  sur=(list taut)  ::  /-
       lib=(list taut)  ::  /+
       raw=(list [face=(unit term) pax=path])  ::  /=
-      bar=(list [face=term mark=@tas =path])
+      bar=(list [face=term mark=@tas =path])  ::  /*
+      hax=(list taut)                         ::  /#
       =hoon
   ==
+::
 ::
 ::  $parse-cache: content addressed cache of preprocessed hoon files.
 ::
@@ -77,23 +89,24 @@
   ::  We do not use the result of the soft because
   ::  clamming (trap vase) overwrites the contents
   ::  with the bunt resulting in the honc and the build
-  ::  artifacts being replaced with *(trap vase).
+  ::  artifacts being replaced with empty-trap-vase.
   ::
   ?~  ((soft versioned-state) old)
-    ~&  "choo: +load old state does not nest under versioned-state"
+    ~>  %slog.[0 leaf+"choo: +load old state does not nest under versioned-state. Try booting with --new to start from scratch."]
     !!
   ?-    -.old
       %0
-    ~&  >>  %upgrade-0-to-1
-    :*  %1
-        cached-hoon.old
-        *build-cache
-        *parse-cache
-    ==
+    ~>  %slog.[0 leaf+"update 0-to-2, starting from scratch"]
+    *choo-state
   ::
       %1
-    ~&  >>  %no-upgrade
+    ~>  %slog.[0 leaf+"update 1-to-2, starting from scratch"]
+    *choo-state
+  ::
+      %2
+    ~>  %slog.[0 leaf+"no update"]
     old
+  ::
   ==
 ::
 ::  +peek: external inspect
@@ -110,9 +123,10 @@
   ^-  [(list effect) choo-state]
   =/  cause=(unit cause)  ((soft cause) dat)
   ?~  cause
-    ~&  >>>  "input is not a proper cause"
+    ~&  "input is not a proper cause"
     !!
   =/  cause  u.cause
+  ~&  -.cause
   ?-    -.cause
       %file
     ?:  success.cause
@@ -149,7 +163,7 @@
           path=out.cause
           contents=(jam compiled)
       ==
-    =/  success  !=(compiled *(trap vase))
+    =/  success  !=(compiled empty-trap-vase)
     ?:  success
       ~&  >>>  "choo: build succeeded, sending out write effect"
       [write-effect]~
@@ -174,6 +188,7 @@
       lib=(list raut)
       raw=(list raut)
       bar=(list raut)
+      hax=(list raut)
       =hoon
   ==
 ::
@@ -268,6 +283,10 @@
       ;~(pfix stap)
     ==
   ::
+    %+  cook  (bake zing (list (list taut)))
+    %+  rune  hax
+    (most ;~(plug com gaw) taut-rule)
+  ::
     %+  stag  %tssg
     (most gap tall:(vang & pax))
   ==
@@ -353,6 +372,8 @@
     =/  pax-rear  (rear pax)
     ^-  raut
     [`face `path`(snoc (snip pax-snip) `@ta`(rap 3 ~[pax-hind %'.' pax-rear]))]
+  ::
+    (turn hax.pile |=(taut ^-(raut [face (need (get-fit %dat pax dir))])))
   ==
 --
 ::
@@ -363,7 +384,7 @@
 ++  build-honc
   |=  hoon-txt=cord
   ^-  (trap vase)
-  (swet *(trap vase) (ream hoon-txt))
+  (swet empty-trap-vase (ream hoon-txt))
 ::
 +$  octs  [p=@ud q=@]
 ::
@@ -375,6 +396,7 @@
       ::  holds only outgoing edges
       deps=(list raut)
       leaf=graph-leaf
+      eval=?  :: whether or not to kick it
   ==
 ::
 +$  graph-leaf
@@ -393,7 +415,7 @@
 ::    returns a trap, a build-cache, and a parse-cache
 ++  create
   |=  [=entry dir=(map path cord)]
-  ^-  [(trap) build-cache parse-cache]
+  ^-  [* build-cache parse-cache]
   =/  dir-hash  `@uvI`(mug dir)
   ~&  >>  dir-hash+dir-hash
   =/  compile
@@ -403,7 +425,7 @@
   ::  +shot calls the kernel gate to tell it the hash of the dependency directory
   :_  [build-cache parse-cache]
   ::  build failure, just return the bunted trap
-  ?:  =(ker-gen *(trap vase))  ker-gen
+  ?:  =(ker-gen empty-trap-vase)  ker-gen
   =>  %+  shot  ker-gen
     =>  d=!>(dir-hash)
     |.(d)
@@ -413,15 +435,14 @@
 ::
 ::    .entry: the entry to build
 ::    .dir: the directory to get dependencies from
-::
 ::    returns a trap, a build-cache, and a parse-cache
 ++  create-arbitrary
    |=  [=entry dir=(map path cord)]
-   ^-  [(trap) build-cache parse-cache]
+   ^-  [* build-cache parse-cache]
    =/  [tase=(trap) =build-cache =parse-cache]
      (create-target entry dir)
    :_  [build-cache parse-cache]
-   ?:  =(tase *(trap vase))
+   ?:  =(tase empty-trap-vase)
      tase
    =>  tase
    |.(+:^$)
@@ -435,7 +456,8 @@
 ++  create-target
   |=  [=entry dir=(map path cord)]
   ^-  [(trap vase) build-cache parse-cache]
-  =/  [parsed-dir=(map path node) pc=parse-cache]  (parse-dir entry dir)
+  =^  parsed-dir=(map path node)  pc
+    (parse-dir entry dir)
   =/  all-nodes=(map path node)  parsed-dir
   =/  [dep-dag=merk-dag =path-dag]  (build-merk-dag all-nodes)
   ::
@@ -467,57 +489,71 @@
 ++  parse-dir
   |=  [suf=entry dir=(map path cord)]
   ^-  [(map path node) parse-cache]
+  =|  new-pc=parse-cache
   ~&  >  parsing+pat.suf
   |^
   =/  file=cord  (get-file suf dir)                   ::  get target file
   =/  hash=@  (shax file)                             ::  hash target file
-  =/  target=node
+  =^  target=node  new-pc
     ?.  (is-hoon pat.suf)
+      :_  new-pc
       :*  pat.suf                                       ::  path
           hash                                          ::  hash
           ~                                             ::  deps
           [%octs [(met 3 file) file]]                   ::  octs
+          %.n                                           ::  eval
       ==
-    =/  =pile  (parse-pile pat.suf (trip file))         ::  parse target file
+    =/  =pile
+      ?:  (~(has by pc) hash)
+        ~&  parse-cache-hit+pat.suf
+        (~(got by pc) hash)
+      ~&  parse-cache-miss+pat.suf
+      (parse-pile pat.suf (trip file))         ::  parse target file
     =/  deps=(list raut)  (resolve-pile pile dir)       ::  resolve deps
+    :_  (~(put by new-pc) hash pile)
     :*  pat.suf                                         ::  path
         hash                                            ::  hash
         deps                                            ::  deps
         [%hoon hoon.pile]                               ::  hoon
+        (is-dat pat.suf)                                ::  eval
     ==
   =|  nodes=(map path node)                             ::  init empty node map
   =.  nodes  (~(put by nodes) pat.suf target)           ::  add target node
   =/  seen=(set path)  (~(put in *(set path)) pat.suf)
-  (resolve-all nodes seen deps.target)
+  (resolve-all nodes seen deps.target new-pc)
   ::
   ++  resolve-all
-    |=  [nodes=(map path node) seen=(set path) deps=(list raut)]
+    |=  [nodes=(map path node) seen=(set path) deps=(list raut) new-pc=parse-cache]
     ^-  [(map path node) parse-cache]
-    ?~  deps  [nodes pc]                                ::  done if no deps
+    ?~  deps  [nodes new-pc]                            ::  done if no deps
     ?.  (~(has in seen) pax.i.deps)                     ::  skip if seen
       ~&  >>  parsing+pax.i.deps
       =/  dep-file  (get-file [pax.i.deps ~] dir)       ::  get dep file
       =/  dep-hash  (shax dep-file)                     ::  hash dep file
-      =^  dep-node=node  pc
+      =^  dep-node=node  new-pc
         ?.  (is-hoon pax.i.deps)
           :_  pc
           :*  pax.i.deps                                  ::  path
               dep-hash                                    ::  hash
               ~                                           ::  deps
               [%octs [(met 3 dep-file) dep-file]]         ::  octs
+              %.n
           ==
         =/  dep-pile
           ?:  (~(has by pc) dep-hash)                     ::  check cache
+            ~&  parse-cache-hit+pax.i.deps
             (~(got by pc) dep-hash)
+          ~&  parse-cache-miss+pax.i.deps
           (parse-pile pax.i.deps (trip dep-file))         ::  parse dep file
         ~&  >>  parsed+pax.i.deps
         =/  dep-deps  (resolve-pile dep-pile dir)         ::  resolve dep deps
         ~&  >>  resolved+pax.i.deps
-        :_  (~(put by pc) dep-hash dep-pile)              ::  cache parse
+        :_  (~(put by new-pc) dep-hash dep-pile)              ::  cache parse
         :*  pax.i.deps
             dep-hash
             dep-deps
             [%hoon hoon.dep-pile]
+            (is-dat pax.i.deps)                             ::  eval
         ==
       =.  nodes  (~(put by nodes) pax.i.deps dep-node)  ::  add dep node
       =.  seen  (~(put in seen) pax.i.deps)             ::  mark as seen
@@ -525,6 +561,7 @@
         nodes  nodes
         seen   seen
         deps   (weld t.deps deps.dep-node)                   ::  add new deps
+        new-pc  new-pc
       ==
     $(deps t.deps)                                      ::  next dep
   ::
@@ -642,14 +679,14 @@
   =/  next=(map path node)  (update-next nodes graph)
   =|  failed=_|
   |-  ^-  [(trap vase) build-cache]
-  ?:  failed  [*(trap vase) bc]
+  ?:  failed  [empty-trap-vase bc]
   ?:  .=(~ next)
     =/  [=build-result new-bc=build-cache]
       (compile-node n path-dag bc)
     ?-  -.build-result
       ::
       %|  ~&  >>>  "compile-target: failed: {<pat>}"
-          [*(trap vase) new-bc]
+          [empty-trap-vase new-bc]
       ::
       %&  [p.build-result new-bc]
     ==
@@ -719,11 +756,18 @@
         ::  because imports have higher precedence when resolving faces.
         ::  To avoid shadowing issues with hoon.hoon, attach faces to your
         ::  imports or avoid shadowed names altogether.
-        (swet (slat dep-vaz honc) hoon.leaf.n)
+        =/  swetted=(trap vase)  (swet (slat dep-vaz honc) hoon.leaf.n)
+        ?.  eval.n
+          swetted
+        ~&  "node {<path.n>} is eval, kicking"
+        =>  [swetted=swetted vase=vase]
+        =/  vaz=vase  $:swetted
+        =>  vaz=vaz
+        |.(vaz)
       =>  octs=!>(octs.leaf.n)
       |.(octs)
     %+  roll  deps.n
-    |=  [r=raut vaz=(trap vase)]
+    |:  [r=`raut`*raut vaz=empty-trap-vase]
     ~&  >  grabbing-dep+pax.r
     =/  [dep-hash=@ dep-node=node]
       ~|  "couldn't find dep hash for {<pax.r>}"
@@ -864,4 +908,8 @@
   =/  end  (rear pax)
   !=(~ (find ".hoon" (trip end)))
 ::
+++  is-dat
+  |=  pax=path
+  ^-  ?
+  =('dat' (head pax))
 --

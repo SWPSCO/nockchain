@@ -15,7 +15,6 @@
 +$  prove-result  (each =proof err=prove-err)
 +$  prove-err     $%([%too-big heights=(list @)])
 +$  prover-output    [=proof deep-codeword=fpoly]
-::
 ::  +prove: prove the Nock computation [s f]
 ::
 ::
@@ -74,10 +73,7 @@
   ::~&  heights+heights
   ::
   =.  proof  (~(push proof-stream proof) [%heights heights])
-  =/  pre=preprocess
-    ?^  prep.stark-config
-      u.prep.stark-config
-    preprocess-data
+  =/  pre=preprocess-0  prep.stark-config
   ::
   ::  remove preprocess data for unused tables
   =.  pre

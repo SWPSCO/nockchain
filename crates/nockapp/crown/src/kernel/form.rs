@@ -124,10 +124,10 @@ impl SerfThread {
             .spawn(move || {
                 let mut stack = NockStack::new(nock_stack_size, 0);
                 let checkpoint = if jam_paths.checkpoint_exists() {
-                    info!("Checkpoint file(s) found, validating and loading from jam");
+                    info!("Found existing state - restoring from checkpoint");
                     jam_paths.load_checkpoint(&mut stack).ok()
                 } else {
-                    info!("No checkpoint file found, starting from scratch");
+                    info!("No existing state found - initializing fresh state");
                     None
                 };
                 let buffer_toggle = Arc::new(AtomicBool::new(
@@ -163,7 +163,7 @@ impl SerfThread {
         loop {
             interval.tick().await;
             if self.handle.is_finished() {
-                info!("Serf finished");
+                debug!("Serf finished");
                 break;
             }
         }
@@ -354,7 +354,7 @@ fn extract_state_from_bytes(stack: &mut NockStack, state_bytes: &[u8]) -> Result
     // First try to decode as JammedCheckpoint
     match extract_from_checkpoint(stack, state_bytes) {
         Ok(noun) => {
-            info!("Successfully loaded state from JammedCheckpoint format");
+            debug!("Successfully loaded state from JammedCheckpoint format");
             Ok(noun)
         }
         Err(e1) => {
@@ -363,7 +363,7 @@ fn extract_state_from_bytes(stack: &mut NockStack, state_bytes: &[u8]) -> Result
             // Then try to decode as ExportedState
             match extract_from_exported_state(stack, state_bytes) {
                 Ok(noun) => {
-                    info!("Successfully loaded state from ExportedState format");
+                    debug!("Successfully loaded state from ExportedState format");
                     Ok(noun)
                 }
                 Err(e2) => {
@@ -579,7 +579,7 @@ impl Kernel {
             .await
         {
             Ok(_) => {
-                info!("Successfully loaded state from bytes");
+                debug!("Successfully loaded state from bytes");
                 Ok(kernel)
             }
             Err(e) => {

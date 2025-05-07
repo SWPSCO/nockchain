@@ -5,7 +5,7 @@ use crate::noun::slab::NounSlab;
 use either::Either::{self, Left, Right};
 use sword::noun::D;
 use sword_macros::tas;
-use tracing::{debug, error, info};
+use tracing::debug;
 
 pub enum OnePunchWire {
     Poke,
@@ -34,7 +34,7 @@ pub fn one_punch_man(data: NounSlab, op: Operation) -> IODriverFn {
             },
             _ = tokio::time::sleep(tokio::time::Duration::from_secs(600)) => {
                 //TODO what is a good timeout for tests?
-                info!("poke_once_driver: no effect received after 10 minutes");
+                debug!("poke_once_driver: no effect received after 10 minutes");
                 Err(NockAppError::Timeout)
             }
         }
@@ -65,29 +65,29 @@ async fn handle_result(
     match op {
         Operation::Poke => match result {
             Left(PokeResult::Ack) => {
-                info!("Poke successful");
+                debug!("Poke successful");
                 Ok(())
             }
             Left(PokeResult::Nack) => {
-                error!("Poke nacked");
+                debug!("Poke nacked");
                 Err(NockAppError::PokeFailed)
             }
             Right(_) => {
-                error!("Unexpected result for poke operation");
+                debug!("Unexpected result for poke operation");
                 Err(NockAppError::UnexpectedResult)
             }
         },
         Operation::Peek => match result {
             Left(_) => {
-                error!("Unexpected result for peek operation");
+                debug!("Unexpected result for peek operation");
                 Err(NockAppError::UnexpectedResult)
             }
             Right(Some(peek_result)) => {
-                info!("Peek result: {:?}", peek_result);
+                debug!("Peek result: {:?}", peek_result);
                 Ok(())
             }
             Right(_) => {
-                error!("Peek returned no result");
+                debug!("Peek returned no result");
                 Err(NockAppError::PeekFailed)
             }
         },
@@ -141,15 +141,15 @@ async fn handle_effect(
             {
                 tas!(b"gossip") => {
                     // Ignore gossip data
-                    info!("Ignoring gossip data");
+                    debug!("Ignoring gossip data");
                 }
                 tas!(b"request") => {
-                    info!("Processing request effect");
+                    debug!("Processing request effect");
                     let request_data = npc_effect_cell.tail();
-                    info!("Request data: {:?}", request_data);
+                    debug!("Request data: {:?}", request_data);
                     // handle.poke(create_response(request_data)).await?;
                 }
-                _ => info!("Received unknown npc effect"),
+                _ => debug!("Received unknown npc effect"),
             }
         }
     }

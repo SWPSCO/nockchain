@@ -62,7 +62,7 @@ pub async fn choo_data_dir() -> PathBuf {
     choo_data_dir
 }
 
-/// Builds and interprets a Hoon generator to produce a list of pokes
+/// Builds and interprets a Hoon generator.
 ///
 /// This function:
 /// 1. Builds the specified Hoon generator into a jam
@@ -257,11 +257,9 @@ pub async fn initialize_choo_(
             directory_noun = T(&mut slab, &[entry_cell, directory_noun]);
         }
     }
-    let arbitrary_noun = if arbitrary { D(0) } else { D(1) };
 
     let out_path_string = if let Some(path) = &out {
         let parent = path.parent().unwrap_or_else(|| Path::new("."));
-        // TODO: this breaks on everything except Bazel if an output path is specified
         let filename = path.file_name().unwrap_or_else(|| OsStr::new(OUT_JAM_NAME));
         let parent_canonical = canonicalize_and_string(parent);
         format!("{}/{}", parent_canonical, filename.to_string_lossy())
@@ -272,12 +270,13 @@ pub async fn initialize_choo_(
     debug!("Output path: {:?}", out_path_string);
     let out_path = Atom::from_value(&mut slab, out_path_string.clone())?.as_noun();
 
+    let arbitrary_noun = if arbitrary { D(0) } else { D(1) };
+
     let poke = T(
         &mut slab,
         &[D(tas!(b"build")), entry_path, entry_contents, directory_noun, arbitrary_noun, out_path],
     );
     slab.set_root(poke);
-
     nockapp
         .add_io_driver(crown::one_punch_driver(slab, Operation::Poke))
         .await;
@@ -299,19 +298,18 @@ pub fn is_valid_file_or_dir(entry: &DirEntry) -> bool {
         })
         .is_dir();
 
-    let is_hoon = entry
+    let is_valid = entry
         .file_name()
         .to_str()
-        .map(|s| s.ends_with(".hoon"))
+        .map(|s| {
+            s.ends_with(".jock")
+                || s.ends_with(".hoon")
+                || s.ends_with(".txt")
+                || s.ends_with(".jam")
+        })
         .unwrap_or(false);
 
-    let is_jock = entry
-        .file_name()
-        .to_str()
-        .map(|s| s.ends_with(".jock"))
-        .unwrap_or(false);
-
-    is_dir || is_hoon || is_jock
+    is_dir || is_valid
 }
 
 #[instrument]

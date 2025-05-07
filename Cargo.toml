@@ -12,6 +12,7 @@ members = [
     "crates/sword/rust/murmur3",
     "crates/sword/rust/sword_macros",
     "crates/sword/rust/sword",
+    "crates/wallet",
     "crates/zkvm-jetpack",
 ]
 

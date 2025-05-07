@@ -1,6 +1,6 @@
-assets
+.data.*
+test-*
+.nockchain-identity
+.nockchain-identity.peerid
 target
-Cargo.lock
-.nockchain_identity
-.nockchain_identity.peerid
-.data.nockchain/
+assets/*.jam

@@ -106,9 +106,9 @@
     +$  form  (unit coil)
     ++  public
       |=  =form
-      ~|  "master public key not found"
-      ?<  ?=(~ form)
-      u.form
+      ?:  ?=(^ form)
+        u.form
+      ~|("master public key not found" !!)
     ::
     ++  to-b58
       |=  =form
@@ -384,8 +384,7 @@
       *preinput
     =/  input-result  (~(get-input plan draft-tree.state) u.active-input.state)
     ?~  input-result
-      ~|  "active input not found in draft-tree"
-      !!
+      ~|("active input not found in draft-tree" !!)
     u.input-result
   ::    +add-seed: add a seed to the input
   ::
@@ -585,7 +584,6 @@
     ++  by-index
       |=  index=@ud
       ^-  coil
-      ~|  "key not found at index {<index>}"
       =/  =trek  (welp key-path /[ud/index])
       =/  =meta  (~(got of keys.state) trek)
       ?>  ?=(%coil -.meta)
@@ -593,12 +591,10 @@
     ::
     ++  seed
       ^-  meta
-      ~|  "key not found at {<seed-path>}"
       (~(got of keys.state) seed-path)
     ::
     ++  by-label
       |=  label=@t
-      ~|  "key not found with label {<label>}"
       %+  murn  keys
       |=  [t=trek =meta]
       ?:(&(?=(%label -.meta) =(label +.meta)) `t ~)
@@ -672,8 +668,9 @@
   ++  get-note
     |=  name=nname:transact
     ^-  nnote:transact
-    ~|  "note not found: {<name>}"
-    (~(got z-by:zo balance.state) name)
+    ?:  (~(has z-by:zo balance.state) name)
+      (~(got z-by:zo balance.state) name)
+    ~|("note not found: {<name>}" !!)
   ::
   ++  get-note-from-hash
     |=  has=hash:transact
@@ -960,7 +957,7 @@
   --
 --
 ::
-%-  (moat |)
+%-  (moat &)
 ^-  fort:moat
 |_  =state
 +*  v  ~(. vault state)
@@ -1054,7 +1051,8 @@
         %npc-bind
       =/  pid  pid.npc-cause
       =/  peek-type
-        ~|  "no peek request found for pid: {<pid>}"
+        ?.  (~(has by peek-requests.state) pid)
+          ~|("no peek request found for pid: {<pid>}" !!)
         (~(got by peek-requests.state) pid)
       =/  result  result.npc-cause
       ?-  peek-type
@@ -1225,7 +1223,8 @@
     =/  pid=(unit @ud)  (generate-pid:v %balance)
     ?~  pid  `state
     =/  bid=block-id:transact
-      ~|  "no last block found, not updating balance"
+      ?:  ?=(~ last-block.state)
+        ~|("no last block found, not updating balance" !!)
       (need last-block.state)
     =/  =path  (snoc /balance (to-b58:block-id:transact bid))
     =/  =effect  [%npc u.pid %peek path]
@@ -1343,7 +1342,6 @@
     |=  =cause
     ?>  ?=(%scan -.cause)
     %-  (debug "scan: scanning {<search-depth.cause>} addresses")
-    ~|  "something went wrong! state: {<state>}"
     ?>  ?=(^ master.state)
     ::  get all public keys up to search depth
     =/  index=@ud  search-depth.cause
@@ -1362,8 +1360,8 @@
         keys  ?^(key (snoc keys u.key) keys)
       ==
     ::  fail when no coils
-    ~|  "no coils for master key"
-    ?<  ?=(~ coils)
+    ?:  ?=(~ coils)
+      ~|("no coils for master key" !!)
     ::  generate first names of notes owned by each pubkey
     =/  first-names=(list [hash:transact schnorr-pubkey:transact])
       %+  turn  coils
@@ -1495,7 +1493,6 @@
     =/  names=(list nname:transact)
       %+  turn  names.cause
       |=  [first=@t last=@t]
-      ~|  "could not parse names: {<names.cause>}"
       (from-b58:nname:transact [first last])
     =/  recipients=(list lock:transact)
       %+  turn  recipients.cause
@@ -1504,15 +1501,14 @@
       %-  ~(gas z-in:zo *(z-set:zo schnorr-pubkey:transact))
       %+  turn  pks
       |=  pk=@t
-      ~|  "could not parse recipients: {<recipients.cause>}"
       (from-b58:schnorr-pubkey:transact pk)
     ::
     =/  gifts=(list coins:transact)  gifts.cause
     ::
-    ~|  "different number of names/recipients/gifts"
-    ?>  ?&  =((lent names) (lent recipients))
+    ?.  ?&  =((lent names) (lent recipients))
             =((lent names) (lent gifts))
         ==
+      ~|("different number of names/recipients/gifts" !!)
     =|  ledger=(list [name=nname:transact recipient=lock:transact gifts=coins:transact])
     =.  ledger
       |-
@@ -1569,8 +1565,8 @@
     ?.  spent-fee
       ~|("no note suitable to subtract fee from, aborting operation" !!)
     =/  ins-draft=inputs:transact  (multi:new:inputs:transact ins)
-    ~|  "last-block unknown!"
-    ?>  ?=(^ last-block.state)
+    ?:  ?=(~ last-block.state)
+      ~|("last-block unknown!" !!)
     ::  name is the b58-encoded name of the first input
     =/  draft-name=@t
       %-  head

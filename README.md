@@ -39,12 +39,12 @@ To run a Nockchain node that waits for the genesis block:
 make run-nockchain-follower
 ```
 
+To run the wallet, see the wallet [README](./crates/wallet/README.md).
+
 
 To run the test suite:
 
 ```
 make test
 ```
-
-
 
