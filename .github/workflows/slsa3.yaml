@@ -46,6 +46,8 @@ jobs:
           target: x86_64-unknown-linux-musl
       - name: deps
         run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: musl target
+        run: rustup target add x86_64-unknown-linux-musl
       - name: install choo
         run: RUSTFLAGS='-C target-feature=+crt-static' cargo install --locked --force --path crates/nockapp/apps/choo --bin choo --target x86_64-unknown-linux-musl
       - name: build hoon assets
