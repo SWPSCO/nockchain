@@ -50,7 +50,7 @@ jobs:
         run: make build
       - uses: actions/upload-artifact@v4
         with:
-          name: linux-artifacts
+          name: linux-artifacts-x64
           path: |
             assets/*.jam
             target/release/nockchain
