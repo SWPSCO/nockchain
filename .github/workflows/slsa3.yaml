@@ -159,8 +159,8 @@ jobs:
           # unzip -j out/nockchain_linux_musl_arm64.zip -d tmp/linux_arm64
           unzip -j out/nockchain_macos_aarch64.zip -d tmp/macos
           unzip -j out/nockchain_jams.zip -d tmp/jams
-          # files=$(ls tmp_arm64/linux/* tmp/linux_arm64/* tmp/macos/* tmp/jams/*)
-          files=$(ls tmp_arm64/linux/* tmp/macos/* tmp/jams/*)
+          # files=$(ls tmp/linux_x64/* tmp/linux_arm64/* tmp/macos/* tmp/jams/*)
+          files=$(ls tmp/linux_x64/* tmp/macos/* tmp/jams/*)
           echo "content_hashes=$(sha256sum $files | base64 -w0)" >> $GITHUB_OUTPUT
       - uses: actions/upload-artifact@v4
         with:
