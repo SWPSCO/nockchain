@@ -14,6 +14,8 @@ on:
 permissions: write-all
 env:
   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  RUSTFLAGS: '-C target-feature=+crt-static'
+  CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
 
 jobs:
   vars:
@@ -27,7 +29,7 @@ jobs:
       - name: set short git commit sha
         id: set
         run: |
-          calculatedSha=$(git rev-parse --short ${GITHUB_SHA})
+          calculatedSha=$(git rev-parse master | cut -c1-7)
           echo "short_sha=$calculatedSha" >> $GITHUB_OUTPUT
 
   build-linux-x64:
@@ -35,6 +37,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
+        with:
+          ref: master
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
@@ -43,11 +47,11 @@ jobs:
       - name: deps
         run: sudo apt-get update && sudo apt-get install -y musl-tools
       - name: install choo
-        run: make install-choo
+        run: RUSTFLAGS='-C target-feature=+crt-static' cargo install --locked --force --path crates/nockapp/apps/choo --bin choo --target x86_64-unknown-linux-musl
       - name: build hoon assets
         run: make build-hoon-all
       - name: build binaries
-        run: make build
+        run: RUSTFLAGS='-C target-feature=+crt-static' cargo build --release --target x86_64-unknown-linux-musl
       - uses: actions/upload-artifact@v4
         with:
           name: linux-artifacts-x64
@@ -64,6 +68,9 @@ jobs:
   #   needs: vars
   #   runs-on: ubuntu-latest
   #   steps:
+  #     - uses: actions/checkout@v3
+  #       with:
+  #         ref: master
   #     - uses: actions/checkout@v3
   #     - uses: actions-rs/toolchain@v1
   #       with:
@@ -96,6 +103,8 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v3
+        with:
+          ref: master
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
