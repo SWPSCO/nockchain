@@ -146,7 +146,7 @@ jobs:
           # chmod +x out/linux_arm64/*
           cp mac/target/release/nockchain mac/target/release/nockchain-bitcoin-sync mac/target/release/choo mac/target/release/equix-latency mac/target/release/wallet out/macos_aarch64/
           chmod +x out/macos_aarch64/*
-          cp linux/assets/*.jam out/jams/
+          cp linux_x64/assets/*.jam out/jams/
           (cd out/linux_x64 && zip -j ../nockchain_linux_musl_x64.zip *)
           # (cd out/linux_arm64 && zip -j ../nockchain_linux_musl_arm64.zip *)
           (cd out/macos_aarch64 && zip -j ../nockchain_macos_aarch64.zip *)
