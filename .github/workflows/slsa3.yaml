@@ -1,8 +1,8 @@
 name: Nockchain SLSA3 release
 
 on:
-  push:
-    branches: [ release ]
+  repository_dispatch:
+    types: [build-master]
   workflow_dispatch:
     inputs:
       create_release:
@@ -22,13 +22,15 @@ jobs:
       short_sha: ${{ steps.set.outputs.short_sha }}
     steps:
       - uses: actions/checkout@v3
+        with:
+          ref: master
       - name: set short git commit sha
         id: set
         run: |
           calculatedSha=$(git rev-parse --short ${GITHUB_SHA})
           echo "short_sha=$calculatedSha" >> $GITHUB_OUTPUT
 
-  build-linux:
+  build-linux-x64:
     needs: vars
     runs-on: ubuntu-latest
     steps:
@@ -48,13 +50,46 @@ jobs:
         run: make build
       - uses: actions/upload-artifact@v4
         with:
-          name: linux-artifacts
+          name: linux-artifacts-x64
           path: |
             assets/*.jam
             target/release/nockchain
             target/release/nockchain-bitcoin-sync
+            target/release/libsword_macros.so
             target/release/choo
             target/release/equix-latency
+            target/release/wallet
+
+  # build-linux-arm64:
+  #   needs: vars
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v3
+  #     - uses: actions-rs/toolchain@v1
+  #       with:
+  #         toolchain: stable
+  #         profile: minimal
+  #         target: aarch64-unknown-linux-musl
+  #     - name: deps
+  #       run: sudo apt-get update && sudo apt-get install -y musl-tools
+  #     - name: install cross
+  #       run: cargo install cross
+  #     - name: install choo
+  #       run: make install-choo
+  #     - name: build hoon assets
+  #       run: make build-hoon-all
+  #     - name: build binaries
+  #       run: cross build --release
+  #     - uses: actions/upload-artifact@v4
+  #       with:
+  #         name: linux-arm64-artifacts
+  #         path: |
+  #           assets/*.jam
+  #           target/release/nockchain
+  #           target/release/nockchain-bitcoin-sync
+  #           target/release/choo
+  #           target/release/equix-latency
+  #           target/release/wallet
 
   build-macos:
     needs: vars
@@ -78,40 +113,54 @@ jobs:
             assets/*.jam
             target/release/nockchain
             target/release/nockchain-bitcoin-sync
+            target/release/libsword_macros.so
             target/release/choo
             target/release/equix-latency
+            target/release/wallet
 
   package:
-    needs: [build-linux, build-macos]
+    # needs: [build-linux-x64, build-macos, build-linux-arm64]
+    needs: [build-linux-x64, build-macos ]
     runs-on: ubuntu-latest
     outputs:
       content_hashes: ${{ steps.content-hash.outputs.content_hashes }}
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: linux-artifacts
-          path: ./linux
+          name: linux-artifacts-x64
+          path: ./linux_x64
+      # - uses: actions/download-artifact@v4
+      #   with:
+      #     name: linux-arm4-artifacts
+      #     path: ./linux-arm64
       - uses: actions/download-artifact@v4
         with:
           name: mac-artifacts
           path: ./mac
       - name: make zips
         run: |
-          mkdir -p out/linux_x64 out/macos_aarch64 out/jams
-          cp linux/target/release/nockchain linux/target/release/nockchain-bitcoin-sync linux/target/release/choo linux/target/release/equix-latency out/linux_x64/
-          cp mac/target/release/nockchain mac/target/release/nockchain-bitcoin-sync mac/target/release/choo mac/target/release/equix-latency out/macos_aarch64/
-          cp linux/assets/*.jam out/jams/
-          (cd out/linux_x64 && zip -j ../linux_x64.zip *)
-          (cd out/macos_aarch64 && zip -j ../macos_aarch64.zip *)
-          (cd out/jams && zip -j ../jams.zip *)
+          mkdir -p out/linux_x64 out/linux_arm64 out/macos_aarch64 out/jams
+          cp linux_x64/target/release/nockchain linux_x64/target/release/libsword_macros.so linux_x64/target/release/nockchain-bitcoin-sync linux_x64/target/release/choo linux_x64/target/release/equix-latency linux_x64/target/release/wallet out/linux_x64/
+          chmod +x out/linux_x64/*
+          # cp linux_arm64/target/release/nockchain linux_arm64/target/release/nockchain-bitcoin-sync linux_arm64/target/release/choo linux_arm64/target/release/equix-latency linux_arm64/target/release/wallet out/linux_arm64/
+          # chmod +x out/linux_arm64/*
+          cp mac/target/release/nockchain mac/target/release/nockchain-bitcoin-sync mac/target/release/choo mac/target/release/equix-latency mac/target/release/wallet out/macos_aarch64/
+          chmod +x out/macos_aarch64/*
+          cp linux_x64/assets/*.jam out/jams/
+          (cd out/linux_x64 && zip -j ../nockchain_linux_musl_x64.zip *)
+          # (cd out/linux_arm64 && zip -j ../nockchain_linux_musl_arm64.zip *)
+          (cd out/macos_aarch64 && zip -j ../nockchain_macos_aarch64.zip *)
+          (cd out/jams && zip -j ../nockchain_jams.zip *)
       - name: compute content hashes
         id: content-hash
         run: |
           mkdir -p tmp/linux tmp/macos tmp/jams
-          unzip -j out/linux_x64.zip -d tmp/linux
-          unzip -j out/macos_aarch64.zip -d tmp/macos
-          unzip -j out/jams.zip -d tmp/jams
-          files=$(ls tmp/linux/* tmp/macos/* tmp/jams/*)
+          unzip -j out/nockchain_linux_musl_x64.zip -d tmp/linux_x64
+          # unzip -j out/nockchain_linux_musl_arm64.zip -d tmp/linux_arm64
+          unzip -j out/nockchain_macos_aarch64.zip -d tmp/macos
+          unzip -j out/nockchain_jams.zip -d tmp/jams
+          # files=$(ls tmp/linux_x64/* tmp/linux_arm64/* tmp/macos/* tmp/jams/*)
+          files=$(ls tmp/linux_x64/* tmp/macos/* tmp/jams/*)
           echo "content_hashes=$(sha256sum $files | base64 -w0)" >> $GITHUB_OUTPUT
       - uses: actions/upload-artifact@v4
         with:
@@ -131,7 +180,7 @@ jobs:
 
   release:
     if: |
-      (github.event_name == 'push' && github.ref == 'refs/heads/master') ||
+      (github.event_name == 'repository_dispatch' && github.event.action == 'build-master') ||
       (github.event_name == 'workflow_dispatch' && github.event.inputs.create_release == 'true')
     needs: [vars, package, provenance]
     runs-on: ubuntu-latest
@@ -153,7 +202,7 @@ jobs:
           name: Release ${{ needs.vars.outputs.short_sha }}
           draft: false
           files: |
-            out/linux_x64.zip
-            out/macos_aarch64.zip
-            out/jams.zip
+            out/nockchain_linux_musl_x64.zip
+            out/nockchain_macos_aarch64.zip
+            out/nockchain_jams.zip
             prov/${{ needs.provenance.outputs.provenance-name }}
