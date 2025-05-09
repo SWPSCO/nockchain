@@ -1,62 +1,36 @@
-use std::{fmt, io};
+use thiserror::Error;
 
-use crown::nockapp::NockAppError;
-
-#[derive(Debug)]
+#[derive(Error, Debug)]
 pub enum WalletError {
-    Io(io::Error),
-    NockApp(NockAppError),
-    Parse(String),
-    Command(String),
+    #[error("Wallet error: {0}")]
+    Generic(String),
+    
+    #[error("Invalid input: {0}")]
+    InvalidInput(String),
+    
+    #[error("IO error: {0}")]
+    IoError(#[from] std::io::Error),
+    
+    #[error("Serialization error: {0}")]
+    SerializationError(String),
+    
+    #[error("NockApp error: {0}")]
+    NockAppError(#[from] crown::nockapp::NockAppError),
+    
+    #[error("Crown error: {0}")]
+    CrownError(#[from] crown::CrownError),
 }
 
-impl fmt::Display for WalletError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            WalletError::Io(e) => write!(f, "IO error: {}", e),
-            WalletError::NockApp(e) => write!(f, "NockApp error: {}", e),
-            WalletError::Parse(s) => write!(f, "Parse error: {}", s),
-            WalletError::Command(s) => write!(f, "Command error: {}", s),
-        }
+impl WalletError {
+    pub fn generic<S: Into<String>>(msg: S) -> Self {
+        WalletError::Generic(msg.into())
     }
-}
-
-impl std::error::Error for WalletError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            WalletError::Io(e) => Some(e),
-            WalletError::NockApp(e) => Some(e),
-            WalletError::Parse(_) => None,
-            WalletError::Command(_) => None,
-        }
+    
+    pub fn invalid_input<S: Into<String>>(msg: S) -> Self {
+        WalletError::InvalidInput(msg.into())
     }
-}
-
-impl From<io::Error> for WalletError {
-    fn from(err: io::Error) -> Self {
-        WalletError::Io(err)
-    }
-}
-
-impl From<NockAppError> for WalletError {
-    fn from(err: NockAppError) -> Self {
-        WalletError::NockApp(err)
-    }
-}
-
-impl From<WalletError> for NockAppError {
-    fn from(err: WalletError) -> Self {
-        match err {
-            WalletError::NockApp(e) => e,
-            WalletError::Io(e) => NockAppError::IoError(e),
-            WalletError::Parse(_) => NockAppError::OtherError,
-            WalletError::Command(_) => NockAppError::OtherError,
-        }
-    }
-}
-
-impl From<crown::CrownError> for WalletError {
-    fn from(err: crown::CrownError) -> Self {
-        WalletError::Parse(err.to_string())
+    
+    pub fn serialization_error<S: Into<String>>(msg: S) -> Self {
+        WalletError::SerializationError(msg.into())
     }
 }

@@ -3,6 +3,15 @@ name = "wallet"
 version.workspace = true
 edition.workspace = true
 
+# Define both a library and a binary
+[lib]
+name = "wallet"
+path = "src/lib.rs"
+
+[[bin]]
+name = "wallet"
+path = "src/main.rs"
+
 [dependencies]
 crown = { workspace = true }
 kernels = { workspace = true, features = ["wallet"] }
