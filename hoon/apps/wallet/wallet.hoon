@@ -157,6 +157,7 @@
 ::
 +$  cause
   $%  [%keygen entropy=byts salt=byts]
+      [%keygen-return entropy=byts salt=byts]
       [%derive-child key-type=?(%pub %prv) i=@ label=(unit @t)]
       [%import-keys keys=(list (pair trek coil))]
       [%import-master-pubkey key=@t cc=@t]           ::  base58-encoded pubkey + chain code
@@ -1013,6 +1014,7 @@
       %npc-bind              (handle-npc cause)
       %show                  (show state path.cause)
       %keygen                (do-keygen cause)
+      %keygen-return         (do-keygen-return cause)
       %derive-child          (do-derive-child cause)
       %sign-tx               (do-sign-tx cause)
       %scan                  (do-scan cause)
@@ -1606,6 +1608,25 @@
     =.  keys.state  (key:put:v master-private-coil ~ prv-label)
     =.  keys.state  (seed:put:v seed-phrase)
     :-  [%exit 0]~
+    state
+  ::
+  :: return an npc effect
+  ++  do-keygen-return
+    |=  =cause
+    ^-  [(list effect) ^state]
+    ?>  ?=(%keygen-return -.cause)
+    =+  [seed-phrase=@t cor]=(gen-master-key:s10 entropy.cause salt.cause)
+    =/  master-public-coil  [%coil [%pub public-key] chain-code]:cor
+    =/  master-private-coil  [%coil [%prv private-key] chain-code]:cor
+    =.  master.state  (some master-public-coil)
+    =/  pub-label  `(crip "master-public-{<(end [3 4] public-key:cor)>}")
+    =/  prv-label  `(crip "master-public-{<(end [3 4] public-key:cor)>}")
+    =.  keys.state  (key:put:v master-public-coil ~ pub-label)
+    =.  keys.state  (key:put:v master-private-coil ~ prv-label)
+    =.  keys.state  (seed:put:v seed-phrase)
+    =/  atom  (crip (en:base58:wrap public-key:cor))
+    =/  eff  [%raw atom]
+    :-  ~[eff [%exit 0]]
     state
   ::
   ::  derives child %pub or %prv key of current master key
