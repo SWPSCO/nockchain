@@ -44,11 +44,13 @@ jobs:
           toolchain: stable
           profile: minimal
       - name: install choo
-        run: make install-choo
+        run: make install-hoonc
       - name: build hoon assets
-        run: make build-hoon-all
-      - name: build binaries
         run: make build
+      - name: build nockchain
+        run: make install-nockchain
+      - name: build wallet
+        run: make install-nockchain-wallet
       - uses: actions/upload-artifact@v4
         with:
           name: linux-artifacts-x64
@@ -107,11 +109,13 @@ jobs:
           toolchain: stable
           profile: minimal
       - name: install choo
-        run: make install-choo
+        run: make install-hoonc
       - name: build hoon assets
-        run: make build-hoon-all
-      - name: build binaries
         run: make build
+      - name: build nockchain
+        run: make install-nockchain
+      - name: build wallet
+        run: make install-nockchain-wallet
       - uses: actions/upload-artifact@v4
         with:
           name: mac-artifacts
