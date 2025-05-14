@@ -43,17 +43,12 @@ jobs:
         with:
           toolchain: stable
           profile: minimal
-          target: x86_64-unknown-linux-musl
-      - name: deps
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
-      - name: musl target
-        run: rustup target add x86_64-unknown-linux-musl
       - name: install choo
-        run: RUSTFLAGS='-C target-feature=+crt-static' cargo install --locked --force --path crates/nockapp/apps/choo --bin choo --target x86_64-unknown-linux-musl
+        run: make install-choo
       - name: build hoon assets
         run: make build-hoon-all
       - name: build binaries
-        run: RUSTFLAGS='-C target-feature=+crt-static' cargo build --release --target x86_64-unknown-linux-musl
+        run: make build
       - uses: actions/upload-artifact@v4
         with:
           name: linux-artifacts-x64
@@ -158,7 +153,7 @@ jobs:
           cp mac/target/release/nockchain mac/target/release/nockchain-bitcoin-sync mac/target/release/choo mac/target/release/equix-latency mac/target/release/wallet out/macos_aarch64/
           chmod +x out/macos_aarch64/*
           cp linux_x64/assets/*.jam out/jams/
-          (cd out/linux_x64 && zip -j ../nockchain_linux_musl_x64.zip *)
+          (cd out/linux_x64 && zip -j ../nockchain_linux_x64.zip *)
           # (cd out/linux_arm64 && zip -j ../nockchain_linux_musl_arm64.zip *)
           (cd out/macos_aarch64 && zip -j ../nockchain_macos_aarch64.zip *)
           (cd out/jams && zip -j ../nockchain_jams.zip *)
@@ -166,7 +161,7 @@ jobs:
         id: content-hash
         run: |
           mkdir -p tmp/linux tmp/macos tmp/jams
-          unzip -j out/nockchain_linux_musl_x64.zip -d tmp/linux_x64
+          unzip -j out/nockchain_linux_x64.zip -d tmp/linux_x64
           # unzip -j out/nockchain_linux_musl_arm64.zip -d tmp/linux_arm64
           unzip -j out/nockchain_macos_aarch64.zip -d tmp/macos
           unzip -j out/nockchain_jams.zip -d tmp/jams
@@ -213,7 +208,7 @@ jobs:
           name: Release ${{ needs.vars.outputs.short_sha }}
           draft: false
           files: |
-            out/nockchain_linux_musl_x64.zip
+            out/nockchain_linux_x64.zip
             out/nockchain_macos_aarch64.zip
             out/nockchain_jams.zip
             prov/${{ needs.provenance.outputs.provenance-name }}
