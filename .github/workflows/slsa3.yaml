@@ -64,10 +64,9 @@ jobs:
             assets/*.jam
             target/release/nockchain
             target/release/nockchain-bitcoin-sync
-            target/release/libsword_macros.so
-            target/release/choo
-            target/release/equix-latency
-            target/release/wallet
+            target/release/libnockvm_macros.so
+            target/release/hoonc
+            target/release/nockchain-wallet
 
   # build-linux-arm64:
   #   needs: vars
@@ -99,9 +98,9 @@ jobs:
   #           assets/*.jam
   #           target/release/nockchain
   #           target/release/nockchain-bitcoin-sync
-  #           target/release/choo
+  #           target/release/hoonc
   #           target/release/equix-latency
-  #           target/release/wallet
+  #           target/release/nockchain-wallet
 
   build-macos:
     needs: vars
@@ -129,10 +128,9 @@ jobs:
             assets/*.jam
             target/release/nockchain
             target/release/nockchain-bitcoin-sync
-            target/release/libsword_macros.so
-            target/release/choo
-            target/release/equix-latency
-            target/release/wallet
+            target/release/libnockvm_macros.so
+            target/release/hoonc
+            target/release/nockchain-wallet
 
   package:
     # needs: [build-linux-x64, build-macos, build-linux-arm64]
@@ -156,11 +154,11 @@ jobs:
       - name: make zips
         run: |
           mkdir -p out/linux_x64 out/linux_arm64 out/macos_aarch64 out/jams
-          cp linux_x64/target/release/nockchain linux_x64/target/release/libsword_macros.so linux_x64/target/release/nockchain-bitcoin-sync linux_x64/target/release/choo linux_x64/target/release/equix-latency linux_x64/target/release/wallet out/linux_x64/
+          cp linux_x64/target/release/nockchain linux_x64/target/release/libnockvm_macros.so linux_x64/target/release/nockchain-bitcoin-sync linux_x64/target/release/hoonc linux_x64/target/release/nockchain-wallet out/linux_x64/
           chmod +x out/linux_x64/*
-          # cp linux_arm64/target/release/nockchain linux_arm64/target/release/nockchain-bitcoin-sync linux_arm64/target/release/choo linux_arm64/target/release/equix-latency linux_arm64/target/release/wallet out/linux_arm64/
+          # cp linux_arm64/target/release/nockchain linux_arm64/target/release/nockchain-bitcoin-sync linux_arm64/target/release/hoonc linux_arm64/target/release/nockchain-wallet out/linux_arm64/
           # chmod +x out/linux_arm64/*
-          cp mac/target/release/nockchain mac/target/release/nockchain-bitcoin-sync mac/target/release/choo mac/target/release/equix-latency mac/target/release/wallet out/macos_aarch64/
+          cp mac/target/release/nockchain mac/target/release/nockchain-bitcoin-sync mac/target/release/hoonc mac/target/release/equix-latency mac/target/release/nockchain-wallet out/macos_aarch64/
           chmod +x out/macos_aarch64/*
           cp linux_x64/assets/*.jam out/jams/
           (cd out/linux_x64 && zip -j ../nockchain_linux_x64.zip *)
