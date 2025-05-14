@@ -1605,7 +1605,13 @@
     =.  keys.state  (key:put:v master-public-coil ~ pub-label)
     =.  keys.state  (key:put:v master-private-coil ~ prv-label)
     =.  keys.state  (seed:put:v seed-phrase)
-    :-  [%exit 0]~
+    =/  key-data=[seed-phrase=@t public-key=* private-key=*]
+      :*  seed-phrase
+          public-key:cor
+          private-key:cor
+      ==
+    ~&  key-data+key-data
+    :-  ~[[%raw key-data] [%exit 0]]
     state
   ::
   ::  derives child %pub or %prv key of current master key

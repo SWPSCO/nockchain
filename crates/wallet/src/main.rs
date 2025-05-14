@@ -471,7 +471,9 @@ impl Wallet {
         Self::wallet(
             "scan",
             &[
-                master_pubkey_noun, search_depth_noun, include_timelocks_noun,
+                master_pubkey_noun,
+                search_depth_noun,
+                include_timelocks_noun,
                 include_multisig_noun,
             ],
             Operation::Poke,
@@ -789,7 +791,10 @@ async fn main() -> Result<(), NockAppError> {
             include_timelocks,
             include_multisig,
         } => Wallet::scan(
-            master_pubkey, *search_depth, *include_timelocks, *include_multisig,
+            master_pubkey,
+            *search_depth,
+            *include_timelocks,
+            *include_multisig,
         ),
         Commands::ListNotes => Wallet::list_notes(),
         Commands::ListNotesByPubkey { pubkey } => {
@@ -914,11 +919,21 @@ mod tests {
         let keygen_result = wallet.app.poke(wire, noun.clone()).await?;
 
         println!("keygen result: {:?}", keygen_result);
+
+        let effect = unsafe { keygen_result[0].root() };
+        let keys = effect.as_cell()?.tail();
+        let phrase = keys.as_cell()?.head();
+        let public = keys.as_cell()?.tail().as_cell()?.head();
+        let private = keys.as_cell()?.tail().as_cell()?.tail();
+        println!("phrase: {:?}", phrase);
+        println!("public: {:?}", public);
+        println!("private: {:?}", private);
+
         assert!(
             keygen_result.len() == 1,
-            "Expected keygen result to be a list of 1 noun slab"
+            "Expected keygen result to be a list of 2 noun slab"
         );
-        let exit_cause = unsafe { keygen_result[0].root() };
+        let exit_cause = unsafe { keygen_result[1].root() };
         let code = exit_cause.as_cell()?.tail();
         assert!(unsafe { code.raw_equals(&D(0)) }, "Expected exit code 0");
 
