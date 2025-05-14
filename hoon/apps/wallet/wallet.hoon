@@ -1668,6 +1668,30 @@
         """
         [%exit 0]
     ==
+  ++  do-keygen
+    |=  =cause
+    ?>  ?=(%keygen -.cause)
+    =+  [seed-phrase=@t cor]=(gen-master-key:s10 entropy.cause salt.cause)
+    =/  master-public-coil  [%coil [%pub public-key] chain-code]:cor
+    =/  master-private-coil  [%coil [%prv private-key] chain-code]:cor
+    =.  master.state  (some master-public-coil)
+    %-  (debug "keygen: new public key {<public-key:cor>}")
+    %-  (debug "keygen: public key: base58 {<(en:base58:wrap public-key:cor)>}")
+    %-  (debug "keygen: new private key {<private-key:cor>}")
+    %-  (debug "keygen: private key: base58 {<(en:base58:wrap private-key:cor)>}")
+    =/  pub-label  `(crip "master-public-{<(end [3 4] public-key:cor)>}")
+    =/  prv-label  `(crip "master-public-{<(end [3 4] public-key:cor)>}")
+    =.  keys.state  (key:put:v master-public-coil ~ pub-label)
+    =.  keys.state  (key:put:v master-private-coil ~ prv-label)
+    =.  keys.state  (seed:put:v seed-phrase)
+    =/  key-data=[seed-phrase=@t public-key=* private-key=*]
+      :*  seed-phrase
+          public-key:cor
+          private-key:cor
+      ==
+    ~&  key-data+key-data
+    :-  ~[[%raw key-data] [%exit 0]]
+    state
   ::
   ::  derives child %pub or %prv key of current master key
   ::  at index `i`. this will overwrite existing paths.
