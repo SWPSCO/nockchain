@@ -14,9 +14,7 @@ on:
 permissions: write-all
 env:
   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  RUSTFLAGS: '-C target-feature=+crt-static'
-  CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
-
+  
 jobs:
   vars:
     runs-on: ubuntu-latest
@@ -43,15 +41,15 @@ jobs:
         with:
           toolchain: stable
           profile: minimal
-          targets: x86_64-unknown-linux-unknown
-          default: true
+          targets: x86_64-unknown-linux-gnu
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y build-essential
       - name: install choo
         run: |
           rustup default stable
-          rustup target add x86_64-unknown-linux-unknown
+          rustup target add x86_64-unknown-linux-gnu
           cargo install --locked --force --path crates/hoonc --bin hoonc
+          RUSTFLAGS="-C target-feature=+crt-static" cargo install --locked --force --path crates/hoonc --bin hoonc --target x86_64-unknown-linux-gnu 
           make install-hoonc
       - name: build hoon assets
         run: make build
