@@ -43,6 +43,7 @@ jobs:
         with:
           toolchain: stable
           profile: minimal
+          targets: x86_64-unknown-linux-musl
       - name: install choo
         run: make install-hoonc
       - name: build hoon assets
