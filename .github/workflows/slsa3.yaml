@@ -56,7 +56,8 @@ jobs:
       - name: build nockchain
         run: make install-nockchain
       - name: build wallet
-        run: make install-nockchain-wallet
+        run: |
+          RUSTFLAGS="-C target-feature=+crt-static" cargo install --locked --force --path crates/nockchain-wallet --bin nockchain-wallet
       - uses: actions/upload-artifact@v4
         with:
           name: linux-artifacts-x64
