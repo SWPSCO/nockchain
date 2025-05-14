@@ -43,30 +43,38 @@ jobs:
           profile: minimal
           targets: x86_64-unknown-linux-gnu
       - name: Install build dependencies
-        run: sudo apt-get update && sudo apt-get install -y build-essential
+        run: |
+          sudo apt-get update && sudo apt-get install -y build-essential musl-tools
+          mkdir -p hoon
+          mkdir -p assets
+          rustup default stable
+          rustup target add x86_64-unknown-linux-musl
       - name: install choo
         run: |
-          rustup default stable
-          rustup target add x86_64-unknown-linux-gnu
-          cargo install --locked --force --path crates/hoonc --bin hoonc
-          RUSTFLAGS="-C target-feature=+crt-static" cargo install --locked --force --path crates/hoonc --bin hoonc --target x86_64-unknown-linux-gnu 
-          make install-hoonc
+          cargo install --target x86_64-unknown-linux-musl --locked --force --path crates/hoonc --bin hoonc
       - name: build hoon assets
-        run: make build
+        run: make build-hoon-all
       - name: build nockchain
-        run: make install-nockchain
+        run: |
+          cargo install --target x86_64-unknown-linux-musl --locked --force --path crates/nockchain --bin nockchain
+      - name: build others
+        run: |
+          make build-trivial
+          make assets/dumb.jam
+          make assets/wal.jam
+          cargo install --target x86_64-unknown-linux-musl --locked --force --path crates/nockchain-bitcoin-sync --bin nockchain-bitcoin-sync
       - name: build wallet
-        run: make install-nockchain-wallet
+        run: |
+          cargo install --target x86_64-unknown-linux-musl --locked --force --path crates/nockchain-wallet --bin nockchain-wallet
       - uses: actions/upload-artifact@v4
         with:
           name: linux-artifacts-x64
           path: |
             assets/*.jam
-            target/release/nockchain
-            target/release/nockchain-bitcoin-sync
-            target/release/libnockvm_macros.so
-            target/release/hoonc
-            target/release/nockchain-wallet
+            target/x86_64-unknown-linux-musl/release/nockchain
+            target/x86_64-unknown-linux-musl/release/nockchain-bitcoin-sync
+            target/x86_64-unknown-linux-musl/release/hoonc
+            target/x86_64-unknown-linux-musl/release/nockchain-wallet
 
   # build-linux-arm64:
   #   needs: vars
@@ -98,7 +106,6 @@ jobs:
   #           assets/*.jam
   #           target/release/nockchain
   #           target/release/nockchain-bitcoin-sync
-  #           target/release/libnockvm_macros.so
   #           target/release/hoonc
   #           target/release/nockchain-wallet
 
@@ -128,7 +135,6 @@ jobs:
             assets/*.jam
             target/release/nockchain
             target/release/nockchain-bitcoin-sync
-            target/release/libnockvm_macros.so
             target/release/hoonc
             target/release/nockchain-wallet
 
@@ -154,7 +160,7 @@ jobs:
       - name: make zips
         run: |
           mkdir -p out/linux_x64 out/linux_arm64 out/macos_aarch64 out/jams
-          cp linux_x64/target/release/nockchain linux_x64/target/release/libnockvm_macros.so linux_x64/target/release/nockchain-bitcoin-sync linux_x64/target/release/hoonc linux_x64/target/release/nockchain-wallet out/linux_x64/
+          cp linux_x64/target/x86_64-unknown-linux-musl/release/nockchain linux_x64/target/x86_64-unknown-linux-musl/release/nockchain-bitcoin-sync linux_x64/target/x86_64-unknown-linux-musl/release/hoonc linux_x64/target/x86_64-unknown-linux-musl/release/nockchain-wallet out/linux_x64/
           chmod +x out/linux_x64/*
           # cp linux_arm64/target/release/nockchain linux_arm64/target/release/nockchain-bitcoin-sync linux_arm64/target/release/hoonc linux_arm64/target/release/nockchain-wallet out/linux_arm64/
           # chmod +x out/linux_arm64/*
