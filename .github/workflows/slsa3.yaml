@@ -56,8 +56,7 @@ jobs:
         run: make build-hoon-all
       - name: build nockchain
         run: |
-           RUSTFLAGS="-C target-feature=+crt-static" cargo install --locked --force --path crates/nockchain --bin nockchain
-           RUSTFLAGS="-C target-feature=+crt-static" cargo install --locked --force --path crates/nockchain --bin nockchain
+          cargo install --target x86_64-unknown-linux-musl --locked --force --path crates/nockchain --bin nockchain
       - name: build others
         run: |
           make build-trivial
