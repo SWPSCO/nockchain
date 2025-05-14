@@ -43,12 +43,16 @@ jobs:
         with:
           toolchain: stable
           profile: minimal
-          target: x86_64-unknown-linux-musl
+          targets: x86_64-unknown-linux-unknown
           default: true
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y build-essential
       - name: install choo
-        run: make install-hoonc
+        run: |
+          rustup default stable
+          rustup target add x86_64-unknown-linux-unknown
+          cargo install --locked --force --path crates/hoonc --bin hoonc
+          make install-hoonc
       - name: build hoon assets
         run: make build
       - name: build nockchain
