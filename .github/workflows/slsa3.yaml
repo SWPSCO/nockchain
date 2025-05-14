@@ -98,8 +98,8 @@ jobs:
   #           assets/*.jam
   #           target/release/nockchain
   #           target/release/nockchain-bitcoin-sync
+  #           target/release/libnockvm_macros.so
   #           target/release/hoonc
-  #           target/release/equix-latency
   #           target/release/nockchain-wallet
 
   build-macos:
@@ -158,11 +158,11 @@ jobs:
           chmod +x out/linux_x64/*
           # cp linux_arm64/target/release/nockchain linux_arm64/target/release/nockchain-bitcoin-sync linux_arm64/target/release/hoonc linux_arm64/target/release/nockchain-wallet out/linux_arm64/
           # chmod +x out/linux_arm64/*
-          cp mac/target/release/nockchain mac/target/release/nockchain-bitcoin-sync mac/target/release/hoonc mac/target/release/equix-latency mac/target/release/nockchain-wallet out/macos_aarch64/
+          cp mac/target/release/nockchain mac/target/release/nockchain-bitcoin-sync mac/target/release/hoonc mac/target/release/nockchain-wallet out/macos_aarch64/
           chmod +x out/macos_aarch64/*
           cp linux_x64/assets/*.jam out/jams/
           (cd out/linux_x64 && zip -j ../nockchain_linux_x64.zip *)
-          # (cd out/linux_arm64 && zip -j ../nockchain_linux_musl_arm64.zip *)
+          # (cd out/linux_arm64 && zip -j ../nockchain_linux_arm64.zip *)
           (cd out/macos_aarch64 && zip -j ../nockchain_macos_aarch64.zip *)
           (cd out/jams && zip -j ../nockchain_jams.zip *)
       - name: compute content hashes
@@ -170,7 +170,7 @@ jobs:
         run: |
           mkdir -p tmp/linux tmp/macos tmp/jams
           unzip -j out/nockchain_linux_x64.zip -d tmp/linux_x64
-          # unzip -j out/nockchain_linux_musl_arm64.zip -d tmp/linux_arm64
+          # unzip -j out/nockchain_linux_arm64.zip -d tmp/linux_arm64
           unzip -j out/nockchain_macos_aarch64.zip -d tmp/macos
           unzip -j out/nockchain_jams.zip -d tmp/jams
           # files=$(ls tmp/linux_x64/* tmp/linux_arm64/* tmp/macos/* tmp/jams/*)
