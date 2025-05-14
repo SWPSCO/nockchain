@@ -984,9 +984,6 @@
     ::
       [%state ~]
     ``state
-    ::
-      [%keys path=*]
-    ``path ::XX read the axal at a path
   ==
 ::
 ++  poke
