@@ -214,6 +214,36 @@ jobs:
         with:
           name: ${{ needs.provenance.outputs.provenance-name }}
           path: ./prov
+      - name: Create readme
+        run: |
+          cat << EOF > ./README.md
+          ## Verification
+          
+          All artifacts in the zip files have [SLSA level 3](https://github.blog/security/supply-chain-security/slsa-3-compliance-with-github-actions/) provenance attestation; simply put, this means that you can prove nobody messed with the builds and introduced some funny business. But attestation doesn't mean anything if you don't actually verify it!
+          
+          ### How to verify
+          
+          - Get the slsa3-verifier for your platform: https://github.com/slsa-framework/slsa-verifier
+          - Download and unzip the release; download the `multiple.into.jsonl` file attached to the release
+          - Run it against an unzipped artifact: `slsa-verifier-linux-amd64 verify-artifact nockchain-wallet --provenance-path multiple.intoto.jsonl --source-uri=git+https://github.com/SWPSCO/nockchain`
+          - You should see output like this:
+          ```
+          Verified build using builder "https://github.com/slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@refs/tags/v2.1.0" at commit 1f8a1deb820b1e68c908ecf60ffcc1c86ae351f8
+          Verifying artifact nockchain-wallet: PASSED
+          
+          PASSED: SLSA verification passed
+          ```
+          
+          Note that the hash will correspond with a commit in the `release` branch, not the commit hash that was actually built (which is what the release is named after). This is because we have to sync master from upstream and build from a separate default branch.
+          
+          ## MacOS notes
+          
+          This only includes builds for aarch64 (Apple Silicon).
+          
+          ## Linux notes
+          
+          These binaries are statically linked musl builds for x64. They should run on any x64 linux machine.
+          EOF
       - uses: softprops/action-gh-release@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -226,3 +256,4 @@ jobs:
             out/nockchain_macos_aarch64.zip
             out/nockchain_jams.zip
             prov/${{ needs.provenance.outputs.provenance-name }}
+            ./README.md
