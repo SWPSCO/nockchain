@@ -45,7 +45,7 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update && sudo apt-get install -y build-essential musl-tools
-          mdkir -p hoon
+          mkdir -p hoon
           mkdir -p assets
           rustup default stable
           rustup target add x86_64-unknown-linux-musl
