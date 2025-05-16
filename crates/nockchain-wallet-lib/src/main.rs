@@ -241,16 +241,16 @@ mod tests {
 
         let keygen_result = wallet.app.poke(wire, noun.clone()).await?;
 
-        println!("keygen result: {:?}", keygen_result);
+        tracing::info!("keygen result: {:?}", keygen_result);
 
         let effect = unsafe { keygen_result[0].root() };
         let keys = effect.as_cell()?.tail();
         let phrase = keys.as_cell()?.head();
         let public = keys.as_cell()?.tail().as_cell()?.head();
         let private = keys.as_cell()?.tail().as_cell()?.tail();
-        println!("phrase: {:?}", phrase);
-        println!("public: {:?}", public);
-        println!("private: {:?}", private);
+        tracing::info!("phrase: {:?}", phrase);
+        tracing::info!("public: {:?}", public);
+        tracing::info!("private: {:?}", private);
 
         assert!(
             keygen_result.len() == 2,
@@ -339,7 +339,7 @@ mod tests {
         let (noun, op) = Wallet::sign_tx(bundle_path, None)?;
         let sign_result = wallet.app.poke(wire, noun.clone()).await?;
 
-        println!("sign_result: {:?}", sign_result);
+        tracing::info!("sign_result: {:?}", sign_result);
 
         let wire = WalletWire::Command(Commands::SignTx {
             draft: bundle_path.to_string(),
@@ -350,7 +350,7 @@ mod tests {
         let (noun, op) = Wallet::sign_tx(bundle_path, Some(1))?;
         let sign_result = wallet.app.poke(wire, noun.clone()).await?;
 
-        println!("sign_result: {:?}", sign_result);
+        tracing::info!("sign_result: {:?}", sign_result);
 
         let wire = WalletWire::Command(Commands::SignTx {
             draft: bundle_path.to_string(),
@@ -361,7 +361,7 @@ mod tests {
         let (noun, op) = Wallet::sign_tx(bundle_path, Some(255))?;
         let sign_result = wallet.app.poke(wire, noun.clone()).await?;
 
-        println!("sign_result: {:?}", sign_result);
+        tracing::info!("sign_result: {:?}", sign_result);
 
         // Cleanup
         fs::remove_file(bundle_path).map_err(|e| NockAppError::IoError(e))?;
@@ -380,13 +380,13 @@ mod tests {
         let mut wallet = Wallet::new(nockapp);
         let seedphrase = "correct horse battery staple";
         let (noun, op) = Wallet::gen_master_privkey(seedphrase)?;
-        println!("privkey_slab: {:?}", noun);
+        tracing::info!("privkey_slab: {:?}", noun);
         let wire = WalletWire::Command(Commands::GenMasterPrivkey {
             seedphrase: seedphrase.to_string(),
         })
         .to_wire();
         let privkey_result = wallet.app.poke(wire, noun.clone()).await?;
-        println!("privkey_result: {:?}", privkey_result);
+        tracing::info!("privkey_result: {:?}", privkey_result);
         Ok(())
     }
 
@@ -406,7 +406,7 @@ mod tests {
         })
         .to_wire();
         let pubkey_result = wallet.app.poke(wire, noun.clone()).await?;
-        println!("pubkey_result: {:?}", pubkey_result);
+        tracing::info!("pubkey_result: {:?}", pubkey_result);
         Ok(())
     }
 
@@ -443,7 +443,7 @@ mod tests {
             option_env!("GIT_SHA").unwrap_or("unknown")
         ));
 
-        println!("import result: {:?}", import_result);
+        tracing::info!("import result: {:?}", import_result);
         assert!(
             !import_result.is_empty(),
             "Expected non-empty import result"
@@ -471,7 +471,7 @@ mod tests {
         })
         .to_wire();
         let scan_result = wallet.app.poke(wire, noun.clone()).await?;
-        println!("scan_result: {:?}", scan_result);
+        tracing::info!("scan_result: {:?}", scan_result);
         Ok(())
     }
 
@@ -501,7 +501,7 @@ mod tests {
         })
         .to_wire();
         let spend_result = wallet.app.poke(wire, noun.clone()).await?;
-        println!("spend_result: {:?}", spend_result);
+        tracing::info!("spend_result: {:?}", spend_result);
 
         Ok(())
     }
@@ -532,7 +532,7 @@ mod tests {
         })
         .to_wire();
         let genkey_result = wallet.app.poke(wire1, genkey_noun.clone()).await?;
-        println!("genkey_result: {:?}", genkey_result);
+        tracing::info!("genkey_result: {:?}", genkey_result);
 
         let wire2 = WalletWire::Command(Commands::SimpleSpend {
             names: names.clone(),
@@ -542,7 +542,7 @@ mod tests {
         })
         .to_wire();
         let spend_result = wallet.app.poke(wire2, spend_noun.clone()).await?;
-        println!("spend_result: {:?}", spend_result);
+        tracing::info!("spend_result: {:?}", spend_result);
 
         Ok(())
     }
@@ -561,7 +561,7 @@ mod tests {
 
         let wire = WalletWire::Command(Commands::UpdateBalance {}).to_wire();
         let update_result = wallet.app.poke(wire, noun.clone()).await?;
-        println!("update_result: {:?}", update_result);
+        tracing::info!("update_result: {:?}", update_result);
 
         Ok(())
     }
@@ -580,7 +580,7 @@ mod tests {
         let (noun, op) = Wallet::list_notes()?;
         let wire = WalletWire::Command(Commands::ListNotes {}).to_wire();
         let list_result = wallet.app.poke(wire, noun.clone()).await?;
-        println!("list_result: {:?}", list_result);
+        tracing::info!("list_result: {:?}", list_result);
 
         Ok(())
     }
@@ -620,7 +620,7 @@ mod tests {
             option_env!("GIT_SHA").unwrap_or("unknown")
         ));
 
-        println!("transaction result: {:?}", tx_result);
+        tracing::info!("transaction result: {:?}", tx_result);
         assert!(
             !tx_result.is_empty(),
             "Expected non-empty transaction result"
