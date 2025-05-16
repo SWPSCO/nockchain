@@ -242,6 +242,16 @@ mod tests {
         let keygen_result = wallet.app.poke(wire, noun.clone()).await?;
 
         println!("keygen result: {:?}", keygen_result);
+
+        let effect = unsafe { keygen_result[0].root() };
+        let keys = effect.as_cell()?.tail();
+        let phrase = keys.as_cell()?.head();
+        let public = keys.as_cell()?.tail().as_cell()?.head();
+        let private = keys.as_cell()?.tail().as_cell()?.tail();
+        println!("phrase: {:?}", phrase);
+        println!("public: {:?}", public);
+        println!("private: {:?}", private);
+
         assert!(
             keygen_result.len() == 2,
             "Expected keygen result to be a list of 2 noun slabs - markdown and exit"
