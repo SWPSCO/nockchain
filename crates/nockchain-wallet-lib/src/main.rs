@@ -192,6 +192,10 @@ async fn main() -> Result<(), NockAppError> {
 #[allow(warnings)]
 #[cfg(test)]
 mod tests {
+    use nockchain_wallet_lib::WalletWire;
+    use nockvm::noun::D;
+    use std::fs;
+    use nockapp::wire::Wire;
     use std::sync::Once;
 
     use nockapp::kernel::boot::{self, Cli as BootCli};

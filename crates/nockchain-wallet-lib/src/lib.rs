@@ -203,7 +203,7 @@ pub enum KeyType {
     Prv,
 }
 impl KeyType {
-    fn to_string(&self) -> &'static str {
+    pub fn to_string(&self) -> &'static str {
         match self {
             KeyType::Pub => "pub",
             KeyType::Prv => "prv",
@@ -480,11 +480,15 @@ impl Wallet {
     /// # Example
     ///
     /// ```no_run
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// use nockchain_wallet_lib::Wallet;
     /// let names = "[first1 last1],[first2 last2]";
     /// let recipients = "[1 pk1],[2 pk2,pk3,pk4]";
     /// let gifts = "100,200";
     /// let fee = 10;
-    /// wallet.simple_spend(names.to_string(), recipients.to_string(), gifts.to_string(), fee)?;
+    /// Wallet::simple_spend(names.to_string(), recipients.to_string(), gifts.to_string(), fee)?;
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn simple_spend(
         names: String,
