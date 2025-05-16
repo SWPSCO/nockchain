@@ -1,0 +1,117 @@
+# Nockchain Wallet
+
+## Key Management
+
+### Generate New Key Pair
+
+```bash
+# Generate a new key pair with random entropy
+nockchain-wallet keygen
+```
+
+### Import Private Key
+
+```bash
+# Import keys from a jammed file
+nockchain-wallet import-keys --input path/to/keys.jam
+
+# Import a master public key and chain code
+nockchain-wallet import-master-pubkey --key <base58-key> --knot <base58-chain-code>
+```
+
+### Generate Master Private Key from Seed Phrase
+
+```bash
+nockchain-wallet gen-master-privkey --seedphrase "your seed phrase here"
+```
+
+Creates a master private key deterministically from a BIP39-style seed phrase.
+
+### Generate Master Public Key from Private Key
+
+```bash
+nockchain-wallet gen-master-pubkey --master-privkey <private-key>
+```
+
+Derives the master public key from a master private key.
+
+### Derive Child Key
+
+```bash
+nockchain-wallet derive-child --key-type <pub|priv> --index <0-255>
+```
+
+Derives a child public or private key at the given index from the current master key.
+
+
+## Connecting to Nockchain
+
+The wallet needs to connect to a running nockchain instance to perform operations like checking balances, broadcasting transactions, etc.
+
+```bash
+# Connect to nockchain using a Unix domain socket
+nockchain-wallet --nockchain-socket ./test-leader/nockchain.sock <command>
+
+# Example: broadcasting a transaction
+nockchain-wallet --nockchain-socket ./test-leader/nockchain.sock make-tx --draft my_draft
+```
+
+Note: Make sure nockchain is running and the socket path matches your nockchain configuration.
+
+
+## Listing Notes
+
+### List All Notes
+
+```bash
+nockchain-wallet list-notes
+```
+
+Displays all notes (UTXOs) currently managed by the wallet, sorted by assets.
+
+### List Notes by Public Key
+
+```bash
+nockchain-wallet list-notes-by-pubkey --pubkey <public-key>
+```
+
+Shows only the notes associated with the specified public key. Useful for filtering wallet contents by address or for multisig scenarios.
+
+
+## Transaction Creation
+
+#### Components of transaction creation
+
+1. **Seeds**: Define where funds are going and how much
+2. **Inputs**: Specify which notes (UTXOs) to spend
+3. **Draft**: Combine inputs into a complete transaction
+4. **Sign**: Authorize the transaction with private keys
+5. **Make Transaction**: Create the final transaction for broadcasting
+
+### What is a draft?
+
+A draft represents a transaction that is being prepared for submission to the network. It is a collection of partially assembled `seeds` and `inputs` that can be persisted to disk and later signed and submitted.
+
+### Create a Draft
+
+```bash
+# Create a draft using simple-spend
+nockchain-wallet simple-spend \
+  --names "[first1 last1],[first2 last2]" \
+  --recipients "[1 pk1],[2 pk2,pk3]" \
+  --gifts "100,200" \
+  --fee 10
+```
+
+### Make Transaction from Draft
+
+```bash
+# Sign the transaction
+nockchain-wallet sign-tx --draft path/to/draft.draft
+
+# Make and broadcast the signed transaction
+nockchain-wallet make-tx --draft path/to/draft.draft
+```
+
+Note: The draft file will be saved in `./drafts/` directory with a `.draft` extension.
+
