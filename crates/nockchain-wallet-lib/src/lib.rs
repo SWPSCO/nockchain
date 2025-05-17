@@ -167,12 +167,16 @@ pub enum Commands {
 
     /// Show the master private key
     ShowMasterPrivkey,
+
+    /// Get the balance of the current wallet
+    GetBalance,
 }
 
 impl Commands {
     fn as_wire_tag(&self) -> &'static str {
         match self {
             Commands::Keygen => "keygen",
+            Commands::GetBalance => "get-balance",
             Commands::DeriveChild { .. } => "derive-child",
             Commands::ImportKeys { .. } => "import-keys",
             Commands::SignTx { .. } => "sign-tx",
