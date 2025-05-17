@@ -300,6 +300,11 @@ impl Wallet {
         Self::wallet("keygen", &[ent_noun, sal_noun], Operation::Poke, &mut slab)
     }
 
+    pub fn get_balance() -> CommandNoun<NounSlab> {
+        let mut slab = NounSlab::new();
+        Self::wallet("get-balance", &[], Operation::Peek, &mut slab)
+    }
+
     // Derives a child key from current master key.
     //
     // # Arguments

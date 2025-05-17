@@ -93,6 +93,11 @@ async fn main() -> Result<(), NockAppError> {
             getrandom(&mut salt).map_err(|e| CrownError::Unknown(e.to_string()))?;
             Wallet::keygen(&entropy, &salt)
         }
+        /*
+        Commands::GetBalance => {
+            Wallet::get_balance()
+        }
+        */
         Commands::DeriveChild { key_type, index } => {
             // Validate key_type is either "pub" or "priv"
             let key_type = match key_type.as_str() {
