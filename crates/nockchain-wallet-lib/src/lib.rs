@@ -44,7 +44,7 @@ impl Wire for WalletWire {
 }
 
 /// Represents a Noun that the wallet kernel can handle
-type CommandNoun<T> = Result<(T, Operation), NockAppError>;
+pub type CommandNoun<T> = Result<(T, Operation), NockAppError>;
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum Commands {
