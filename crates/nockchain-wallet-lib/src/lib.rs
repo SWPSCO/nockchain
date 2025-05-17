@@ -46,7 +46,8 @@ impl Wire for WalletWire {
 /// Represents a Noun that the wallet kernel can handle
 pub type CommandNoun<T> = Result<(T, Operation), NockAppError>;
 
-#[derive(Subcommand, Debug, Clone)]
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+
 pub enum Commands {
     /// Generate a new key pair
     Keygen,
@@ -306,7 +307,8 @@ impl Wallet {
 
     pub fn get_balance() -> CommandNoun<NounSlab> {
         let mut slab = NounSlab::new();
-        Self::wallet("get-balance", &[], Operation::Peek, &mut slab)
+        //Self::wallet("get-balance", &[], Operation::Peek, &mut slab)
+        Self::wallet("state", &[], Operation::Peek, &mut slab)
     }
 
     // Derives a child key from current master key.
