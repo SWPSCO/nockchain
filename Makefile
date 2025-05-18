@@ -61,7 +61,8 @@ build-trivial: ensure-dirs
 	echo '%trivial' > hoon/trivial.hoon
 	hoonc --arbitrary hoon/trivial.hoon
 
-HOON_TARGETS=assets/dumb.jam assets/wal.jam
+# HOON_TARGETS=assets/dumb.jam assets/wal.jam
+HOON_TARGETS=assets/wal.jam
 
 .PHONY: nuke-hoonc-data
 nuke-hoonc-data:

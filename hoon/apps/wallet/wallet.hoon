@@ -984,6 +984,15 @@
       [%receive-address ~]
     ``receive-address.state
     ::
+      [%seed-phrase]
+    =/  =meta  seed:get:v
+    =/  seedphrase=@t
+      ?:  ?=(%seed -.meta)
+        +.meta
+      %-  crip
+      "no seedphrase found"
+    ``seedphrase
+    ::
       [%state ~]
     ``state
   ==

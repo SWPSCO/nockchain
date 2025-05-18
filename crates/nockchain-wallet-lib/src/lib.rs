@@ -171,13 +171,15 @@ pub enum Commands {
 
     /// Get the balance of the current wallet
     GetBalance,
+
+    /// Get the seed phrase for the current master key
+    PeekSeedphrase,
 }
 
 impl Commands {
     fn as_wire_tag(&self) -> &'static str {
         match self {
             Commands::Keygen => "keygen",
-            Commands::GetBalance => "get-balance",
             Commands::DeriveChild { .. } => "derive-child",
             Commands::ImportKeys { .. } => "import-keys",
             Commands::SignTx { .. } => "sign-tx",
@@ -194,6 +196,9 @@ impl Commands {
             Commands::ShowSeedphrase => "show-seedphrase",
             Commands::ShowMasterPubkey => "show-master-pubkey",
             Commands::ShowMasterPrivkey => "show-master-privkey",
+            // Peeks
+            Commands::GetBalance => "get-balance",
+            Commands::PeekSeedphrase => "peek-seedphrase",
         }
     }
 }
@@ -305,10 +310,16 @@ impl Wallet {
         Self::wallet("keygen", &[ent_noun, sal_noun], Operation::Poke, &mut slab)
     }
 
+    // Peeks
     pub fn get_balance() -> CommandNoun<NounSlab> {
         let mut slab = NounSlab::new();
         //Self::wallet("get-balance", &[], Operation::Peek, &mut slab)
         Self::wallet("state", &[], Operation::Peek, &mut slab)
+    }
+
+    pub fn peek_seedphrase() -> CommandNoun<NounSlab> {
+        let mut slab = NounSlab::new();
+        Self::wallet("seed-phrase", &[], Operation::Peek, &mut slab)
     }
 
     // Derives a child key from current master key.
