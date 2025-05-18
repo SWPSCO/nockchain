@@ -5,5 +5,5 @@ test-follower
 .nockchain-identity
 .nockchain-identity.peerid
 target
-assets/*.jam
+# assets/*.jam
 !crates/nockapp/test-jams

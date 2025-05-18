@@ -984,7 +984,7 @@
       [%receive-address ~]
     ``receive-address.state
     ::
-      [%seed-phrase]
+      [%seed-phrase ~]
     =/  =meta  seed:get:v
     =/  seedphrase=@t
       ?:  ?=(%seed -.meta)

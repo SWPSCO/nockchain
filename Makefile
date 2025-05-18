@@ -61,8 +61,7 @@ build-trivial: ensure-dirs
 	echo '%trivial' > hoon/trivial.hoon
 	hoonc --arbitrary hoon/trivial.hoon
 
-# HOON_TARGETS=assets/dumb.jam assets/wal.jam
-HOON_TARGETS=assets/wal.jam
+HOON_TARGETS=assets/dumb.jam assets/wal.jam
 
 .PHONY: nuke-hoonc-data
 nuke-hoonc-data:
@@ -79,6 +78,10 @@ build-hoon-all: nuke-assets update-hoonc ensure-dirs build-trivial $(HOON_TARGET
 
 .PHONY: build-hoon
 build-hoon: ensure-dirs update-hoonc $(HOON_TARGETS)
+	$(call show_env_vars)
+
+.PHONY: build-wallet
+build-wallet: ensure-dirs update-hoonc assets/wal.jam
 	$(call show_env_vars)
 
 .PHONY: run-nockchain-leader
