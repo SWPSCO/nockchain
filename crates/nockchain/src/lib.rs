@@ -274,7 +274,7 @@ impl NockchainCli {
     }
 
     /// Helper function to create a BitcoinRPCConnection from CLI arguments
-    fn create_bitcoin_connection(&self) -> BitcoinRPCConnection {
+    pub fn create_bitcoin_connection(&self) -> BitcoinRPCConnection {
         let url = self.btc_node_url.clone();
         let height = GENESIS_HEIGHT;
         let auth = if let Some(username) = self.btc_username.clone() {
