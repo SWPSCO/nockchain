@@ -998,9 +998,9 @@
     ::
       [%master-pubkey ~]
     =/  =meta  ~(master get:v %pub)
-    =/  master-pubkey
+    =/  master-pubkey=@t
+    %-  crip
     ?:  ?=(%coil -.meta)
-      %-  crip
       "{(en:base58:wrap p.key.meta)}"
     ""
     ``master-pubkey
