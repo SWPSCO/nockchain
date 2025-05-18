@@ -978,6 +978,9 @@
   %-  (debug "peek: {<state>}")
   ?+    path  ~
     ::
+      [%state ~]
+    ``state
+    ::
       [%balance ~]
     ``balance.state
     ::
@@ -990,11 +993,17 @@
       ?:  ?=(%seed -.meta)
         +.meta
       %-  crip
-      "no seedphrase found"
+      ""
     ``seedphrase
     ::
-      [%state ~]
-    ``state
+      [%master-pubkey ~]
+    =/  =meta  ~(master get:v %pub)
+    =/  master-pubkey
+    ?:  ?=(%coil -.meta)
+      %-  crip
+      "{(en:base58:wrap p.key.meta)}"
+    ""
+    ``master-pubkey
   ==
 ::
 ++  poke
@@ -1663,15 +1672,20 @@
     =.  keys.state  (key:put:v master-public-coil ~ pub-label)
     =.  keys.state  (key:put:v master-private-coil ~ prv-label)
     =.  keys.state  (seed:put:v seed-phrase)
+    :_  state
+    :~  :-  %markdown
+        %-  crip
+        """
+        ## Keygen
 
-    =/  key-data=[seed-phrase=@t public-key=* private-key=*]
-      :*  seed-phrase
-          public-key:cor
-          private-key:cor
-      ==
-    ~&  key-data+key-data
-    :-  ~[[%raw key-data] [%exit 0]]
-    state
+        ### New Public Key
+        {<(en:base58:wrap public-key:cor)>}
+
+        ### New Private Key
+        {<(en:base58:wrap private-key:cor)>}
+        """
+        [%exit 0]
+    ==
   ::
   ::  derives child %pub or %prv key of current master key
   ::  at index `i`. this will overwrite existing paths.

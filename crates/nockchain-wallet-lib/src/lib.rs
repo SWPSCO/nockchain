@@ -160,6 +160,9 @@ pub enum Commands {
     /// Lists all public keys in the wallet
     ListPubkeys,
 
+    /// Get the balance of the current wallet
+    PeekBalance,
+
     /// Show the seed phrase for the current master key
     ShowSeedphrase,
 
@@ -169,11 +172,14 @@ pub enum Commands {
     /// Show the master private key
     ShowMasterPrivkey,
 
-    /// Get the balance of the current wallet
-    GetBalance,
-
     /// Get the seed phrase for the current master key
     PeekSeedphrase,
+
+    /// Get the master public key
+    PeekMasterPubkey,
+
+    /// Get the state of the current wallet
+    PeekState,
 }
 
 impl Commands {
@@ -197,8 +203,10 @@ impl Commands {
             Commands::ShowMasterPubkey => "show-master-pubkey",
             Commands::ShowMasterPrivkey => "show-master-privkey",
             // Peeks
-            Commands::GetBalance => "get-balance",
+            Commands::PeekBalance => "peek-balance",
             Commands::PeekSeedphrase => "peek-seedphrase",
+            Commands::PeekMasterPubkey => "peek-master-pubkey",
+            Commands::PeekState => "peek-state",
         }
     }
 }
@@ -311,15 +319,21 @@ impl Wallet {
     }
 
     // Peeks
-    pub fn get_balance() -> CommandNoun<NounSlab> {
+    pub fn peek_balance() -> CommandNoun<NounSlab> {
         let mut slab = NounSlab::new();
-        //Self::wallet("get-balance", &[], Operation::Peek, &mut slab)
-        Self::wallet("state", &[], Operation::Peek, &mut slab)
+        Self::wallet("balance", &[], Operation::Peek, &mut slab)
     }
-
     pub fn peek_seedphrase() -> CommandNoun<NounSlab> {
         let mut slab = NounSlab::new();
         Self::wallet("seed-phrase", &[], Operation::Peek, &mut slab)
+    }
+    pub fn peek_master_pubkey() -> CommandNoun<NounSlab> {
+        let mut slab = NounSlab::new();
+        Self::wallet("master-pubkey", &[], Operation::Peek, &mut slab)
+    }
+    pub fn peek_state() -> CommandNoun<NounSlab> {
+        let mut slab = NounSlab::new();
+        Self::wallet("state", &[], Operation::Peek, &mut slab)
     }
 
     // Derives a child key from current master key.
