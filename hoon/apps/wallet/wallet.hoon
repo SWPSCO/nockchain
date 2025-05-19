@@ -1018,7 +1018,7 @@
     %-  (soft cause)
     cause.input.ovum
   =/  success  [%exit 0]
-  =/  failure  [%exit 0]
+  =/  failure  [%exit 1]
   ?~  cause
     %-  (debug "input does not have a proper cause: {<cause.input.ovum>}")
     [~[failure] state]
