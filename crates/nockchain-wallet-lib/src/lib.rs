@@ -180,6 +180,9 @@ pub enum Commands {
 
     /// Get the state of the current wallet
     PeekState,
+
+    /// Get the receive address
+    PeekReceiveAddress,
 }
 
 impl Commands {
@@ -207,6 +210,7 @@ impl Commands {
             Commands::PeekSeedphrase => "peek-seedphrase",
             Commands::PeekMasterPubkey => "peek-master-pubkey",
             Commands::PeekState => "peek-state",
+            Commands::PeekReceiveAddress => "peek-receive-address",
         }
     }
 }
@@ -334,6 +338,10 @@ impl Wallet {
     pub fn peek_state() -> CommandNoun<NounSlab> {
         let mut slab = NounSlab::new();
         Self::wallet("state", &[], Operation::Peek, &mut slab)
+    }
+    pub fn peek_receive_address() -> CommandNoun<NounSlab> {
+        let mut slab = NounSlab::new();
+        Self::wallet("receive-address", &[], Operation::Peek, &mut slab)
     }
 
     // Derives a child key from current master key.
