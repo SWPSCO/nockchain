@@ -183,6 +183,9 @@ pub enum Commands {
 
     /// Get the receive address
     PeekReceiveAddress,
+
+    /// Get pubkeys
+    PeekPubkeys,
 }
 
 impl Commands {
@@ -211,6 +214,7 @@ impl Commands {
             Commands::PeekMasterPubkey => "peek-master-pubkey",
             Commands::PeekState => "peek-state",
             Commands::PeekReceiveAddress => "peek-receive-address",
+            Commands::PeekPubkeys => "peek-pubkeys",
         }
     }
 }
@@ -342,6 +346,10 @@ impl Wallet {
     pub fn peek_receive_address() -> CommandNoun<NounSlab> {
         let mut slab = NounSlab::new();
         Self::wallet("receive-address", &[], Operation::Peek, &mut slab)
+    }
+    pub fn peek_pubkeys() -> CommandNoun<NounSlab> {
+        let mut slab = NounSlab::new();
+        Self::wallet("pubkeys", &[], Operation::Peek, &mut slab)
     }
 
     // Derives a child key from current master key.

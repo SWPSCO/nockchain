@@ -1004,6 +1004,15 @@
       "{(en:base58:wrap p.key.meta)}"
     ""
     ``master-pubkey
+    ::
+      [%pubkeys ~]
+    =/  pubkeys  ~(coils get:v %pub)
+    =/  base58-keys=(list cord)
+      %+  turn  pubkeys
+      |=  =coil
+      =/  pubkey=schnorr-pubkey:transact  pub:(from-public:s10 [p.key cc]:coil)
+      (to-b58:schnorr-pubkey:transact pubkey)
+    ``(join ' ' base58-keys)
   ==
 ::
 ++  poke
