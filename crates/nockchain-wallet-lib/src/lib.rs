@@ -61,6 +61,10 @@ pub enum Commands {
         /// Index of the child key to derive
         #[arg(short, long, value_parser = clap::value_parser!(u64).range(0..=255))]
         index: u64,
+
+        /// Label of the child key to derive
+        #[arg(short, long)]
+        label: Option<String>,
     },
 
     /// Import keys from a file
@@ -359,12 +363,14 @@ impl Wallet {
     // * `key_type` - The type of key to derive (e.g., "pub", "priv")
     // * `index` - The index of the child key to derive
     // TODO: add label if necessary
-    pub fn derive_child(key_type: KeyType, index: u64, label: Option<&str>) -> CommandNoun<NounSlab> {
+    pub fn derive_child(key_type: KeyType, index: u64, label: Option<String>) -> CommandNoun<NounSlab> {
         let mut slab = NounSlab::new();
         let key_type_noun = make_tas(&mut slab, key_type.to_string()).as_noun();
         let index_noun = D(index);
         let label_noun = match label {
-            Some(label) => make_tas(&mut slab, label).as_noun(),
+            Some(label) => {
+                let label: &str = label.as_str(); 
+                make_tas(&mut slab, label).as_noun(),
             None => SIG,
         };
 
