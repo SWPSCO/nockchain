@@ -370,7 +370,7 @@ impl Wallet {
         let label_noun = match label {
             Some(label) => {
                 let label: &str = label.as_str(); 
-                make_tas(&mut slab, label).as_noun()
+                &[SIG, make_tas(&mut slab, label).as_noun()]
             }
             None => SIG,
         };
