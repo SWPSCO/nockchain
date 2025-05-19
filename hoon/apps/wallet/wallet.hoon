@@ -1018,7 +1018,7 @@
     %-  (soft cause)
     cause.input.ovum
   =/  success  [%exit 0]
-  =/  failure  [%exit 1]
+  =/  failure  [%exit 0]
   ?~  cause
     %-  (debug "input does not have a proper cause: {<cause.input.ovum>}")
     [~[failure] state]
@@ -1087,17 +1087,17 @@
         ?~  softed
           %-  (debug "handle-npc: %balance: could not soft result")
           %-  (debug "handle-npc: {<result>}")
-          [[%exit 1]~ state]
+          [[%exit 0]~ state]
         =/  balance-result=(unit (unit _balance.state))  u.softed
         ?~  balance-result
           %-  (warn "%update-balance did not return a result: bad path")
-          [[%exit 1]~ state]
+          [[%exit 0]~ state]
         ?~  u.balance-result
           %-  (warn "%update-balance did not return a result: nothing")
-          [[%exit 1]~ state]
+          [[%exit 0]~ state]
         ?~  u.u.balance-result
           %-  (warn "%update-balance did not return a result: empty result")
-          [[%exit 1]~ state]
+          [[%exit 0]~ state]
         =.  balance.state  u.u.balance-result
         %-  (debug "balance state updated!")
         =.  name-to-hash.state
@@ -1135,19 +1135,19 @@
           (~(del by peek-requests.state) pid)
         ?~  softed
           %-  (warn "handle-npc: %block: could not soft result")
-          [[%exit 1]~ state]
+          [[%exit 0]~ state]
         =/  block-result  u.softed
         %-  (debug "handle-npc: %block: {<block-result>}")
         %-  (debug "handle-npc: %block: {<peek-requests.state>}")
         ?~  block-result
           %-  (warn "handle-npc: %block: bad path")
-          [[%exit 1]~ state]
+          [[%exit 0]~ state]
         ?~  u.block-result
           %-  (warn "handle-npc: %block: nothing")
-          [[%exit 1]~ state]
+          [[%exit 0]~ state]
         ?~  u.u.block-result
           %-  (warn "handle-npc: %block: empty result")
-          [[%exit 1]~ state]
+          [[%exit 0]~ state]
         %-  (debug "handle-npc: %block: found block")
         %-  (debug "handle-npc: {<(to-b58:block-id:transact (need u.u.block-result))>}")
         %-  (debug "handle-npc: hash: {<(to-b58:hash:transact (need u.u.block-result))>}")
