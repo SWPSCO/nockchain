@@ -1012,7 +1012,7 @@
       |=  =coil
       =/  pubkey=schnorr-pubkey:transact  pub:(from-public:s10 [p.key cc]:coil)
       (to-b58:schnorr-pubkey:transact pubkey)
-    ``(join ' ' base58-keys)
+    ``(crip (join ' ' base58-keys))
   ==
 ::
 ++  poke
