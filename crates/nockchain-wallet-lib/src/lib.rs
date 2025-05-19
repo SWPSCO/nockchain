@@ -367,18 +367,18 @@ impl Wallet {
         let mut slab = NounSlab::new();
         let key_type_noun = make_tas(&mut slab, key_type.to_string()).as_noun();
         let index_noun = D(index);
-        let derive_child_noun = match label {
+        let derive_child_noun_vec: Vec<Noun> = match label {
             Some(label) => {
-                let label: &str = label.as_str(); 
-                let label_noun = make_tas(&mut slab, label).as_noun();
-                [key_type_noun, index_noun, SIG, label_noun]
+                let label_str: &str = label.as_str();
+                let label_noun = make_tas(&mut slab, label_str).as_noun();
+                vec![key_type_noun, index_noun, SIG, label_noun]
             }
-            None => [key_type_noun, index_noun, SIG],
+            None => vec![key_type_noun, index_noun, SIG],
         };
 
         Self::wallet(
             "derive-child",
-            &derive_child_noun,
+            &derive_child_noun_vec,
             Operation::Poke,
             &mut slab,
         )
