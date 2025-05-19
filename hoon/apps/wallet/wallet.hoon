@@ -1086,17 +1086,18 @@
           (~(del by peek-requests.state) pid)
         ?~  softed
           %-  (debug "handle-npc: %balance: could not soft result")
-          `state
+          %-  (debug "handle-npc: {<result>}")
+          [[%exit 1]~ state]
         =/  balance-result=(unit (unit _balance.state))  u.softed
         ?~  balance-result
           %-  (warn "%update-balance did not return a result: bad path")
-          `state
+          [[%exit 1]~ state]
         ?~  u.balance-result
           %-  (warn "%update-balance did not return a result: nothing")
-          `state
+          [[%exit 1]~ state]
         ?~  u.u.balance-result
           %-  (warn "%update-balance did not return a result: empty result")
-          `state
+          [[%exit 1]~ state]
         =.  balance.state  u.u.balance-result
         %-  (debug "balance state updated!")
         =.  name-to-hash.state
@@ -1134,19 +1135,19 @@
           (~(del by peek-requests.state) pid)
         ?~  softed
           %-  (warn "handle-npc: %block: could not soft result")
-          `state
+          [[%exit 1]~ state]
         =/  block-result  u.softed
         %-  (debug "handle-npc: %block: {<block-result>}")
         %-  (debug "handle-npc: %block: {<peek-requests.state>}")
         ?~  block-result
           %-  (warn "handle-npc: %block: bad path")
-          `state
+          [[%exit 1]~ state]
         ?~  u.block-result
           %-  (warn "handle-npc: %block: nothing")
-          `state
+          [[%exit 1]~ state]
         ?~  u.u.block-result
           %-  (warn "handle-npc: %block: empty result")
-          `state
+          [[%exit 1]~ state]
         %-  (debug "handle-npc: %block: found block")
         %-  (debug "handle-npc: {<(to-b58:block-id:transact (need u.u.block-result))>}")
         %-  (debug "handle-npc: hash: {<(to-b58:hash:transact (need u.u.block-result))>}")
@@ -1250,7 +1251,7 @@
       (need last-block.state)
     =/  =path  (snoc /balance (to-b58:block-id:transact bid))
     =/  =effect  [%npc u.pid %peek path]
-    :-  ~[effect]
+    :-  ~[effect [%exit 0]]
     state(peek-requests (~(put by peek-requests.state) u.pid %balance))
   ::
   ++  do-update-block
