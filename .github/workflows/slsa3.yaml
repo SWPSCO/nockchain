@@ -270,33 +270,14 @@ jobs:
             out/nockchain_jams.zip
             prov/${{ needs.provenance.outputs.provenance-name }}
             ./README.md
-
-  upload-to-r2:
-    needs: [vars, release]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: packaged-zips
-          path: ./out
-      - name: download provenance
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ needs.provenance.outputs.provenance-name }}
-          path: ./prov
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          aws-region: auto
-          endpoint-url: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
-      - name: Upload files to R2 with public access
+      - name: rename file
         run: |
-          aws s3 cp ./out/nockchain_linux_x64.zip s3://${{ secrets.R2_BUCKET_NAME }}/nockchain_linux_x64.zip --acl public-read
-          aws s3 cp ./out/nockchain_macos_aarch64.zip s3://${{ secrets.R2_BUCKET_NAME }}/nockchain_macos_aarch64.zip --acl public-read
-          aws s3 cp ./out/nockchain_jams.zip s3://${{ secrets.R2_BUCKET_NAME }}/nockchain_jams.zip --acl public-read
-          aws s3 cp ./prov/${{ needs.provenance.outputs.provenance-name }} s3://${{ secrets.R2_BUCKET_NAME }}/${{ needs.provenance.outputs.provenance-name }} --acl public-read
-          aws s3 cp ./out/nockchain_linux_x64.zip s3://${{ secrets.R2_BUCKET_NAME }}/nockchain_linux_x64.zip --acl public-read
-          aws s3 cp ./out/nockchain_macos_aarch64.zip s3://${{ secrets.R2_BUCKET_NAME }}/nockchain_macos_aarch64.zip --acl public-read
-          aws s3 cp ./out/nockchain_linux_x64.zip s3://${{ secrets.R2_BUCKET_NAME }}/nockchain.zip --acl public-read
+          cp ./out/nockchain_linux_x64.zip ./out/nockchain.zip
+      - uses: ryand56/r2-upload-action@latest
+        with:
+          r2-account-id: ${{ secrets.R2_ACCOUNT_ID }}
+          r2-access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
+          r2-secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          r2-bucket: ${{ secrets.R2_BUCKET }}
+          source-dir: out
+          destination-dir: ./
