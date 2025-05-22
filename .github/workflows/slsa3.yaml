@@ -141,6 +141,35 @@ jobs:
         run: make install-nockchain
       - name: build wallet
         run: make install-nockchain-wallet
+      - name: Setup code signing
+        env:
+          APPLE_P12: ${{ secrets.APPLE_P12 }}
+        run: |
+          echo $APPLE_P12 | base64 --decode > certificate.p12
+          security create-keychain -p temp_password build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p temp_password build.keychain
+          curl -o AppleWWDRCAG3.cer https://www.apple.com/certificateauthority/AppleWWDRCAG3.cer
+          curl -o DeveloperIDG2CA.cer https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
+          security import AppleWWDRCAG3.cer -k build.keychain -T /usr/bin/codesign
+          security import DeveloperIDG2CA.cer -k build.keychain -T /usr/bin/codesign
+          security import certificate.p12 -k build.keychain -P "" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k temp_password build.keychain
+          rm certificate.p12 AppleWWDRCAG3.cer DeveloperIDG2CA.cer
+      - name: List available identities
+        run: security find-identity -v -p codesigning
+      - name: Sign binaries
+        run: |
+          codesign --force --sign "Mac Developer" --timestamp --options runtime target/release/nockchain
+          codesign --force --sign "Mac Developer" --timestamp --options runtime target/release/nockchain-bitcoin-sync
+          codesign --force --sign "Mac Developer" --timestamp --options runtime target/release/hoonc
+          codesign --force --sign "Mac Developer" --timestamp --options runtime target/release/nockchain-wallet
+      - name: Verify signatures
+        run: |
+          codesign --verify --verbose target/release/nockchain
+          codesign --verify --verbose target/release/nockchain-bitcoin-sync
+          codesign --verify --verbose target/release/hoonc
+          codesign --verify --verbose target/release/nockchain-wallet
       - uses: actions/upload-artifact@v4
         with:
           name: mac-artifacts
