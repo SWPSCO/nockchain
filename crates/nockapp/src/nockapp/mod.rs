@@ -355,52 +355,27 @@ impl NockApp {
         // self.reset();
         // debug!("Reset NockApp for next run");
         loop {
-            if requires_sync {
-                tracing::warn!("1");
-            }
             let work_res = self.work().await;
-            if requires_sync {
-                tracing::warn!("2");
-            }
             match work_res {
                 Ok(nockapp_run) => match nockapp_run {
                     crate::nockapp::NockAppRun::Pending => {
-                        if requires_sync {
-                            tracing::warn!("3");
-                        }
                         continue;
                     }
                     crate::nockapp::NockAppRun::Done => {
-                        if requires_sync {
-                            tracing::warn!("4");
-                        }
-                        
                         break Ok(());
                     }
                 },
                 Err(NockAppError::Exit(code)) => {
-                    if requires_sync {
-                        tracing::warn!("5");
-                    }
                     if code == 0 {
                         // zero is success, we're simply done.
-                        if requires_sync {
-                            tracing::warn!("6");
-                        }
                         debug!("nockapp exited successfully with code: {}", code);
                         break Ok(());
                     } else {
-                        if requires_sync {
-                            tracing::warn!("7");
-                        }
                         error!("nockapp exited with error code: {}", code);
                         break Err(NockAppError::Exit(code));
                     }
                 }
                 Err(e) => {
-                    if requires_sync {
-                        tracing::warn!("8");
-                    }
                     error!("Got error running nockapp: {:?}", e);
                     break Err(e);
                 }
