@@ -1,9 +1,12 @@
-# Set env variables
-export RUST_BACKTRACE := full
-export RUST_LOG := info,nockchain=debug,nockchain_libp2p_io=info,libp2p=info,libp2p_quic=info
-export MINIMAL_LOG_FORMAT := true
-export MINING_PUBKEY := EHmKL2U3vXfS5GYAY5aVnGdukfDWwvkQPCZXnjvZVShsSQi3UAuA4tQQpVwGJMzc9FfpTY8pLDkqhBGfWutiF4prrCktUH9oAWJxkXQBzAavKDc95NR3DjmYwnnw8GuugnK
+# Load environment variables from .env file
+include .env
 
+# Set default env variables if not set in .env
+export RUST_BACKTRACE ?= full
+export RUST_LOG ?= info,nockchain=info,nockchain_libp2p_io=info,libp2p=info,libp2p_quic=info
+export MINIMAL_LOG_FORMAT ?= true
+export MINING_PUBKEY ?= 2qwq9dQRZfpFx8BDicghpMRnYGKZsZGxxhh9m362pzpM9aeo276pR1yHZPS41y3CW3vPKxeYM8p8fzZS8GXmDGzmNNCnVNekjrSYogqfEFMqwhHh5iCjaKPaDTwhupWqiXj6
+export
 
 .PHONY: build
 build: build-hoon-all build-rust
@@ -61,7 +64,7 @@ build-trivial: ensure-dirs
 	echo '%trivial' > hoon/trivial.hoon
 	hoonc --arbitrary hoon/trivial.hoon
 
-HOON_TARGETS=assets/dumb.jam assets/wal.jam
+HOON_TARGETS=assets/dumb.jam assets/wal.jam assets/miner.jam
 
 .PHONY: nuke-hoonc-data
 nuke-hoonc-data:
@@ -80,20 +83,10 @@ build-hoon-all: nuke-assets update-hoonc ensure-dirs build-trivial $(HOON_TARGET
 build-hoon: ensure-dirs update-hoonc $(HOON_TARGETS)
 	$(call show_env_vars)
 
-.PHONY: build-wallet
-build-wallet: ensure-dirs update-hoonc assets/wal.jam
+.PHONY: run-nockchain
+run-nockchain:  # Run a nockchain node in follower mode with a mining pubkey
 	$(call show_env_vars)
-
-.PHONY: run-nockchain-leader
-run-nockchain-leader:  # Run nockchain mode in leader mode
-	$(call show_env_vars)
-	mkdir -p test-leader && cd test-leader && rm -f nockchain.sock && RUST_BACKTRACE=1 cargo run --release --bin nockchain -- --fakenet --genesis-leader --npc-socket nockchain.sock --mining-pubkey $(MINING_PUBKEY) --bind /ip4/0.0.0.0/udp/3005/quic-v1 --peer /ip4/127.0.0.1/udp/3006/quic-v1 --new-peer-id --no-default-peers
-
-.PHONY: run-nockchain-follower
-run-nockchain-follower:  # Run nockchain mode in follower mode
-	$(call show_env_vars)
-	mkdir -p test-follower && cd test-follower && rm -f nockchain.sock && RUST_BACKTRACE=1 cargo run --release --bin nockchain -- --fakenet --genesis-watcher --npc-socket nockchain.sock --mining-pubkey $(MINING_PUBKEY) --bind /ip4/0.0.0.0/udp/3006/quic-v1 --peer /ip4/127.0.0.1/udp/3005/quic-v1 --new-peer-id --no-default-peers
-
+	mkdir -p miner-node && cd miner-node && rm -f nockchain.sock && RUST_BACKTRACE=1 cargo run --release --bin nockchain -- --npc-socket nockchain.sock --mining-pubkey $(MINING_PUBKEY) --mine
 
 HOON_SRCS := $(find hoon -type file -name '*.hoon')
 
@@ -108,3 +101,9 @@ assets/wal.jam: update-hoonc hoon/apps/wallet/wallet.hoon $(HOON_SRCS)
 	$(call show_env_vars)
 	RUST_LOG=trace hoonc hoon/apps/wallet/wallet.hoon hoon
 	mv out.jam assets/wal.jam
+
+## Build mining.jam with hoonc
+assets/miner.jam: update-hoonc hoon/apps/dumbnet/miner.hoon $(HOON_SRCS)
+	$(call show_env_vars)
+	RUST_LOG=trace hoonc hoon/apps/dumbnet/miner.hoon hoon
+	mv out.jam assets/miner.jam

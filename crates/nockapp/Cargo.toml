@@ -11,6 +11,7 @@ bazel_build = []
 
 [dependencies]
 anyhow = { workspace = true }
+async-trait = { workspace = true }
 axum = { workspace = true }
 bitvec = { workspace = true }
 blake3 = { workspace = true }
@@ -19,11 +20,11 @@ dirs = { workspace = true }
 ibig = { workspace = true }
 nockvm = { workspace = true }
 nockvm_macros = { workspace = true }
-assert_no_alloc = { workspace = true }
-async-trait = { workspace = true }
+
 bincode = { workspace = true, features = ["serde"] }
 byteorder = { workspace = true }
 bytes = { workspace = true, features = ["serde"] }
+chrono = { workspace = true }
 either = { workspace = true }
 futures = { workspace = true }
 getrandom = { workspace = true }
@@ -31,16 +32,17 @@ gnort = { workspace = true }
 intmap = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
+signal-hook = { workspace = true }
+signal-hook-tokio = { workspace = true, features = ["futures-v0_3"] }
 tempfile = { workspace = true }
 termimad = { workspace = true }
 thiserror = { workspace = true }
-tracing = { workspace = true }
-tracing-test = { workspace = true }
-tracing-subscriber = { workspace = true }
 tokio = { workspace = true, features = ["time", "sync", "signal"] }
 tokio-util = { workspace = true, features = ["rt"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-test = { workspace = true }
 yaque = { workspace = true }
-chrono = { workspace = true }
 
 opentelemetry.workspace = true
 opentelemetry-otlp.workspace = true

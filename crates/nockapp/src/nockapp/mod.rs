@@ -7,6 +7,7 @@ pub mod wire;
 
 pub use error::NockAppError;
 
+use std::future::Future;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -17,7 +18,7 @@ use tokio::sync::{broadcast, mpsc, Mutex, OwnedMutexGuard};
 use tokio::time::{interval, Duration, Interval};
 use tokio::{fs, select};
 use tokio_util::task::TaskTracker;
-use tracing::{debug, error, info, instrument, trace};
+use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::kernel::form::Kernel;
 use crate::noun::slab::NounSlab;
@@ -26,19 +27,42 @@ use driver::{IOAction, IODriverFn, NockAppHandle, PokeResult};
 use metrics::*;
 use wire::WireRepr;
 
+use futures::stream::StreamExt;
+use signal_hook::consts::signal::*;
+use signal_hook::consts::TERM_SIGNALS;
+use signal_hook_tokio::Signals;
+
 type NockAppResult = Result<(), NockAppError>;
+
+// Error code constants for process exit and signal handling
+// These numbers correspond to the standard Unix-style exit codes
+// Exit code = 128 + signal number
+/// Clean exit, no error
+pub const EXIT_OK: usize = 0;
+/// Unknown signal or error
+pub const EXIT_UNKNOWN: usize = 1;
+/// SIGHUP: Terminal closed or controlling process died
+pub const EXIT_SIGHUP: usize = 129;
+/// SIGINT: Keyboard interrupt (C-c)
+pub const EXIT_SIGINT: usize = 130;
+/// SIGQUIT: Quit from keyboard (core dump)
+pub const EXIT_SIGQUIT: usize = 131;
+/// SIGTERM: Termination signal from OS or process manager
+pub const EXIT_SIGTERM: usize = 143;
 
 pub struct NockApp {
     /// Nock kernel
     pub(crate) kernel: Kernel,
     /// Current join handles for IO drivers (parallel to `drivers`)
     pub(crate) tasks: tokio_util::task::TaskTracker,
-    /// Exit signal sender
-    exit_send: mpsc::Sender<usize>,
-    /// Exit signal receiver
-    exit_recv: mpsc::Receiver<usize>,
+    /// Exit state object
+    exit: NockAppExit,
+    /// Exit state receiver
+    exit_recv: tokio::sync::mpsc::Receiver<NockAppExitStatus>,
     /// Exit status
     exit_status: AtomicBool,
+    /// Abort immediately on signal
+    abort_immediately: AtomicBool,
     /// Save event num sender
     watch_send: Arc<Mutex<tokio::sync::watch::Sender<u64>>>,
     /// Save event num receiver
@@ -48,23 +72,75 @@ pub struct NockApp {
     /// IO action channel sender
     action_channel_sender: mpsc::Sender<IOAction>,
     /// Effect broadcast channel
-    effect_broadcast: broadcast::Sender<NounSlab>,
+    effect_broadcast: Arc<broadcast::Sender<NounSlab>>,
     /// Save interval
     save_interval: Interval,
     /// Mutex to ensure only one save at a time
     pub(crate) save_mutex: Arc<Mutex<()>>,
     /// Shutdown oneshot sender
-    shutdown_send: Option<tokio::sync::oneshot::Sender<NockAppResult>>,
-    /// Shutdown oneshot receiver
-    shutdown_recv: tokio::sync::oneshot::Receiver<NockAppResult>,
-    // cancel_token: tokio_util::sync::CancellationToken,
     pub npc_socket_path: Option<PathBuf>,
     metrics: NockAppMetrics,
+    /// Signals handled by the work loop
+    signals: Signals,
 }
 
 pub enum NockAppRun {
     Pending,
     Done,
+}
+
+pub enum NockAppExitStatus {
+    Exit(usize),
+    Shutdown(NockAppResult),
+    Done(NockAppResult),
+}
+
+#[derive(Clone)]
+pub struct NockAppExit {
+    sender: tokio::sync::mpsc::Sender<NockAppExitStatus>,
+}
+
+impl NockAppExit {
+    pub fn new() -> (Self, tokio::sync::mpsc::Receiver<NockAppExitStatus>) {
+        let (sender, receiver) = tokio::sync::mpsc::channel(1);
+        (NockAppExit { sender }, receiver)
+    }
+
+    pub fn exit(&self, code: usize) -> impl std::future::Future<Output = NockAppResult> {
+        trace!("NockAppExit exit()");
+        let sender = self.sender.clone();
+        async move {
+            sender
+                .send(NockAppExitStatus::Exit(code))
+                .await
+                .map_err(|_| NockAppError::ChannelClosedError)?;
+            Ok(())
+        }
+    }
+
+    fn shutdown(&self, res: NockAppResult) -> impl Future<Output = NockAppResult> {
+        trace!("NockAppExit shutdown()");
+        let sender = self.sender.clone();
+        async move {
+            sender
+                .send(NockAppExitStatus::Shutdown(res))
+                .await
+                .map_err(|_| NockAppError::ChannelClosedError)?;
+            Ok(())
+        }
+    }
+
+    fn done(&self, res: NockAppResult) -> impl Future<Output = NockAppResult> {
+        trace!("NockAppExit done()");
+        let sender = self.sender.clone();
+        async move {
+            sender
+                .send(NockAppExitStatus::Done(res))
+                .await
+                .map_err(|_| NockAppError::ChannelClosedError)?;
+            Ok(())
+        }
+    }
 }
 
 impl NockApp {
@@ -75,12 +151,12 @@ impl NockApp {
         // the Arc in the serf would result in a race condition!
 
         let (action_channel_sender, action_channel) = mpsc::channel(100);
-        let (effect_broadcast, _) = broadcast::channel(100);
+        let (effect_broadcast_sender, _) = broadcast::channel(100);
+        let effect_broadcast = Arc::new(effect_broadcast_sender);
         // let tasks = Arc::new(Mutex::new(TaskJoinSet::new()));
         // let tasks = TaskJoinSet::new();
         // let tasks = Arc::new(TaskJoinSet::new());
         let tasks = TaskTracker::new();
-        let (exit_send, exit_recv) = mpsc::channel(1);
         let mut save_interval = interval(save_interval_duration);
         save_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip); // important so we don't stack ticks when lagging
         let save_mutex = Arc::new(Mutex::new(()));
@@ -88,14 +164,18 @@ impl NockApp {
             tokio::sync::watch::channel(kernel.serf.event_number.load(Ordering::SeqCst));
         let watch_send = Arc::new(Mutex::new(watch_send.clone()));
         let exit_status = AtomicBool::new(false);
-        let (shutdown_send, shutdown_recv) = tokio::sync::oneshot::channel();
+        let abort_immediately = AtomicBool::new(false);
         // let cancel_token = tokio_util::sync::CancellationToken::new();
         let metrics = NockAppMetrics::register(gnort::global_metrics_registry())
             .expect("Failed to register metrics!");
+        let signals = Signals::new(&[TERM_SIGNALS, &[SIGHUP]].concat())
+            .expect("Failed to create signal handler");
+        let (exit, exit_recv) = NockAppExit::new();
         Self {
             kernel,
             tasks,
-            exit_send,
+            abort_immediately,
+            exit,
             exit_recv,
             exit_status,
             watch_send,
@@ -105,11 +185,10 @@ impl NockApp {
             effect_broadcast,
             save_interval,
             save_mutex,
-            shutdown_send: Some(shutdown_send),
-            shutdown_recv,
             // cancel_token,
             npc_socket_path: None,
             metrics,
+            signals,
         }
     }
 
@@ -118,7 +197,7 @@ impl NockApp {
             io_sender: self.action_channel_sender.clone(),
             effect_sender: self.effect_broadcast.clone(),
             effect_receiver: Mutex::new(self.effect_broadcast.subscribe()),
-            exit: self.exit_send.clone(),
+            exit: self.exit.clone(),
         }
     }
 
@@ -129,7 +208,7 @@ impl NockApp {
         let io_sender = self.action_channel_sender.clone();
         let effect_sender = self.effect_broadcast.clone();
         let effect_receiver = Mutex::new(self.effect_broadcast.subscribe());
-        let exit = self.exit_send.clone();
+        let exit = self.exit.clone();
         let fut = driver(NockAppHandle {
             io_sender,
             effect_sender,
@@ -138,6 +217,31 @@ impl NockApp {
         });
         // TODO: Stop using the task tracker for user code?
         self.tasks.spawn(fut);
+        debug!("Added IO driver");
+    }
+
+    /// Assume at-least-once processing and track the state necessary to know whether
+    /// all critical IO actions have been performed correctly or not from the jammed state.
+    #[tracing::instrument(skip(self, driver))]
+    pub async fn add_io_driver_(
+        &mut self,
+        driver: IODriverFn,
+    ) -> tokio::sync::mpsc::Sender<IOAction> {
+        let io_sender = self.action_channel_sender.clone();
+        let effect_sender = self.effect_broadcast.clone();
+        let effect_receiver = Mutex::new(self.effect_broadcast.subscribe());
+        let exit = self.exit.clone();
+        let fut = driver(NockAppHandle {
+            io_sender,
+            effect_sender,
+            effect_receiver,
+            exit,
+        });
+        // TODO: Stop using the task tracker for user code?
+        self.tasks.spawn(fut);
+        let io_sender = self.action_channel_sender.clone();
+        debug!("Added IO driver");
+        io_sender
     }
 
     /// Purely for testing purposes (injecting delays) for now.
@@ -149,11 +253,12 @@ impl NockApp {
     ) -> Result<tokio::task::JoinHandle<NockAppResult>, NockAppError> {
         let toggle = self.kernel.serf.buffer_toggle.clone();
         let jam_paths = self.kernel.serf.jam_paths.clone();
-        let checkpoint = self.kernel.checkpoint().await?;
-        let bytes = checkpoint.encode()?;
         let send_lock = self.watch_send.clone();
+        let checkpoint_fut = self.kernel.checkpoint();
 
         let join_handle = self.tasks.spawn(async move {
+            let checkpoint = checkpoint_fut.await?;
+            let bytes = checkpoint.encode()?;
             f.await;
             let path = if toggle.load(Ordering::SeqCst) {
                 &jam_paths.1
@@ -243,9 +348,9 @@ impl NockApp {
     }
 
     /// Runs until the nockapp is done (returns exit 0 or an error)
+    /// TODO: we should print most errors rather than exiting immediately
     #[instrument(skip(self))]
-    pub async fn run_no_join(&mut self) -> NockAppResult {
-        debug!("Starting nockapp run");
+    pub async fn run(&mut self) -> NockAppResult {
         // Reset NockApp for next run
         // self.reset();
         // debug!("Reset NockApp for next run");
@@ -253,7 +358,9 @@ impl NockApp {
             let work_res = self.work().await;
             match work_res {
                 Ok(nockapp_run) => match nockapp_run {
-                    crate::nockapp::NockAppRun::Pending => continue,
+                    crate::nockapp::NockAppRun::Pending => {
+                        continue;
+                    }
                     crate::nockapp::NockAppRun::Done => break Ok(()),
                 },
                 Err(NockAppError::Exit(code)) => {
@@ -272,24 +379,6 @@ impl NockApp {
                 }
             };
         }
-    }
-
-    pub async fn join(self) -> NockAppResult {
-        debug!("Awaiting serf stop");
-        self.kernel.serf.stop().await;
-        debug!("Joining serf thread");
-        self.kernel
-            .serf
-            .join()
-            .map_err(|e| NockAppError::SerfThreadError(e))?;
-        debug!("Serf thread joined");
-        Ok(())
-    }
-
-    pub async fn run(mut self) -> NockAppResult {
-        let res = self.run_no_join().await;
-        self.join().await?;
-        res
     }
 
     #[instrument(skip(socket))]
@@ -311,33 +400,51 @@ impl NockApp {
     }
 
     async fn work(&mut self) -> Result<NockAppRun, NockAppError> {
+        // Track SIGINT (C-c) presses for immediate termination
         // Fires when there is a save interval tick *and* an available permit in the save semaphore
         let save_ready = self
             .save_interval
             .tick()
             .then(|_| self.save_mutex.clone().lock_owned());
         select!(
-        _ = self.kernel.serf.finished() => {
-                debug!("Serf thread exited");
-                Ok(NockAppRun::Done)
-            },
-            shutdown = &mut self.shutdown_recv => {
-                debug!("Shutdown channel received");
-                self.metrics.handle_shutdown.increment();
-                self.cleanup_socket();
-                match shutdown {
-                    Ok(Ok(())) => {
-                        debug!("Shutdown triggered, exiting");
-                        Ok(NockAppRun::Done)
+            exit_status_res = self.exit_recv.recv() => {
+                let Some(exit_status) = exit_status_res else {
+                    error!("Exit channel closed");
+                    return Err(NockAppError::ChannelClosedError)
+                };
+                match exit_status {
+                    NockAppExitStatus::Exit(code) => {
+                        self.metrics.handle_exit.increment();
+                        self.handle_exit(code).await
                     },
-                    Ok(Err(e)) => {
-                        error!("Shutdown triggered with error: {}", e);
-                        Err(e)
+                    NockAppExitStatus::Shutdown(res) => {
+                        self.metrics.handle_shutdown.increment();
+                        let stop_fut = self.kernel.serf.stop();
+                        let exit = self.exit.clone();
+                        self.tasks.spawn(async move {
+                            if let Err(e) = stop_fut.await {
+                                if let Err(e) = exit.done(Err(NockAppError::from(e))).await {
+                                    error!("Error completing shutdown: {e}");
+                                }
+                            } else {
+                                if let Err(e) = exit.done(res).await {
+                                    error!("Error completing shutdown: {e}");
+                                }
+                            }
+                        });
+                        Ok(NockAppRun::Pending)
                     },
-                    // Err(_recv_error) => {},
-                    Err(_recv_error) => {
-                        error!("Shutdown channel closed prematurely");
-                        Err(NockAppError::ChannelClosedError)
+                    NockAppExitStatus::Done(res) => {
+                        match res {
+                            Ok(()) => {
+                                debug!("Shutdown triggered, exiting");
+                                Ok(NockAppRun::Done)
+                            },
+                            Err(e) => {
+                                error!("Shutdown triggered with error: {}", e);
+                                Err(e)
+                            }
+                        }
                     },
                 }
             },
@@ -345,20 +452,38 @@ impl NockApp {
                 self.metrics.handle_save_permit_res.increment();
                 self.handle_save_permit_res(save_guard).await
             },
-            exit = self.exit_recv.recv() => {
-                self.metrics.handle_exit.increment();
-                debug!("Exit signal received");
-                if let Some(code) = exit {
-                    self.handle_exit(code).await
+            maybe_signal = self.signals.next() => {
+                debug!("Signal received");
+                if let Some(signal) = maybe_signal {
+                    let (code, explanation) = match signal {
+                        SIGINT => (EXIT_SIGINT, "SIGINT (C-c): Keyboard interrupt."),
+                        SIGTERM => (EXIT_SIGTERM, "SIGTERM: Termination signal from OS or process manager."),
+                        SIGQUIT => (EXIT_SIGQUIT, "SIGQUIT: Quit from keyboard (core dump)."),
+                        SIGHUP => (EXIT_SIGHUP, "SIGHUP: Terminal closed or controlling process died."),
+                        _ => (EXIT_UNKNOWN, "Unknown signal: default error code 1."),
+                    };
+                    self.metrics.handle_exit.increment();
+                    debug!("Received signal {signal}, code {code}: {explanation}");
+                    loop {
+                        if !self.abort_immediately.load(Ordering::SeqCst) {
+                            if self.abort_immediately.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+                                trace!("Exiting due to signal {signal}");
+                                let exit_fut = self.exit.exit(code);
+                                self.tasks.spawn(exit_fut);
+                                break Ok(NockAppRun::Pending);
+                            }
+                        } else {
+                            std::process::exit(code.try_into().unwrap());
+                        }
+                    }
                 } else {
-                    error!("Exit signal channel closed prematurely");
+                    error!("Signal stream ended unexpectedly");
                     Err(NockAppError::ChannelClosedError)
                 }
-            }
-            // FIXME: This shouldn't be hanging the event loop on the kernel poke/peek etc.
+            },
             action_res = self.action_channel.recv() => {
+                debug!("Action channel received");
                 self.metrics.handle_action.increment();
-                trace!("Action channel received");
                 match action_res {
                     Some(action) => {
                         self.handle_action(action).await;
@@ -392,7 +517,7 @@ impl NockApp {
     }
 
     #[instrument(skip_all)]
-    async fn handle_action(&mut self, action: IOAction) {
+    async fn handle_action(&self, action: IOAction) {
         // Stop processing events if we are exiting
         if self.exit_status.load(Ordering::SeqCst) {
             if let IOAction::Poke { .. } = action {
@@ -419,55 +544,72 @@ impl NockApp {
 
     #[instrument(skip_all)]
     async fn handle_poke(
-        &mut self,
+        &self,
         wire: WireRepr,
         cause: NounSlab,
         ack_channel: tokio::sync::oneshot::Sender<PokeResult>,
     ) {
-        let poke_result = self.kernel.poke(wire, cause).await;
-        match poke_result {
-            Ok(effects) => {
-                let _ = ack_channel.send(PokeResult::Ack);
-                for effect_slab in effects.to_vec() {
-                    let _ = self.effect_broadcast.send(effect_slab);
+        let poke_future = self.kernel.poke(wire, cause);
+        let effect_broadcast = self.effect_broadcast.clone();
+        let _ = self.tasks.spawn(async move {
+            let poke_result = poke_future.await;
+            match poke_result {
+                Ok(effects) => {
+                    let _ = ack_channel.send(PokeResult::Ack);
+                    for effect_slab in effects.to_vec() {
+                        let _ = effect_broadcast.send(effect_slab);
+                    }
+                }
+                Err(_) => {
+                    let _ = ack_channel.send(PokeResult::Nack);
                 }
             }
-            Err(_) => {
-                let _ = ack_channel.send(PokeResult::Nack);
-            }
-        }
+        });
     }
 
     #[instrument(skip_all)]
     async fn handle_peek(
-        &mut self,
+        &self,
         path: NounSlab,
         result_channel: tokio::sync::oneshot::Sender<Option<NounSlab>>,
     ) {
-        let peek_res = self.kernel.peek(path).await;
+        let peek_future = self.kernel.peek(path);
+        let _ = self.tasks.spawn(async move {
+            let peek_res = peek_future.await;
 
-        match peek_res {
-            Ok(res_slab) => {
-                let _ = result_channel.send(Some(res_slab));
+            match peek_res {
+                Ok(res_slab) => {
+                    let _ = result_channel.send(Some(res_slab));
+                }
+                Err(e) => {
+                    error!("Peek error: {:?}", e);
+                    let _ = result_channel.send(None);
+                }
             }
-            Err(e) => {
-                error!("Peek error: {:?}", e);
-                let _ = result_channel.send(None);
-            }
-        }
+        });
+    }
+
+    async fn handle_signal(&mut self, code: usize) -> Result<NockAppRun, NockAppError> {
+        self.kernel.serf.cancel_token.cancel();
+        self.handle_exit(code).await
     }
 
     // TODO: We should explicitly kick off a save somehow
+    // TOOD: :>) spawn a task which awaits the signal stream and if there is a SIGINT, then call std::process::exit(1)
     #[instrument(skip_all)]
     async fn handle_exit(&mut self, code: usize) -> Result<NockAppRun, NockAppError> {
-        // `cargo nextest run`
-        // 2025-01-23T01:11:52.365215Z  INFO nockapp::nockapp: Exit request received, waiting for save checkpoint with event_num 60
-        // 2025-01-23T01:11:52.403120Z ERROR nockapp::nockapp: Action channel closed prematurely
-        // 2025-01-23T01:11:52.403132Z ERROR nockapp::nockapp: Got error running nockapp: ChannelClosedError
-        // test tests::test_compile_test_app ... FAILED
-        // self.action_channel.close();
-        // TODO: See if exit_status is duplicative of what the cancel token is for.
-        self.exit_status.store(true, Ordering::SeqCst);
+        // We should only run handle_exit once, break out if we are already exiting.
+        loop {
+            if self.exit_status.load(Ordering::SeqCst) {
+                return Ok(NockAppRun::Pending);
+            } else if self
+                .exit_status
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
+                break;
+            }
+        }
 
         // Force an immediate save to ensure we have the latest state
         info!(
@@ -489,14 +631,7 @@ impl NockApp {
 
         let mut recv = self.watch_recv.clone();
         // let cancel_token = self.cancel_token.clone();
-        let shutdown_send = self.shutdown_send.take().unwrap_or_else(|| {
-            panic!(
-                "Panicked at {}:{} (git sha: {:?})",
-                file!(),
-                line!(),
-                option_env!("GIT_SHA")
-            )
-        });
+        let exit = self.exit.clone();
         // self.tasks.close();
         // self.tasks.wait().await;
         // recv from the watch channel until we reach the exit event_num, wrapped up in a future
@@ -505,17 +640,17 @@ impl NockApp {
         // TODO: Break this out as a separate select! handler with no spawn
         self.tasks.spawn(async move {
             recv.wait_for(|&new| {
-                assert!(
-                    new <= exit_event_num,
-                    "new {new:?} exit_event_num {exit_event_num:?}"
-                );
-                new == exit_event_num
+                // assert!(
+                //     new <= exit_event_num,
+                //     "new {new:?} exit_event_num {exit_event_num:?}"
+                // );
+                new >= exit_event_num
             })
             .await
             .expect("Failed to wait for saves to catch up to exit_event_num");
             Self::cleanup_socket_(&socket_path);
             debug!("Save event_num reached, finishing with code {}", code);
-            let shutdown_result = if code == 0 {
+            let shutdown_result = if code == EXIT_OK {
                 Ok(())
             } else {
                 Err(NockAppError::Exit(code))
@@ -524,7 +659,9 @@ impl NockApp {
             // we don't get a race condition where the yielded result is
             // "canceled" instead of the actual result.
             debug!("Sending shutdown result");
-            let _ = shutdown_send.send(shutdown_result);
+            if let Err(e) = exit.shutdown(shutdown_result).await {
+                error!("Error sending shutdown: {e:}")
+            }
         });
         Ok(NockAppRun::Pending)
     }

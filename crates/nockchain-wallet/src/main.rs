@@ -90,6 +90,9 @@ pub enum Commands {
         input: String,
     },
 
+    /// Export keys to a file
+    ExportKeys,
+
     /// Signs a transaction
     SignTx {
         /// Path to input bundle file
@@ -167,14 +170,14 @@ pub enum Commands {
     /// Update the wallet balance
     UpdateBalance,
 
+    /// Export a master public key
+    ExportMasterPubkey,
+
     /// Import a master public key
     ImportMasterPubkey {
-        /// Base58-encoded public key
+        // Path to keys file generated from export-master-pubkey
         #[arg(short, long)]
-        key: String,
-        /// Base58-encoded chain code
-        #[arg(short, long)]
-        knot: String,
+        key_path: String,
     },
 
     /// Lists all public keys in the wallet
@@ -196,6 +199,7 @@ impl Commands {
             Commands::Keygen => "keygen",
             Commands::DeriveChild { .. } => "derive-child",
             Commands::ImportKeys { .. } => "import-keys",
+            Commands::ExportKeys => "export-keys",
             Commands::SignTx { .. } => "sign-tx",
             Commands::GenMasterPrivkey { .. } => "gen-master-privkey",
             Commands::GenMasterPubkey { .. } => "gen-master-pubkey",
@@ -205,6 +209,7 @@ impl Commands {
             Commands::SimpleSpend { .. } => "simple-spend",
             Commands::MakeTx { .. } => "make-tx",
             Commands::UpdateBalance => "update-balance",
+            Commands::ExportMasterPubkey => "export-master-pubkey",
             Commands::ImportMasterPubkey { .. } => "import-master-pubkey",
             Commands::ListPubkeys => "list-pubkeys",
             Commands::ShowSeedphrase => "show-seedphrase",
@@ -434,6 +439,12 @@ impl Wallet {
         Self::wallet("import-keys", &[pubkey_noun], Operation::Poke, &mut slab)
     }
 
+    /// Exports keys to a file.
+    fn export_keys() -> CommandNoun<NounSlab> {
+        let mut slab = NounSlab::new();
+        Self::wallet("export-keys", &[], Operation::Poke, &mut slab)
+    }
+
     /// Performs a simple scan of the blockchain.
     ///
     /// # Arguments
@@ -637,20 +648,35 @@ impl Wallet {
         Self::wallet("list-notes", &[], Operation::Poke, &mut slab)
     }
 
+    /// Exports the master public key.
+    ///
+    /// # Returns
+    ///
+    /// Retrieves and displays master public key and chaincode.
+    fn export_master_pubkey() -> CommandNoun<NounSlab> {
+        let mut slab = NounSlab::new();
+        Self::wallet("export-master-pubkey", &[], Operation::Poke, &mut slab)
+    }
+
     /// Imports a master public key.
     ///
     /// # Arguments
     ///
     /// * `key` - Base58-encoded public key
-    /// * `knot` - Base58-encoded chain code
-    fn import_master_pubkey(key: &str, knot: &str) -> CommandNoun<NounSlab> {
+    /// * `chain_code` - Base58-encoded chain code
+    fn import_master_pubkey(input_path: &str) -> CommandNoun<NounSlab> {
         let mut slab = NounSlab::new();
-        let key_noun = make_tas(&mut slab, key).as_noun();
-        let knot_noun = make_tas(&mut slab, knot).as_noun();
+
+        let key_data = fs::read(input_path)
+            .map_err(|e| CrownError::Unknown(format!("Failed to read master pubkeys: {}", e)))?;
+
+        let pubkey_noun = slab
+            .cue_into(key_data.as_bytes()?)
+            .map_err(|e| CrownError::Unknown(format!("Failed to decode master pubkeys: {}", e)))?;
 
         Self::wallet(
             "import-master-pubkey",
-            &[key_noun, knot_noun],
+            &[pubkey_noun],
             Operation::Poke,
             &mut slab,
         )
@@ -749,10 +775,12 @@ async fn main() -> Result<(), NockAppError> {
         Commands::Keygen
         | Commands::DeriveChild { .. }
         | Commands::ImportKeys { .. }
+        | Commands::ExportKeys
         | Commands::SignTx { .. }
         | Commands::MakeTx { .. }
         | Commands::GenMasterPrivkey { .. }
         | Commands::GenMasterPubkey { .. }
+        | Commands::ExportMasterPubkey
         | Commands::ImportMasterPubkey { .. }
         | Commands::ListPubkeys
         | Commands::ShowSeedphrase
@@ -797,6 +825,7 @@ async fn main() -> Result<(), NockAppError> {
         }
         Commands::SignTx { draft, index } => Wallet::sign_tx(draft, *index),
         Commands::ImportKeys { input } => Wallet::import_keys(input),
+        Commands::ExportKeys => Wallet::export_keys(),
         Commands::GenMasterPrivkey { seedphrase } => Wallet::gen_master_privkey(seedphrase),
         Commands::GenMasterPubkey { master_privkey } => Wallet::gen_master_pubkey(master_privkey),
         Commands::Scan {
@@ -823,7 +852,8 @@ async fn main() -> Result<(), NockAppError> {
         } => Wallet::simple_spend(names.clone(), recipients.clone(), gifts.clone(), *fee),
         Commands::MakeTx { draft } => Wallet::make_tx(draft),
         Commands::UpdateBalance => Wallet::update_balance(),
-        Commands::ImportMasterPubkey { key, knot } => Wallet::import_master_pubkey(key, knot),
+        Commands::ExportMasterPubkey => Wallet::export_master_pubkey(),
+        Commands::ImportMasterPubkey { key_path } => Wallet::import_master_pubkey(key_path),
         Commands::ListPubkeys => Wallet::list_pubkeys(),
         Commands::ShowSeedphrase => Wallet::show_seedphrase(),
         Commands::ShowMasterPubkey => Wallet::show_master_pubkey(),

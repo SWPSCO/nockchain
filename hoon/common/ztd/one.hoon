@@ -399,6 +399,14 @@
     ~/  %snoc
     |=  j=elt
     ^-  mary
+    ::  fix bunt
+    ::
+    ::  *bpoly should be [1 0x1] not [1 0x0] so it has a high bit with no data. We can't
+    ::  change the bunt right now, so this is a workaround just for snoc. Without it,
+    ::  snoccing onto *bpoly fails.
+    =.  ma
+      ?.  =(ma [1 *bpoly])  ma
+      [1 0 0x1]
     ?>  (~(fet mary-utils step.ma) j)
     :-  step.ma
     :-  +(len.array.ma)
@@ -480,11 +488,13 @@
   --  :: ave
 ::
 ++  transpose-fpolys
+  ~/  %transpose-fpolys
   |=  fpolys=mary
   ^-  mary
   (~(transpose ave fpolys) 3)
 ::
 ++  transpose-bpolys
+  ~/  %transpose-bpolys
   |=  bpolys=mary
   ^-  mary
   (~(transpose ave bpolys) 1)
@@ -962,18 +972,23 @@
     ==
   --
 ::
-::  +compute-size: computes the size in bits of a jammed noun consisting of belts
+::  +compute-size: computes the size in bits of a jammed noun
 ::
-::    this is a shortcut to actually jamming a noun and counting the bits.
-::TODO can this be made tail call optimized?
-++  compute-size-belt-noun
+++  compute-size-jam
+  |=  n=*
+  ^-  @
+  (met 0 (jam n))
+::
+::  +compute-size-noun: computes the size in bits of a noun in unrolled form in the memory arena
+::
+++  compute-size-noun
   |=  n=*
   ^-  @
   |-
   ?@  n
     ?>  (based n)  :: check that atom is a belt
-    p:(mat n)
-  (add 2 (add $(n -.n) $(n +.n)))  :: 2 bits per cell
+    64
+  (add 64 (add $(n -.n) $(n +.n)))
 ::
 +|  %bpoly
 ::  +bcan: gives the canonical leading-zero-stripped representation of p(x)

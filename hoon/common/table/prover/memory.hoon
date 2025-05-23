@@ -51,6 +51,7 @@
   ++  kvsf-idx           59
   ++  decode-mset-idx    62
   ++  op0-mset-idx       65
+  ++  data-k-idx         68
   --
 ++  test-nocks
   ^-  (list ^)
@@ -511,13 +512,14 @@
     =/  [first-row=row second-row=row]
       :-  (~(snag-as-bpoly ave p.table) 0)
       (~(snag-as-bpoly ave p.table) 1)
+    =/  input  (grab-pelt input-idx:ids first-row)
     =/  first-row-ax  (grab axis-idx:ids first-row)
     =/  first-row-fp
       %-  ifp-compress
       :*  :+  (grab-pelt parent-size-idx:ids first-row)
             (grab-pelt parent-dyck-idx:ids first-row)
           (grab-pelt parent-leaf-idx:ids first-row)
-          a.chals  b.chals  c.chals
+          j.chals  k.chals  l.chals
       ==
     =/  second-row-ax  (grab axis-idx:ids second-row)
     =/  second-row-fp
@@ -525,7 +527,7 @@
       :*  :+  (grab-pelt parent-size-idx:ids second-row)
             (grab-pelt parent-dyck-idx:ids second-row)
           (grab-pelt parent-leaf-idx:ids second-row)
-          a.chals  b.chals  c.chals
+          j.chals  k.chals  l.chals
       ==
     =/  subj-info=[ax=belt fp=pelt]
       ?@  s.return  [0 pzero]
@@ -535,8 +537,8 @@
         [first-row-ax first-row-fp]
       [second-row-ax second-row-fp]
     =/  [input-subj-fp=pelt input-form-fp=pelt]
-      :-  (padd fp.subj-info (pscal ax.subj-info d.chals))
-      (padd fp.form-info (pscal ax.form-info d.chals))
+      :-  (padd fp.subj-info (pscal ax.subj-info m.chals))
+      (padd fp.form-info (pscal ax.form-info m.chals))
     %-  head
     %^  spin  (range len.array.p.table)
       :*  z.chals
@@ -569,18 +571,15 @@
     =/  left-is-atom  ?:(=((grab op-l-idx:ids row) 0) %.y %.n)
     =/  right-is-atom  ?:(=((grab op-r-idx:ids row) 0) %.y %.n)
     =/  ax  (grab axis-idx:ids row)
-    =/  [pc1=pelt wt-pax=pelt pc2=pelt]
-      :+  (ifp-compress parent [a b c]:chals)
-        (pscal ax d.chals)
-      (ifp-compress parent [e f g]:chals)
-    =/  [lc1=pelt wt-lax=pelt lc2=pelt]
-      :+  (ifp-compress left [a b c]:chals)
-        (pscal (go-left ax) d.chals)
-      (ifp-compress left [e f g]:chals)
-    =/  [rc1=pelt wt-rax=pelt rc2=pelt]
-      :+  (ifp-compress right [a b c]:chals)
-        (pscal (go-right ax) d.chals)
-      (ifp-compress right [e f g]:chals)
+    =/  [par=pelt wt-pax=pelt]
+      :-  (ifp-compress parent [j k l]:chals)
+      (pscal ax m.chals)
+    =/  [lc=pelt wt-lax=pelt]
+      :-  (ifp-compress left [j k l]:chals)
+      (pscal (go-left ax) m.chals)
+    =/  [rc=pelt wt-rax=pelt]
+      :-  (ifp-compress right [j k l]:chals)
+      (pscal (go-right ax) m.chals)
     =/  new-line-ct  (pmul line-ct z.chals)
     =/  new-node-ct
       ?:  left-is-atom
@@ -600,7 +599,7 @@
           ;:  pmul
             z.chals
             node-ct
-            (padd lc1 wt-lax)
+            (padd lc wt-lax)
           ==
         ::
           ?.  ?&(left-is-atom !right-is-atom)
@@ -608,7 +607,7 @@
           ;:  pmul
             z.chals
             node-ct
-            (padd rc1 wt-rax)
+            (padd rc wt-rax)
           ==
         ::
           ?.  ?&(!left-is-atom !right-is-atom)
@@ -616,10 +615,10 @@
           ;:  pmul
             z.chals  z.chals
             node-ct
-            (padd rc1 wt-rax)
+            (padd rc wt-rax)
           ==
         ==
-      (pmul (padd pc1 wt-pax) line-ct)
+      (pmul (padd par wt-pax) line-ct)
     =/  new-decode-mset
       %-  rear
       %-  ~(add-all ld-pelt:constraint-util decode-mset)
@@ -640,14 +639,32 @@
       %-  rear
       %-  ~(add-all ld-pelt:constraint-util op0-mset)
       ;:  weld
-        ~[[:(padd fp.subj-info wt-pax pc2) (grab mult-idx:ids row)]]
+        ~[[:(padd input wt-pax par) (grab mult-idx:ids row)]]
       ::
         ?.  left-is-atom  ~
-        ~[[:(padd fp.subj-info wt-lax lc2) (grab mult-lc-idx:ids row)]]
+        ~[[:(padd input wt-lax lc) (grab mult-lc-idx:ids row)]]
       ::
         ?.  right-is-atom  ~
-        ~[[:(padd fp.subj-info wt-rax rc2) (grab mult-rc-idx:ids row)]]
+        ~[[:(padd input wt-rax rc) (grab mult-rc-idx:ids row)]]
       ==
+    ::
+    =/  data-k=pelt
+      =/  p1=pelt
+        ;:  padd
+          (pmul j.chals line-ct)
+          (pmul k.chals node-ct)
+          (pmul l.chals kvs)
+          (pmul m.chals (pioz kvs))
+        ==
+      =/  p2=pelt
+        ;:  padd
+          (pmul n.chals line-ct)
+          (pmul o.chals node-ct)
+          (pmul w.chals kvs)
+          (pmul x.chals (pioz kvs))
+        ==
+      :(pmul p1 p2 (padd p1 p2) (pioz kvs))
+    ::
     :_  [new-line-ct new-node-ct new-decode-mset new-op0-mset new-kvs]
     %-  init-bpoly
     %+  pr  line-ct
@@ -657,6 +674,7 @@
     %+  pr  (pmul kvs (pioz kvs))  ::  %kvsf
     %+  pr  dat.decode-mset
     %+  pr  dat.op0-mset
+    %+  pr  data-k
     ~
   ::
   ++  terminal
@@ -677,5 +695,6 @@
   ++  row-constraints         row-constraints:funcs:engine:verifier-memory
   ++  transition-constraints  transition-constraints:funcs:engine:verifier-memory
   ++  terminal-constraints    terminal-constraints:funcs:engine:verifier-memory
+  ++  extra-constraints       extra-constraints:funcs:engine:verifier-memory
   --
 --

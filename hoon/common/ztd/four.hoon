@@ -19,15 +19,34 @@
       [%comp-m p=noun-digest:tip5 num=@]  ::  composition-merk
       [%evals p=fpoly]  ::  evaluations
       [%heights p=(list @)]  ::  n, where 2^n is the number of rows
+      [%poly p=bpoly]
   ==
 ::
 +$  proof-objects  (list proof-data)
 ::
 +$  proof
-  $:  objects=proof-objects
+  $:  version=%0
+      objects=proof-objects
       hashes=(list noun-digest:tip5)
       read-index=@
   ==
+::
++$  tip5-hash-atom  @ux
+::
+::  number of items in proof used for pow
+++  pow-items  7
+::  extract pow from proof
+++  get-pow
+  ~/  %get-pow
+  |=  p=proof
+  ^-  proof
+  p(objects (scag pow-items objects.p))
+::
+++  proof-to-pow
+  ~/  %proof-to-pow
+  |=  =proof
+  ^-  tip5-hash-atom
+  (digest-to-atom:tip5 (hash-proof (get-pow proof)))
 ::
 ++  hashable-proof-objects
   ~/  %hashable-proof-objects
@@ -80,6 +99,7 @@
     %codeword  [leaf+%codeword (hashable-fpoly:tip5 p.pd)]
     %evals     [leaf+%evals (hashable-fpoly:tip5 p.pd)]
     %terms     [leaf+%terms (hashable-bpoly:tip5 p.pd)]
+    %poly      [leaf+%poly (hashable-bpoly:tip5 p.pd)]
   ::
       %m-pathbf
     :-  leaf+%m-pathbf

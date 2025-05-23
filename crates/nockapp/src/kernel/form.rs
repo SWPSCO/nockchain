@@ -3,7 +3,7 @@ use crate::noun::slab::NounSlab;
 use blake3::{Hash, Hasher};
 use byteorder::{LittleEndian, WriteBytesExt};
 use nockvm::hamt::Hamt;
-use nockvm::interpreter::{self, interpret, Error, Mote};
+use nockvm::interpreter::{self, interpret, Error, Mote, NockCancelToken};
 use nockvm::jets::cold::{Cold, Nounable};
 use nockvm::jets::hot::{HotEntry, URBIT_HOT_STATE};
 use nockvm::jets::nock::util::mook;
@@ -12,8 +12,10 @@ use nockvm::mug::met3_usize;
 use nockvm::noun::{Atom, Cell, DirectAtom, IndirectAtom, Noun, Slots, D, T};
 use nockvm::trace::{path_to_cord, write_serf_trace_safe, TraceInfo};
 use nockvm_macros::tas;
+
 use std::any::Any;
 use std::fs::File;
+use std::future::Future;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -23,7 +25,7 @@ use tracing::{debug, error, info, warn};
 use crate::kernel::checkpoint::{Checkpoint, ExportedState, JamPaths, JammedCheckpoint};
 use crate::nockapp::wire::{wire_to_noun, WireRepr};
 use crate::noun::slam;
-use crate::utils::{create_context, current_da, NOCK_STACK_SIZE};
+use crate::utils::{create_context, current_da, NOCK_STACK_SIZE, NOCK_STACK_SIZE_HUGE};
 use crate::{AtomExt, CrownError, NounExt, Result, ToBytesExt};
 use bincode::config::Configuration;
 
@@ -81,8 +83,10 @@ pub enum SerfAction {
 }
 
 pub(crate) struct SerfThread {
-    handle: std::thread::JoinHandle<()>,
+    handle: Option<std::thread::JoinHandle<()>>,
     action_sender: mpsc::Sender<SerfAction>,
+    pub cancel_token: NockCancelToken,
+    inhibit: Arc<AtomicBool>,
     /// Jam persistence buffer paths.
     pub jam_paths: Arc<JamPaths>,
     /// Buffer toggle for writing to the jam buffer.
@@ -102,6 +106,9 @@ impl SerfThread {
         let (action_sender, action_receiver) = mpsc::channel(1);
         let (buffer_toggle_sender, buffer_toggle_receiver) = oneshot::channel();
         let (event_number_sender, event_number_receiver) = oneshot::channel();
+        let (cancel_token_sender, cancel_token_receiver) = oneshot::channel();
+        let inhibit = Arc::new(AtomicBool::new(false));
+        let inhibit_clone = inhibit.clone();
         std::fs::create_dir_all(jam_paths.0.parent().unwrap_or_else(|| {
             panic!(
                 "Panicked at {}:{} (git sha: {:?})",
@@ -142,43 +149,51 @@ impl SerfThread {
                 event_number_sender
                     .send(serf.event_num.clone())
                     .expect("Could not send event number out of serf thread");
-                serf_loop(serf, action_receiver, buffer_toggle);
+                cancel_token_sender
+                    .send(serf.context.cancel_token())
+                    .expect("Could not send cancel token out of serf thread");
+                serf_loop(serf, action_receiver, buffer_toggle, inhibit_clone);
             })?;
 
         let buffer_toggle = buffer_toggle_receiver.await?;
         let event_number = event_number_receiver.await?;
+        let cancel_token = cancel_token_receiver.await?;
         Ok(SerfThread {
+            inhibit,
             buffer_toggle,
-            handle,
+            handle: Some(handle),
             action_sender,
             jam_paths: jam_paths_cloned,
             event_number,
+            cancel_token,
         })
     }
 
-    // Future which completes when the serf thread finishes. Since rust threads only support polling or blocking joining, not notification,
-    // we have to poll on a timer.
-    pub(crate) async fn finished(&self) {
-        let mut interval = tokio::time::interval(Duration::from_millis(100));
-        loop {
-            interval.tick().await;
-            if self.handle.is_finished() {
-                debug!("Serf finished");
-                break;
+    pub(crate) fn stop(&mut self) -> impl Future<Output = Result<()>> {
+        let action_sender = self.action_sender.clone();
+        let cancel_token = self.cancel_token.clone();
+        let join_handle = self.handle.take().expect("Serf join handle already taken.");
+        let tokio_join_handle = tokio::task::spawn_blocking(move || join_handle.join());
+        self.inhibit.store(true, Ordering::SeqCst);
+        async move {
+            cancel_token.cancel();
+            action_sender
+                .send(SerfAction::Stop)
+                .await
+                .expect("Failed to send stop action");
+            match tokio_join_handle.await {
+                Ok(Ok(())) => Ok(()),
+                Ok(Err(e)) => Err(CrownError::Unknown(format!("Serf thread panicked: {e:?}"))),
+                Err(e) => Err(CrownError::JoinError(e)),
             }
         }
     }
 
-    pub(crate) async fn stop(&self) {
-        self.action_sender
-            .send(SerfAction::Stop)
-            .await
-            .expect("Failed to send stop action");
-        self.finished().await;
-    }
-
-    pub(crate) fn join(self) -> Result<(), Box<dyn Any + Send + 'static>> {
-        self.handle.join()
+    pub(crate) fn join(&mut self) -> Result<(), Box<dyn Any + Send + 'static>> {
+        self.handle
+            .take()
+            .expect("Serf thread already joined")
+            .join()
     }
 
     pub(crate) async fn get_kernel_state_slab(&self) -> Result<NounSlab> {
@@ -197,24 +212,33 @@ impl SerfThread {
         Ok(result_fut.await?)
     }
 
-    pub(crate) async fn peek(&self, ovo: NounSlab) -> Result<NounSlab> {
+    pub(crate) fn peek(&self, ovo: NounSlab) -> impl Future<Output = Result<NounSlab>> {
         let (result, result_fut) = oneshot::channel();
-        self.action_sender
-            .send(SerfAction::Peek { ovo, result })
-            .await?;
-        result_fut.await?
+        let action_sender = self.action_sender.clone();
+        async move {
+            action_sender.send(SerfAction::Peek { ovo, result }).await?;
+            result_fut.await?
+        }
     }
 
-    pub(crate) async fn poke(&self, wire: WireRepr, cause: NounSlab) -> Result<NounSlab> {
+    // We are very carefully ensuring that the future does not contain the &self reference, to allow spawning a task without lifetime issues
+    pub(crate) fn poke(
+        &self,
+        wire: WireRepr,
+        cause: NounSlab,
+    ) -> impl Future<Output = Result<NounSlab>> {
         let (result, result_fut) = oneshot::channel();
-        self.action_sender
-            .send(SerfAction::Poke {
-                wire,
-                cause,
-                result,
-            })
-            .await?;
-        result_fut.await?
+        let action_sender = self.action_sender.clone();
+        async move {
+            action_sender
+                .send(SerfAction::Poke {
+                    wire,
+                    cause,
+                    result,
+                })
+                .await?;
+            result_fut.await?
+        }
     }
 
     pub(crate) fn poke_sync(&self, wire: WireRepr, cause: NounSlab) -> Result<NounSlab> {
@@ -250,12 +274,15 @@ impl SerfThread {
         result_fut.await?
     }
 
-    pub(crate) async fn checkpoint(&self) -> Result<JammedCheckpoint> {
+    pub(crate) fn checkpoint(&self) -> impl Future<Output = Result<JammedCheckpoint>> {
         let (result, result_fut) = oneshot::channel();
-        self.action_sender
-            .send(SerfAction::Checkpoint { result })
-            .await?;
-        Ok(result_fut.await?)
+        let action_sender = self.action_sender.clone();
+        async move {
+            action_sender
+                .send(SerfAction::Checkpoint { result })
+                .await?;
+            Ok(result_fut.await?)
+        }
     }
 }
 
@@ -269,6 +296,7 @@ fn serf_loop(
     mut serf: Serf,
     mut action_receiver: mpsc::Receiver<SerfAction>,
     buffer_toggle: Arc<AtomicBool>,
+    inhibit: Arc<AtomicBool>,
 ) {
     loop {
         let Some(action) = action_receiver.blocking_recv() else {
@@ -277,16 +305,20 @@ fn serf_loop(
         match action {
             SerfAction::LoadState { state, result } => {
                 let res = load_state_from_bytes(&mut serf, &state);
-                result.send(res).expect("Could not send load state result");
+                let _ = result.send(res).map_err(|e| {
+                    debug!("Could not send load state result");
+                    e
+                });
             }
             SerfAction::Stop => {
                 break;
             }
             SerfAction::GetStateBytes { result } => {
                 let state_bytes = create_state_bytes(&mut serf);
-                result
-                    .send(state_bytes)
-                    .expect("Could not send state bytes");
+                let _ = result.send(state_bytes).map_err(|e| {
+                    debug!("Could not send state bytes to dropped channel");
+                    e
+                });
             }
             SerfAction::GetKernelStateSlab { result } => {
                 let kernel_state_noun = serf.arvo.slot(STATE_AXIS);
@@ -298,9 +330,10 @@ fn serf_loop(
                         Ok(slab)
                     },
                 );
-                result
-                    .send(kernel_state_slab)
-                    .expect("Could not send kernel state slab");
+                let _ = result.send(kernel_state_slab).map_err(|e| {
+                    debug!("Tried to send to dropped result channel");
+                    e
+                });
             }
             SerfAction::GetColdStateSlab { result } => {
                 let cold_state_noun = serf.context.cold.into_noun(serf.stack());
@@ -309,41 +342,67 @@ fn serf_loop(
                     slab.copy_into(cold_state_noun);
                     slab
                 };
-                result
-                    .send(cold_state_slab)
-                    .expect("Could not send cold state slab");
+                let _ = result.send(cold_state_slab).map_err(|e| {
+                    debug!("Could not send cold state to dropped channel.");
+                    e
+                });
             }
             SerfAction::Checkpoint { result } => {
                 let checkpoint = create_checkpoint(&mut serf, buffer_toggle.clone());
-                result.send(checkpoint).expect("Could not send checkpoint");
+                //result.send(checkpoint).expect("Could not send checkpoint");
+                if result.send(checkpoint).is_err() {
+                    debug!(
+                        "Checkpoint receiver dropped before receiving result - likely timed out"
+                    );
+                }
             }
             SerfAction::Peek { ovo, result } => {
-                let ovo_noun = ovo.copy_to_stack(serf.stack());
-                let noun_res = serf.peek(ovo_noun);
-                let noun_slab_res = noun_res.map(|noun| {
-                    let mut slab = NounSlab::new();
-                    slab.copy_into(noun);
-                    slab
-                });
-                result
-                    .send(noun_slab_res)
-                    .expect("Failed to send peek result from serf thread");
+                if inhibit.load(Ordering::SeqCst) {
+                    let _ = result
+                        .send(Err(CrownError::Unknown("Serf stopping".to_string())))
+                        .map_err(|e| {
+                            debug!("Tried to send inhibited peek state to dropped channel");
+                            e
+                        });
+                } else {
+                    let ovo_noun = ovo.copy_to_stack(serf.stack());
+                    let noun_res = serf.peek(ovo_noun);
+                    let noun_slab_res = noun_res.map(|noun| {
+                        let mut slab = NounSlab::new();
+                        slab.copy_into(noun);
+                        slab
+                    });
+                    let _ = result.send(noun_slab_res).map_err(|e| {
+                        debug!("Tried to send peek state to dropped channel");
+                        e
+                    });
+                }
             }
             SerfAction::Poke {
                 wire,
                 cause,
                 result,
             } => {
-                let cause_noun = cause.copy_to_stack(serf.stack());
-                let noun_res = serf.poke(wire, cause_noun);
-                let noun_slab_res = noun_res.map(|noun| {
-                    let mut slab = NounSlab::new();
-                    slab.copy_into(noun);
-                    slab
-                });
-                result
-                    .send(noun_slab_res)
-                    .expect("Failed to send poke result from serf thread");
+                if inhibit.load(Ordering::SeqCst) {
+                    let _ = result
+                        .send(Err(CrownError::Unknown("Serf stopping".to_string())))
+                        .map_err(|e| {
+                            debug!("Failed to send inihibited poke result from serf thread");
+                            e
+                        });
+                } else {
+                    let cause_noun = cause.copy_to_stack(serf.stack());
+                    let noun_res = serf.poke(wire, cause_noun);
+                    let noun_slab_res = noun_res.map(|noun| {
+                        let mut slab = NounSlab::new();
+                        slab.copy_into(noun);
+                        slab
+                    });
+                    let _ = result.send(noun_slab_res).map_err(|e| {
+                        debug!("Failed to send poke result from serf thread");
+                        e
+                    });
+                }
             }
         }
     }
@@ -501,8 +560,6 @@ pub struct Kernel {
     pub(crate) serf: SerfThread,
     /// Directory path for storing pma snapshots.
     pma_dir: Arc<PathBuf>,
-    /// Atomic flag for terminating the kernel.
-    pub terminator: Arc<AtomicBool>,
 }
 
 impl Kernel {
@@ -533,11 +590,30 @@ impl Kernel {
             NOCK_STACK_SIZE, jam_paths_arc, kernel_vec, hot_state_vec, trace,
         )
         .await?;
-        let terminator = Arc::new(AtomicBool::new(false));
         Ok(Self {
             serf,
             pma_dir: pma_dir_arc,
-            terminator,
+        })
+    }
+
+    pub async fn load_with_hot_state_huge(
+        pma_dir: PathBuf,
+        jam_paths: JamPaths,
+        kernel: &[u8],
+        hot_state: &[HotEntry],
+        trace: bool,
+    ) -> Result<Self> {
+        let jam_paths_arc = Arc::new(jam_paths);
+        let kernel_vec = Vec::from(kernel);
+        let hot_state_vec = Vec::from(hot_state);
+        let pma_dir_arc = Arc::new(pma_dir);
+        let serf = SerfThread::new(
+            NOCK_STACK_SIZE_HUGE, jam_paths_arc, kernel_vec, hot_state_vec, trace,
+        )
+        .await?;
+        Ok(Self {
+            serf,
+            pma_dir: pma_dir_arc,
         })
     }
 
@@ -591,13 +667,13 @@ impl Kernel {
     }
 
     /// Produces a checkpoint of the kernel state.
-    pub async fn checkpoint(&self) -> Result<JammedCheckpoint> {
-        self.serf.checkpoint().await
+    pub fn checkpoint(&self) -> impl Future<Output = Result<JammedCheckpoint>> {
+        self.serf.checkpoint()
     }
 
-    #[tracing::instrument(name = "nockapp::Kernel::poke", skip(self, cause))]
-    pub async fn poke(&self, wire: WireRepr, cause: NounSlab) -> Result<NounSlab> {
-        self.serf.poke(wire, cause).await
+    // We are very carefully ensuring the future does not contain the "self" reference to ensure no lifetime issues when spawning tasks
+    pub fn poke(&self, wire: WireRepr, cause: NounSlab) -> impl Future<Output = Result<NounSlab>> {
+        self.serf.poke(wire, cause)
     }
 
     pub fn poke_sync(&self, wire: WireRepr, cause: NounSlab) -> Result<NounSlab> {
@@ -608,9 +684,10 @@ impl Kernel {
         self.serf.peek_sync(ovo)
     }
 
-    #[tracing::instrument(name = "nockapp::Kernel::peek", skip_all)]
-    pub async fn peek(&mut self, ovo: NounSlab) -> Result<NounSlab> {
-        self.serf.peek(ovo).await
+    // We are very carefully ensuring the future does not contain the "self" reference to ensure no lifetime issues when spawning tasks
+    #[tracing::instrument(name = "crown::Kernel::peek", skip_all)]
+    pub(crate) fn peek(&self, ovo: NounSlab) -> impl Future<Output = Result<NounSlab>> {
+        self.serf.peek(ovo)
     }
 
     pub async fn create_state_bytes(&self) -> Result<Vec<u8>> {
@@ -629,6 +706,8 @@ pub struct Serf {
     pub arvo: Noun,
     /// The interpreter context.
     pub context: interpreter::Context,
+    /// Cancellation
+    pub cancel_token: NockCancelToken,
     /// The current event number.
     pub event_num: Arc<AtomicU64>,
 }
@@ -677,6 +756,7 @@ impl Serf {
         };
 
         let mut context = create_context(stack, &hot_state, cold, trace_info);
+        let cancel_token = context.cancel_token();
 
         let version = checkpoint
             .as_ref()
@@ -721,6 +801,7 @@ impl Serf {
             arvo,
             context,
             event_num,
+            cancel_token,
         };
 
         if let Some(checkpoint) = checkpoint {
@@ -1050,7 +1131,7 @@ impl Serf {
     ///
     /// Result containing the poke response or an error.
     #[tracing::instrument(level = "info", skip_all, fields(
-        wire_source = wire.source
+        src = wire.source
     ))]
     pub fn poke(&mut self, wire: WireRepr, cause: Noun) -> Result<Noun> {
         let random_bytes = rand::random::<u64>();

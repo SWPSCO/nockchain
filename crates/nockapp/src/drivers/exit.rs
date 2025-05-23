@@ -24,24 +24,10 @@ pub fn exit() -> IODriverFn {
                                     if cell.head().eq_bytes(b"exit") && cell.tail().is_atom() {
                                         // Exit with the code provided in the tail
                                         if let Ok(exit_code) = cell.tail().as_atom().and_then(|atom| atom.as_u64()) {
-                                            handle.exit.send(exit_code as usize).await.unwrap_or_else(|err| {
-                                                panic!(
-                                                    "Panicked with {err:?} at {}:{} (git sha: {:?})",
-                                                    file!(),
-                                                    line!(),
-                                                    option_env!("GIT_SHA")
-                                                )
-                                            });
+                                            handle.exit.exit(exit_code as usize).await?;
                                         } else {
                                             // Default to error code 1 if we can't get a valid exit code
-                                            handle.exit.send(1).await.unwrap_or_else(|err| {
-                                                panic!(
-                                                    "Panicked with {err:?} at {}:{} (git sha: {:?})",
-                                                    file!(),
-                                                    line!(),
-                                                    option_env!("GIT_SHA")
-                                                )
-                                            });
+                                            handle.exit.exit(1).await?;
                                         }
                                     }
                                 }

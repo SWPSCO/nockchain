@@ -18,8 +18,12 @@
   c(genesis-seal seal)
 ::
 ++  add-btc-data
-  |=  =btc-hash:t
+  |=  btc-hash=(unit btc-hash:t)
   ^-  consensus-state:dk
+  ?:  =(~ btc-hash)
+    ~>  %slog.[0 leaf+"Not checking btc hash for genesis block"]
+    c(btc-data `btc-hash)
+  ~>  %slog.[0 leaf+"received btc block hash, waiting to hear nockchain genesis block!"]
   c(btc-data `btc-hash)
 ::
 +|  %checks-and-computes
@@ -52,6 +56,7 @@
 ++  get-cur-balance-names
   ^-  (z-set nname:t)
   ~(key z-by get-cur-balance)
+::
 ::
 ::  +compute-target: find the new target
 ::
@@ -93,9 +98,10 @@
     ?:  (gth next-target-atom max-target-atom:t)
       max-target:t
     (chunk:bignum:t next-target-atom)
-  ::~&  >>  "previous target: {(scow %ud prev-target-atom)}"
-  ::~&  >>  "epoch duration: {(scow %ud epoch-dur)}"
-  ::~&  >>  "new target: {(scow %ud next-target-atom)}"
+  ?:  =(prev-target-atom next-target-atom)
+    next-target-bn
+  ~>  %slog.[0 (cat 3 'previous target: ' (scot %ud prev-target-atom))]
+  ~>  %slog.[0 (cat 3 'new target: ' (scot %ud next-target-atom))]
   next-target-bn
 ::
 ::  +compute-epoch-duration: computes the duration of an epoch in seconds
@@ -229,7 +235,7 @@
       %.y
     %-  check-target:mine
     :_  target.pag
-    (digest-to-atom:tip5:t (hash-proof:t (need pow.pag)))
+    (proof-to-pow:t (need pow.pag))
   ?.  check-pow-hash
     [%.n %pow-target-check-failed]
   ::
@@ -259,14 +265,18 @@
   ?.  check-heaviness
     [%.n %page-heaviness-invalid]
   ::
-  =/  check-split-length=?
-    (lte (lent ~(key z-by coinbase.pag)) max-coinbase-split:t)
-  ?.  check-split-length
-    [%.n %split-too-large]
+  =/  check-coinbase-split=?
+    (based:coinbase-split:t coinbase.pag)
+  ?.  check-coinbase-split
+    [%.n %coinbase-split-not-based]
   =/  check-msg-length=?
     (lth (lent msg.pag) 20)
   ?.  check-msg-length
     [%.n %msg-too-large]
+  =/  check-msg-valid=?
+    (validate:page-msg:t msg.pag)
+  ?.  check-msg-valid
+    [%.n %msg-not-valid]
   ::
   [%.y ~]
 ::
@@ -284,14 +294,16 @@
   ?.  (check-size p pag)
     ::~&  >>>  "block {digest-b58} is too large"
     [%.n %block-too-large]
-  =/  raw-tx-set=(set raw-tx:t)
-    (~(run z-in tx-ids.pag) |=(=tx-id:t (~(got z-by raw-txs.p) tx-id)))
-  =/  raw-tx-list=(list raw-tx:t)  ~(tap z-in raw-tx-set)
+  =/  raw-tx-set=(set (unit raw-tx:t))
+    (~(run z-in tx-ids.pag) |=(=tx-id:t (~(get z-by raw-txs.p) tx-id)))
+  =/  raw-tx-list=(list (unit raw-tx:t))  ~(tap z-in raw-tx-set)
   =|  tx-list=(list tx:t)
   =.  tx-list
     |-
     ?~  raw-tx-list  tx-list
-    =/  utx=(unit tx:t)  (mole |.((new:tx:t i.raw-tx-list height.pag)))
+    ?~  i.raw-tx-list
+      ~  :: exit early b/c raw-tx was not present in raw-tx-set
+    =/  utx=(unit tx:t)  (mole |.((new:tx:t u.i.raw-tx-list height.pag)))
     ?~  utx  :: exit early b/c raw-tx failed to convert
       ~
     %=  $
@@ -304,6 +316,7 @@
   :: initialize balance transfer accumulator with parent block's balance
   =/  acc=tx-acc:t
     (new:tx-acc:t (~(get z-by balance.c) parent.pag))
+  ::
   ::  test to see that the input notes for all transactions
   ::  exist in the parent block's balance, that they are not
   ::  over- or underspent, and that the resulting

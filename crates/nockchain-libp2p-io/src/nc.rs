@@ -9,6 +9,7 @@ use futures::{Future, StreamExt};
 use libp2p::identify::Event::Received;
 use libp2p::identity::Keypair;
 use libp2p::kad::NoKnownPeers;
+use libp2p::peer_store::Store;
 use libp2p::request_response::Event::*;
 use libp2p::request_response::Message::*;
 use libp2p::request_response::{self};
@@ -21,8 +22,7 @@ use nockapp::noun::slab::NounSlab;
 use nockapp::utils::make_tas;
 use nockapp::utils::scry::*;
 use nockapp::wire::{Wire, WireRepr};
-use nockapp::NockAppError;
-use nockapp::{AtomExt, NounExt};
+use nockapp::{AtomExt, NockAppError, NounExt};
 use nockvm::noun::{Atom, Noun, D, T};
 use nockvm_macros::tas;
 use serde_bytes::ByteBuf;
@@ -32,7 +32,7 @@ use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::metrics::NockchainP2PMetrics;
 use crate::p2p::*;
-use crate::p2p_util::{MessageTracker, PeerIdExt};
+use crate::p2p_util::{log_fail2ban_ipv4, log_fail2ban_ipv6, MessageTracker, PeerIdExt};
 use crate::tip5_util::tip5_hash_to_base58;
 
 //TODO This wire is a placeholder for now. The libp2p driver is entangled with the other types of nockchain pokes
@@ -151,36 +151,6 @@ impl<T: 'static> TrackedJoinSet<T> {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct MiningKeyConfig {
-    pub share: u64,
-    pub m: u64,
-    pub keys: Vec<String>,
-}
-
-impl FromStr for MiningKeyConfig {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        // Expected format: "share,m:key1,key2,key3"
-        let parts: Vec<&str> = s.split(':').collect();
-        if parts.len() != 2 {
-            return Err("Invalid format. Expected 'share,m:key1,key2,key3'".to_string());
-        }
-
-        let share_m: Vec<&str> = parts[0].split(',').collect();
-        if share_m.len() != 2 {
-            return Err("Invalid share,m format".to_string());
-        }
-
-        let share = share_m[0].parse::<u64>().map_err(|e| e.to_string())?;
-        let m = share_m[1].parse::<u64>().map_err(|e| e.to_string())?;
-        let keys: Vec<String> = parts[1].split(',').map(String::from).collect();
-
-        Ok(MiningKeyConfig { share, m, keys })
-    }
-}
-
 const POKE_VERSION: u64 = 0;
 
 #[instrument(skip(keypair, bind, allowed, limits, memory_limits, equix_builder))]
@@ -192,7 +162,6 @@ pub fn make_libp2p_driver(
     memory_limits: Option<memory_connection_limits::Behaviour>,
     initial_peers: &[Multiaddr],
     equix_builder: equix::EquiXBuilder,
-    mining_config: Option<Vec<MiningKeyConfig>>,
     init_complete_tx: Option<tokio::sync::oneshot::Sender<()>>,
 ) -> IODriverFn {
     let initial_peers = Vec::from(initial_peers);
@@ -201,11 +170,20 @@ pub fn make_libp2p_driver(
             .expect("Failed to register metrics!");
 
         Box::pin(async move {
-            let mut swarm = crate::p2p::start_swarm(keypair, bind, allowed, limits, memory_limits)
-                .map_err(|e| {
-                    warn!("Could not create swarm: {}", e);
-                    NockAppError::OtherError
-                })?;
+            let mut swarm =
+                match crate::p2p::start_swarm(keypair, bind, allowed, limits, memory_limits) {
+                    Ok(swarm) => swarm,
+                    Err(e) => {
+                        error!("Could not create swarm: {}", e);
+                        let (_, handle_clone) = handle.dup();
+                        tokio::spawn(async move {
+                            if let Err(e) = handle_clone.exit.exit(1).await {
+                                error!("Failed to send exit signal: {}", e);
+                            }
+                        });
+                        return Err(NockAppError::OtherError);
+                    }
+                };
             let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmAction>(1000); // number needs to be high enough to send gossips to peers
             let mut join_set = TrackedJoinSet::<Result<(), NockAppError>>::new();
             let message_tracker = Arc::new(Mutex::new(MessageTracker::new()));
@@ -213,23 +191,6 @@ pub fn make_libp2p_driver(
 
             let mut initial_peer_retries_remaining = INITIAL_PEER_RETRIES;
             dial_initial_peers(&mut swarm, &initial_peers)?;
-
-            if let Some(configs) = mining_config {
-                if configs.len() == 1
-                    && configs[0].share == 1
-                    && configs[0].m == 1
-                    && configs[0].keys.len() == 1
-                {
-                    // Simple case - use set_mining_key
-                    set_mining_key(&handle, configs[0].keys[0].clone()).await?;
-                } else {
-                    // Advanced case - use set_mining_key_advanced
-                    set_mining_key_advanced(&handle, configs).await?;
-                }
-                enable_mining(&handle, true).await?;
-            } else {
-                enable_mining(&handle, false).await?;
-            }
 
             if let Some(tx) = init_complete_tx {
                 let _ = tx.send(());
@@ -320,7 +281,31 @@ pub fn make_libp2p_driver(
                             },
                             SwarmAction::BlockPeer { peer_id } => {
                                 warn!("SAction: Blocking peer {peer_id}");
+                                // Block the peer in the allow_block_list
                                 swarm.behaviour_mut().allow_block_list.block_peer(peer_id);
+                                {
+                                    // get peer IP address from the swarm
+                                    let peer_addresses = swarm.behaviour_mut().peer_store.store().addresses_of_peer(&peer_id);
+                                    if let Some(peer_multi_addrs) = peer_addresses {
+                                        for multi_addr in peer_multi_addrs {
+                                            for protocol in multi_addr.iter() {
+
+                                                match protocol {
+                                                    libp2p::core::multiaddr::Protocol::Ip4(ip) => {
+                                                        log_fail2ban_ipv4(&peer_id, &ip);
+                                                    },
+                                                    libp2p::core::multiaddr::Protocol::Ip6(ip) => {
+                                                        log_fail2ban_ipv6(&peer_id, &ip);
+                                                    },
+                                                    // TODO: Dns?
+                                                    _ => {}
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        error!("Failed to get peer IP address for peer id: {peer_id}");
+                                    };
+                                }
                                 // Disconnect the peer if they're currently connected
                                 let _ = swarm.disconnect_peer_id(peer_id);
                             },
@@ -467,81 +452,10 @@ impl NockchainResponse {
     }
 }
 
-#[instrument(skip(handle, pubkey))]
-async fn set_mining_key(
-    handle: &NockAppHandle,
-    pubkey: String,
-) -> Result<PokeResult, NockAppError> {
-    let mut set_mining_key_slab = NounSlab::new();
-    let set_mining_key = Atom::from_value(&mut set_mining_key_slab, "set-mining-key")
-        .expect("Failed to create set-mining-key atom");
-    let pubkey_cord =
-        Atom::from_value(&mut set_mining_key_slab, pubkey).expect("Failed to create pubkey atom");
-
-    let set_mining_key_poke = T(
-        &mut set_mining_key_slab,
-        &[D(tas!(b"command")), set_mining_key.as_noun(), pubkey_cord.as_noun()],
-    );
-    set_mining_key_slab.set_root(set_mining_key_poke);
-
-    let wire = NockchainWire::Local;
-    handle.poke(wire.to_wire(), set_mining_key_slab).await
-}
-
-async fn set_mining_key_advanced(
-    handle: &NockAppHandle,
-    configs: Vec<MiningKeyConfig>,
-) -> Result<PokeResult, NockAppError> {
-    let mut set_mining_key_slab = NounSlab::new();
-    let set_mining_key_adv = Atom::from_value(&mut set_mining_key_slab, "set-mining-key-advanced")
-        .expect("Failed to create set-mining-key-advanced atom");
-
-    // Create the list of configs
-    let mut config_list = Vec::new();
-    for config in configs {
-        // Create the list of keys
-        let mut key_list = Vec::new();
-        for key in config.keys {
-            let key_atom =
-                Atom::from_value(&mut set_mining_key_slab, key).expect("Failed to create key atom");
-            key_list.push(key_atom.as_noun());
-        }
-        let keys_cell = T(&mut set_mining_key_slab, &key_list);
-
-        // Create the config tuple [share m keys]
-        let config_tuple = T(
-            &mut set_mining_key_slab,
-            &[D(config.share), D(config.m), keys_cell],
-        );
-        config_list.push(config_tuple);
-    }
-    let configs_cell = T(&mut set_mining_key_slab, &config_list);
-
-    let set_mining_key_poke = T(
-        &mut set_mining_key_slab,
-        &[D(tas!(b"command")), set_mining_key_adv.as_noun(), configs_cell],
-    );
-    set_mining_key_slab.set_root(set_mining_key_poke);
-
-    let wire = NockchainWire::Local;
-    handle.poke(wire.to_wire(), set_mining_key_slab).await
-}
-
-//TODO add %set-mining-key-multisig poke
-#[instrument(skip(handle))]
-async fn enable_mining(handle: &NockAppHandle, enable: bool) -> Result<PokeResult, NockAppError> {
-    let mut enable_mining_slab = NounSlab::new();
-    let enable_mining = Atom::from_value(&mut enable_mining_slab, "enable-mining")
-        .expect("Failed to create enable-mining atom");
-
-    let enable_mining_poke = T(
-        &mut enable_mining_slab,
-        &[D(tas!(b"command")), enable_mining.as_noun(), D(if enable { 0 } else { 1 })],
-    );
-    enable_mining_slab.set_root(enable_mining_poke);
-    let wire = NockchainWire::Local;
-    handle.poke(wire.to_wire(), enable_mining_slab).await
-}
+// fn emit_fail2ban(peer_ip: u128) -> Result<(), NockAppError> {
+//     // get peer ip address
+//     let peer_ip = peer_id.to_base58();
+// }
 
 async fn handle_effect(
     noun_slab: NounSlab,
@@ -659,7 +573,7 @@ async fn handle_effect(
             let effect_cell = unsafe { noun_slab.root().as_cell()? };
             let block_id = effect_cell.tail();
 
-            //add the bad block ID
+            // Add the bad block ID
             let mut tracker = message_tracker.lock().await;
             let peers_to_ban = tracker.process_bad_block_id(block_id)?;
 

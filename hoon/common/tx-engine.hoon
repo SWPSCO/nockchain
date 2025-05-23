@@ -1,14 +1,12 @@
-/=  sp  /common/stark/prover
 /=  emission  /common/schedule
 /=  mine  /common/pow
 /=  *  /common/zeke
 /=  *  /common/zoon
 ::    tx-engine: this contains all transaction types and logic related to dumbnet.
 ::
-::  the most notable thing about how this library is written are the types.
-::  we are experimenting with a namespacing scheme for functions that are
-::  primarily about particular types inside of the namespace for that type,
-::  as suggested by Ted in urbit/#6881. that is
+::  the most notable thing about how this library is written are the types. we use
+::  a namespacing scheme for functions that are primarily about particular types inside
+::  of the namespace for that type, as suggested by Ted in urbit/#6881. that is:
 ::
 ::  ++  list
 ::    =<  form
@@ -19,17 +17,17 @@
 ::    ...
 ::    --
 ::
-::  this file is an experiment to maximize this style for a single module, and then
-::  see how well it interfaces with hoon written in more familiar styles.
+::  we refer to these types as 'B-types'
+::
 =>
 ~%  %dumb-transact  ..stark-engine-jet-hook  ~
 |%
 +|  %misc-types
 ::
-::  size in bytes. this is not a blockchain constant, its just an alias
+::  size in bits. this is not a blockchain constant, its just an alias
 ::  to make it clear what the atom represents and theres not a better spot
 ::  for it.
-+$  size  @bytes
++$  size  @bits
 ::
 ::   $blockchain-constants
 ::
@@ -37,8 +35,8 @@
 ::  when using non-default constants.
 +$  blockchain-constants
   $+  blockchain-constants
-  $~  :*  ::  max block size in bytes
-          max-block-size=`size``@`1.000.000
+  $~  :*  ::  max block size in bits
+          max-block-size=`@`8.000.000
           :: actual number of blocks, not 2017 by counting from 0
           blocks-per-epoch=2.016
           ::  14 days measured in seconds, 1.209.600
@@ -51,7 +49,7 @@
           ::  which a new block's timestamp must be after to be considered valid
           min-past-blocks=11
           ::TODO determine appropriate genesis target
-          genesis-target-atom=^~((div max-tip5-atom:tip5 (bex 2)))
+          genesis-target-atom=^~((div max-tip5-atom:tip5 (bex 14)))
           ::TODO determine a real max-target-atom. BTC uses 32 leading zeroes
           max-target-atom=max-tip5-atom:tip5
           ::  whether or not to check the pow of blocks
@@ -62,6 +60,8 @@
           pow-len=pow-len
           ::  how many ways the coinbase may be split
           max-coinbase-split=2
+          ::  first month block height. enforces lock on first month coins.
+          first-month-coinbase-min=4.383
       ==
   $:  max-block-size=size
       blocks-per-epoch=@
@@ -75,6 +75,7 @@
       coinbase-timelock-min=@
       pow-len=@
       max-coinbase-split=@
+      first-month-coinbase-min=@
   ==
 --
 ::
@@ -124,6 +125,8 @@
   |%
   ++  form  hash
   ++  to-list  to-list:hash
+  ++  based    based:hash
+  ++  max-size  max-size:hash
   --
 ::  $hash: output of tip:zoon arm
 ++  hash
@@ -135,6 +138,25 @@
   ::
   ++  to-b58  |=(has=form `cord`(crip (en-base58 (digest-to-atom:tip5 has))))
   ++  from-b58  |=(=cord `form`(atom-to-digest:tip5 (de-base58 (trip cord))))
+  ::
+  ::  +max-size:  max size of hash in bits, obtained by running:
+  ::    (compute-size-jam [(dec p) (sub p 2) (sub p 3) (sub p 4) (sub p 5)])
+  ++  max-size
+    ^-  size
+    `size``@`403
+  ::
+  ::  +validate: checks if elements of hash are in base field.
+  ++  based
+    |=  has=form
+    ^-  ?
+    =+  [a=@ b=@ c=@ d=@ e=@]=has
+    ?&  (^based a)
+        (^based b)
+        (^based c)
+        (^based d)
+        (^based e)
+    ==
+  ::
   ++  to-list
     |=  bid=form
     ^-  (list @)
@@ -142,10 +164,33 @@
     [a b c d e ~]
   --
 ::
+++  proof
+  =<  form
+  |%
+  +$  form  ^proof
+  ::
+  ::  +max-size:  max size of proof in bits. We upper bound it to
+  ::    125kb or 125000 bytes or 1000000 bits
+  ++  max-size
+    ^-  size
+    `size``@`1.000.000
+  ::
+  ++  hash  |=(=form (hash-proof form))
+  --
+::
 ++  schnorr-pubkey
   =<  form
   |%
   +$  form  a-pt:curve:cheetah
+  ::
+  ++  based
+    |=  =form
+    ^-  ?
+    (a-pt-based:curve:cheetah form)
+  ::
+  ++  validate
+    |=  =form
+    (in-g:affine:curve:cheetah form)
   ::
   ++  to-b58  |=(sop=form `cord`(a-pt-to-base58:cheetah sop))
   ++  from-b58  |=(=cord `form`(base58-to-a-pt:cheetah cord))
@@ -172,6 +217,12 @@
   +$  form
     [chal=chal:belt-schnorr:cheetah sig=sig:belt-schnorr:cheetah]
   ::
+  ++  based
+    |=  =form
+    ?&  (based:belt-schnorr:cheetah chal.form)
+        (based:belt-schnorr:cheetah sig.form)
+    ==
+  ::
   ++  hashable  |=(=form leaf+form)
   ++  hash  |=(=form (hash-hashable:tip5 (hashable form)))
   --
@@ -181,6 +232,14 @@
   |%
   +$  form  (z-map schnorr-pubkey schnorr-signature)
   ::
+  ++  based
+    |=  =form
+    ^-  ?
+    %+  levy  ~(tap z-by form)
+    |=  [pubkey=schnorr-pubkey sig=schnorr-signature]
+    ?&  (based:schnorr-pubkey pubkey)
+        (based:schnorr-signature sig)
+    ==
   ++  hashable
     |=  =form
     ^-  hashable:tip5
@@ -284,6 +343,12 @@
     :-  (to-b58:^hash -.nom)
     (to-b58:^hash +<.nom)
   ::
+  ++  based
+    |=  =form
+    ?&  (based:^hash -.form)
+        (based:^hash -.+.form)
+    ==
+  ::
   ++  hashable
     |=  =form
     ^-  hashable:tip5
@@ -325,7 +390,7 @@
     $+  page
     $:  digest=block-id
         :: everything below this is what is hashed for the digest: +.page
-        pow=$+(pow (unit proof:sp))
+        pow=$+(pow (unit proof))
         :: everything below this is what is hashed for the block commitment: +>.page
         parent=block-id   ::TODO sam's comment on why this is here
         tx-ids=(z-set tx-id)
@@ -348,11 +413,15 @@
   ::
   ::    while we store target and accumulated-work as bignums, we
   ::    do not yet employ bignum arithmetic
-  ++  new
+  ::
+  ::    We assume that par is a valid block that was obtained from
+  ::    the node's blockmap. The other arguments in the sample are
+  ::    also validated in the context in +new is called, so we skip
+  ::    validation. Notably, shares is obtained from the mining state,
+  ::    where it was validated in +set-shares.
+  ++  new-candidate
     |=  [par=form now=@da target-bn=bignum:bn shares=(z-map lock @)]
     ^-  form
-    ::  at launch, we do not allow coinbases to be split more than two ways
-    ?>  (lte (lent ~(key z-by shares)) max-coinbase-split)
     =/  accumulated-work=bignum:bn
       %-  chunk:bn
       (add (merge:bn (compute-work target-bn)) (merge:bn accumulated-work.par))
@@ -381,20 +450,18 @@
     ^-  form
     ::  explicitly writing out the bunts is unnecessary, but we want to make it clear
     ::  that each of these choices was deliberate rather than unfinished
-    =/  pag=form
-      %*  .  *form
-        pow                    *(unit proof:sp)
-        tx-ids                 *(z-set tx-id)
-        timestamp              (time-in-secs timestamp)
-        epoch-counter          *@
-        target                 genesis-target
-        accumulated-work       (compute-work genesis-target)
-        coinbase               *(z-map lock @)  :: ensure coinbase is unspendable
-        height                 *page-number
-        parent                 (hash:btc-hash btc-hash.tem)
-        msg                    message.tem
-      ==
-    pag(digest (compute-digest pag))
+    %*  .  *form
+      pow                    *(unit proof)         ::  pow is uninitialized because it needs to be mined
+      tx-ids                 *(z-set tx-id)
+      timestamp              (time-in-secs timestamp)
+      epoch-counter          *@
+      target                 genesis-target
+      accumulated-work       (compute-work genesis-target)
+      coinbase               *(z-map lock coins)  :: ensure coinbase is unspendable
+      height                 *page-number
+      parent                 (hash:btc-hash btc-hash.tem)
+      msg                    message.tem
+    ==
   ::
   ::
   ::  +block-commitment: hash commitment of block contents for miner
@@ -431,7 +498,9 @@
   ++  check-digest
     |=  pag=form
     ^-  ?
-    =(digest.pag (compute-digest pag))
+    ?&  (based:block-id digest.pag)
+        =(digest.pag (compute-digest pag))
+    ==
   ::
   ::  Hash pow with hash-proof and hash the rest of the page.
   ++  compute-digest
@@ -463,19 +532,27 @@
   ++  compute-size
     |=  [pag=form raw-txs=(z-map tx-id raw-tx)]
     ^-  size
-    %+  add
-      :: size of page in number of bytes. note that we do not include the digest
-      :: or powork.
-      (div (compute-size-belt-noun `*`+>.pag) 8)
-    %+  roll  ~(tap z-in tx-ids.pag)
-    |=  [id=tx-id sum-sizes=size]
-    %+  add  sum-sizes
-    (compute-size:raw-tx (~(got z-by raw-txs) id))
+    ;:  add
+        ::  max size of digest in bits, we need to check against upper bound because
+        ::  a digest cannot be calculated without pow
+        max-size:block-id
+        ::  max size of proof is 90 kb or 90000 bytes or 720000 bits
+        max-size:proof
+        :: size of page in number of bits. note that we do not include the digest
+        :: or powork.
+        (compute-size-jam `*`+>.pag)
+        ::
+        %+  roll
+          ~(tap z-in tx-ids.pag)
+        |=  [id=tx-id sum-sizes=size]
+        %+  add  sum-sizes
+        (compute-size:raw-tx (~(got z-by raw-txs) id))
+    ==
   ::
   ++  to-local-page
     |=  pag=form
     ^-  local-page
-    pag(pow (bind pow.pag |=(p=proof:sp (jam p))))
+    pag(pow (bind pow.pag |=(p=proof (jam p))))
   ::
   ::  +compute-work: how much heaviness a block contribute to .accumulated-work
   ::
@@ -535,19 +612,20 @@
   ++  to-page
     |=  lp=form
     ^-  page
-    lp(pow (biff pow.lp |=(j=@ ((soft proof:sp) (cue j)))))
+    lp(pow (biff pow.lp |=(j=@ ((soft proof) (cue j)))))
   --
 ::
 ::  +page-msg: (list belt) that enforces that each elt is a belt
 ++  page-msg
   =<  form
   |%
-  +$  form
-    $|  (list belt)
-    |=  tap=(list belt)
-    (levy tap |=(t=@ (based t)))
+  +$  form  (list belt)
   ::
   ++  new  |=(msg=cord (form (rip-correct 5 msg)))
+  ++  validate
+    |=  tap=(list belt)
+    ^-  ?
+    (levy tap |=(t=@ (based t)))
   ::
   ++  hash
     |=  =form
@@ -579,7 +657,7 @@
   ++  new
     |=  [height=page-number msg-hash=@t]
     ^-  form
-    (some [height (from-b58:hash msg-hash)])
+    `[height (from-b58:hash msg-hash)]
   --
 ::
 ::  $genesis-template:
@@ -666,6 +744,18 @@
     |=  [name=nname inp=input]
     ?&  (validate:input inp)
         =(name name.note.inp)
+    ==
+  ::
+  ++  based
+    ~/  %based
+    |=  ips=form
+    ^-  ?
+    ?:  =(ips *form)
+      %&
+    %+  levy  ~(tap z-by ips)
+    |=  [name=nname inp=input]
+    ?&  (based:input inp)
+        (based:nname name)
     ==
   ::
   ++  hashable
@@ -858,6 +948,16 @@
       (hashable:timelock-range timelock-range.raw)
     leaf+total-fees.raw
   ::
+  ++  based
+    ~/  %based
+    |=  raw=form
+    ^-  ?
+    ?&  (based:hash id.raw)
+        (based:inputs inputs.raw)
+        (based:timelock-range timelock-range.raw)
+        (^based total-fees.raw)
+    ==
+  ::
   ++  validate
     ~/  %validate
     |=  raw=form
@@ -865,17 +965,20 @@
     =/  check-inputs  (validate:inputs inputs.raw)
     =/  check-fees  =(total-fees.raw (roll-fees:inputs inputs.raw))
     =/  check-timelock  =(timelock-range.raw (roll-timelocks:inputs inputs.raw))
+    =/  check-field  (based:hash id.raw)
     =/  check-id  =(id.raw (compute-id raw))
     :: %-  %-  slog
     ::     :~  leaf+"validate-raw-tx"
     ::         leaf+"inputs: {<check-inputs>}"
     ::         leaf+"fees: {<check-fees>}"
     ::         leaf+"timelock: {<check-timelock>}"
+    ::         leaf+"field: {<check-field>}"
     ::         leaf+"id: {<check-id>}"
     ::     ==
     ?&  check-inputs
         check-fees
         check-timelock
+        check-field
         check-id
     ==
   ::
@@ -884,11 +987,11 @@
     ^-  (z-set nname)
     (names:inputs inputs.raw)
   ::
-  ::  +compute-size: returns size in number of bytes
+  ::  +compute-size: returns size in number of bits
   ++  compute-size
     |=  raw=form
     ^-  size
-    (div (compute-size-belt-noun `*`raw) 8)
+    (compute-size-jam `*`raw)
   --
 ::
 ::  $tx: once a raw-tx is being included in a block, it becomes a tx
@@ -953,6 +1056,15 @@
         relative=timelock-range
     ==
   ::
+  ++  based
+    ~/  %based
+    |=  =form
+    ?~  form
+      %&
+    ?&  (based:timelock-range absolute.u.form)
+        (based:timelock-range relative.u.form)
+    ==
+  ::
   ++  hashable
     ~/  %hashable
     |=  =form
@@ -981,16 +1093,16 @@
   ::
   ::  +fix-absolute: produce absolute timelock from relative timelock and page number
   ++  fix-absolute
-    |=  [til=form page=page-number]
+    |=  [til=form page-num=page-number]
     ^-  timelock-range
     ?~  til  *timelock-range
-    =/  add-page  |=(a=page-number (add a page))
+    =/  make-absolute  |=(relative=page-number (add relative page-num))
     =/  absolutification=timelock-range
       ?:  =(*timelock-range relative.u.til)  *timelock-range
       =/  min=(unit page-number)
-        (bind min.relative.u.til add-page)
+        (bind min.relative.u.til make-absolute)
       =/  max=(unit page-number)
-        (bind max.relative.u.til add-page)
+        (bind max.relative.u.til make-absolute)
       (new:timelock-range [min max])
     (merge:timelock-range absolutification absolute.u.til)
   ::
@@ -1021,9 +1133,6 @@
     |=  [tir=form new-page-number=page-number]
     ^-  ?
     ?:  =(tir *form)  %.y
-    :: TODO normalize timelock range
-    ::=/  min  (fall min 0)
-    ::=/  max  (fall max 0)
     =/  min-ok=?
       ?~  min.tir  %.y
       (gte new-page-number u.min.tir)
@@ -1048,7 +1157,7 @@
         min.b
       ?~  min.b
         min.a
-      (some (max u.min.a u.min.b))
+      `(max u.min.a u.min.b)
     =/  max=(unit page-number)
       ?~  max.a
         ?~  max.b
@@ -1056,8 +1165,15 @@
         max.b
       ?~  max.b
         max.a
-      (some (^min u.max.a u.max.b))
+      `(^min u.max.a u.max.b)
     (new [min max])
+  ::
+  ++  based
+    |=  =form
+    ^-  ?
+    ?&  ?~(min.form %& (^based u.min.form))
+        ?~(max.form %& (^based u.max.form))
+    ==
   ::
   ++  hashable
     |=  =form
@@ -1075,6 +1191,8 @@
 ::    a lock may only be "unlocked" if m =<n, we do permit constructing m>n
 ::    with an issued warning, since this may happen when constructing a
 ::    transaction piece-by-piece.
+::
+::    TODO: disambiguate intermediate locks and final locks for validation.
 ++  lock
   =<  form
   ~%  %lock  ..lock  ~
@@ -1083,19 +1201,71 @@
     $~  [m=1 pubkeys=*(z-set schnorr-pubkey)]
     [m=@udD pubkeys=(z-set schnorr-pubkey)]
   ::
+  ++  validate
+    |=  =form
+    ^-  ?
+    ?&  (validate-intermediate form)
+        (lte m.form ~(wyt z-in pubkeys.form))
+    ==
+  ::
+  ++  validate-intermediate
+    |=  form
+    ^-  ?
+    =/  num-keys=@  ~(wyt z-in pubkeys)
+    ::
+    ::  validate:schnorr-pubkey is computationally intensive,
+    ::  do not call this in performance sensistive code
+    =/  check-a-pt=?
+      %+  levy  ~(tap z-in pubkeys)
+      validate:schnorr-pubkey
+    ::  we do not check m <= num-keys here because we allow constructing a tx
+    ::  piece by piece
+    ?&  check-a-pt
+        (lte m 255)
+        !=(m 0)
+        (lte num-keys 255)
+        !=(num-keys 0)
+    ==
+  ::
+  ++  check
+    |=  =form
+    ^-  ^form
+    ?.  (validate-intermediate form)
+      !!
+    form
+  ::
+  ::  +based: checks if all components of lock struct are in based field. called
+  ::    on the block receiver side. we skip validating that the pubkeys are valid
+  ::    curve points because it is costly. in cases where checking validity is just
+  ::    as fast as checking for field membership, we check for validity.
+  ++  based
+    |=  =form
+    ?.  (lte m.form 255)
+      %|
+    ?.  (lte ~(wyt z-in pubkeys.form) 255)
+      %|
+    %+  levy  ~(tap z-in pubkeys.form)
+    |=  pt=schnorr-pubkey
+    ?&  (a-pt-based:curve:cheetah pt)
+        ::  this extra validity check costs nothing, so we throw it in
+        ::  even though both %.n and %.y are belts.
+        =(%.n inf.pt)
+    ==
+  ::
   ++  new
     =<  default
     |%
     ++  default
       |=  key=schnorr-pubkey
-      %*  .  *form
-        m  1
-        pubkeys  (~(put z-in *(z-set schnorr-pubkey)) key)
+      %-  check
+      :*  m=1
+          pubkeys=(~(put z-in *(z-set schnorr-pubkey)) key)
       ==
     ::
     ::  +m-of-n: m signers required of n=#keys.
     ++  m-of-n
       |=  [m=@ud keys=(z-set schnorr-pubkey)]
+      %-  check
       =/  n=@  ~(wyt z-in keys)
       ?>  ?&  (lte m 255)
               (lte n 255)
@@ -1107,16 +1277,14 @@
           warning: lock requires more signatures {(scow %ud m)} than there
           are in .pubkeys: {(scow %ud n)}
           """
-      %*  .  *form
-        m  m
-        pubkeys  keys
-      ==
+      [m=m pubkeys=keys]
     --
   ::
   ::  +join: union of several $locks
   ++  join
     |=  [m=@udD locks=(list form)]
     ^-  form
+    %-  check
     =/  new-keys=(z-set schnorr-pubkey)
       %+  roll  locks
       |=  [loc=form keys=(z-set schnorr-pubkey)]
@@ -1126,6 +1294,7 @@
   ++  set-m
     |=  [lock=form new-m=@ud]
     ^+  lock
+    %-  check
     =/  n=@  ~(wyt z-in pubkeys.lock)
     ?>  ?&  (lte new-m 255)
             !=(new-m 0)
@@ -1145,6 +1314,7 @@
       ++  default
         |=  [lock=form new-key=schnorr-pubkey]
         ^+  lock
+        %-  check
         ?:  (~(has z-in pubkeys.lock) new-key)
           ~&  >>>  "signer {<new-key>} already exists in lock"
           lock
@@ -1157,6 +1327,7 @@
       ++  multi
         |=  [lock=form new-keys=(z-set schnorr-pubkey)]
         ^+  lock
+        %-  check
         %-  ~(rep z-in new-keys)
         |=  [new-key=schnorr-pubkey new-lock=_lock]
         (default new-lock new-key)
@@ -1168,6 +1339,7 @@
       ++  default
         |=  [lock=form no-key=schnorr-pubkey]
         ^+  lock
+        %-  check
         ?.  (~(has z-in pubkeys.lock) no-key)
           ~&  >>>  "key {<no-key>} does not exist in lock"
           lock
@@ -1184,25 +1356,17 @@
       ++  multi
         |=  [lock=form no-keys=(z-set schnorr-pubkey)]
         ^+  lock
+        %-  check
         %-  ~(rep z-in no-keys)
         |=  [no-key=schnorr-pubkey new-lock=_lock]
         (default new-lock no-key)
       --
     --
   ::
-  ++  validate
-    |=  lock=form
-    ^-  ?
-    =/  num-keys=@  ~(wyt z-in pubkeys.lock)
-    ?&  (lte m.lock 255)
-        !=(m.lock 0)
-        (lte num-keys 255)
-        !=(num-keys 0)
-    ==
-  ::
   ++  from-b58
     |=  [m=@ pks=(list @t)]
     ^-  form
+    %-  check
     %+  m-of-n:new  m
     %-  ~(gas z-in *(z-set schnorr-pubkey))
     %+  turn  pks
@@ -1254,6 +1418,15 @@
       assets=coins
     ==
   ::
+  ++  based
+    ~/  %based
+    |=  =form
+    ?&  (based:nname name.form)
+        (based:lock lock.form)
+        (based:^hash p.source.form)
+        (^based assets.form)
+    ==
+  ::
   ++  hashable
     ~/  %hashable
     |=  =form
@@ -1279,50 +1452,83 @@
   =<  form
   |%
   ++  form
-    $:  $~  %*  .  *nnote
-              timelock            coinbase-timelock
-              is-coinbase.source  %.y
-            ==
-        $|  nnote
-        |=  note=nnote
-        ::  mining reward may only be spent 100 blocks after confirmation
-        ?&  =(coinbase-timelock timelock.note)
-            is-coinbase.source.note
+    $~  %*  .  *nnote
+          timelock            coinbase-timelock
+          is-coinbase.source  %.y
         ==
-        ::  these aren't the only conditions needed for a coinbase. we also
-        ::  need that p.source is the hash of the previous block.
-    ==
+    nnote
+  ::
+  ++  validate
+    |=  [pag=page =form]
+    ^-  ?
+    ?.  ?&  is-coinbase.source.form
+            =(p.source.form parent.pag)
+        ==
+      %.n
+    ?:  (lth height.pag first-month-coinbase-min)
+      =(first-month-coinbase-timelock timelock.form)
+    =(coinbase-timelock timelock.form)
   ::
   ::  +new: make coinbase for page. not for genesis.
   ++  new
-    |=  [pag=page =lock]
-    =/  reward=coins  (~(got z-by coinbase.pag) lock)
+    |=  [pag=page lok=lock]
+    =/  reward=coins  (~(got z-by coinbase.pag) lok)
     ^-  form
-    %*  .  *nnote
-      assets       reward
-      lock         lock
-      timelock     coinbase-timelock
-      origin-page  height.pag
-      name         (name-from-parent-hash lock parent.pag)
-    ::
-      ::  this uses the ID of the parent block to avoid a hashloop in airwalk
-      source       [parent.pag %.y]
-    ==
+    =/  =timelock
+      ?:  (lth height.pag first-month-coinbase-min)
+        first-month-coinbase-timelock
+      coinbase-timelock
+    =/  note=nnote
+      %*  .  *nnote
+        assets       reward
+        lock         lok
+        timelock     timelock
+        origin-page  height.pag
+        name         (name-from-parent-hash lok parent.pag height.pag timelock)
+      ::
+        ::  this uses the ID of the parent block to avoid a hashloop in airwalk
+        source       [parent.pag %.y]
+      ==
+    ?.  (validate pag note)
+      ~|  %invalid-coinbase
+      !!
+    note
   ::
   ::  +name-from-parent-hash: the name of a coinbase with given owner and parent block.
   ++  name-from-parent-hash
-    |=  [owners=lock parent-hash=hash]
+    |=  [owners=lock parent-hash=hash height-page=@ =timelock]
     ^-  nname
-    (new:nname owners [parent-hash %.y] coinbase-timelock)
+    (new:nname owners [parent-hash %.y] timelock)
   ::
   ++  coinbase-timelock
     ^-  timelock
-    (some [*timelock-range (new:timelock-range [(some coinbase-timelock-min) ~])])
+    `[*timelock-range (new:timelock-range [`coinbase-timelock-min ~])]
+  ::
+  ++  first-month-coinbase-timelock
+    ^-  timelock
+    `[*timelock-range (new:timelock-range [`4.383 ~])]
   ::
   ++  emission-calc
     |=  =page-number
     ^-  coins
     (schedule:emission `@`page-number)
+  --
+::
+++  shares
+  =<  form
+  |%
+  +$  form  $+(shares (z-map lock @))
+  ::
+  ++  validate
+    |=  =form
+    ?&  (lte ~(wyt z-by form) max-coinbase-split)
+    ::
+        %+  levy  ~(tap z-by form)
+        |=  [=lock s=@]
+        ?&  !=(s 0)
+            (validate:^lock lock)
+        ==
+    ==
   --
 ::
 ::  $coinbase-split: total number of nicks split between mining pubkeys
@@ -1336,6 +1542,8 @@
   |%
   +$  form  (z-map lock coins)
   ::
+  ::  +new: construct a coinbase with assets and shares
+  ::    we assume $shares are already validated inside of the mining state
   ++  new
     |=  [assets=coins shares=(z-map lock @)]
     ^-  form
@@ -1393,6 +1601,25 @@
       split            (turn new-split |=([l=lock s=@ t=coins h=coins] [l s t]))
       remaining-coins  still-remaining
       recursion-depth  +(recursion-depth)
+    ==
+  ::
+  ::  +based: checks that coinbase split is in base field.
+  ::    Called by the receiver of a block. In cases where checking for validity
+  ::    costs the same amount as checking if in field, we check for validity.
+  ++  based
+    |=  =form
+    ?.  (lte ~(wyt z-by form) max-coinbase-split)
+      %|
+    %+  levy  ~(tap z-by form)
+    |=  [=lock =coins]
+    ~&  :*  %based-split-check
+            coins-not-zero+!=(0 coins)
+            coins-based+(^based coins)
+            lock-based+(based:^lock lock)
+        ==
+    ?&  !=(0 coins)
+        (^based coins)
+        (based:^lock lock)
     ==
   ::
   ++  hashable
@@ -1474,6 +1701,20 @@
       --
     --
   ::
+  ++  based
+    |=  =form
+    ^-  ?
+    =/  based-output-source
+      ?~  output-source.form
+        %&
+      (based:^hash p.u.output-source.form)
+    ?&  based-output-source
+        (based:lock recipient.form)
+        (based:timelock-intent timelock-intent.form)
+        (^based gift.form)
+        (based:^hash parent-hash.form)
+    ==
+  ::
   ::  +hashable: we don't include output-source since it could create a hash loop
   ++  hashable
     |=  sed=form
@@ -1536,6 +1777,13 @@
         (new seed-list)
       --
     --
+  ::
+  ++  based
+    |=  =form
+    ^-  ?
+    %+  levy  ~(tap z-in form)
+    |=  s=seed
+    (based:seed s)
   ::
   ++  hashable
     |=  =form
@@ -1631,10 +1879,10 @@
       (leaf-sequence:shape (sig-hash sen))
     ?:  =(~ signature.sen)
       %_  sen
-        signature  (some (~(put z-by *signature) pk sig))
+        signature  `(~(put z-by *signature) pk sig)
       ==
     %_  sen
-      signature  (some (~(put z-by (need signature.sen)) pk sig))
+      signature  `(~(put z-by (need signature.sen)) pk sig)
     ==
   ::
   ::  +verify: verify the .signature and each seed has correct parent-hash
@@ -1677,6 +1925,17 @@
         pk
         (leaf-sequence:shape (sig-hash sen))
         (~(got z-by u.signature.sen) pk)
+    ==
+  ::
+  ++  based
+    |=  sen=form
+    ^-  ?
+    =/  check-sig=?
+      ?~(signature.sen %& (based:signature u.signature.sen))
+    ?.  check-sig
+      %|
+    ?&  (^based fee.sen)
+        (based:seeds seeds.sen)
     ==
   ::
   ++  hashable
@@ -1792,6 +2051,11 @@
     ::  ==
     ?&(check-spend check-gifts-and-fee)
   ::
+  ++  based
+    ~/  %based
+    |=  inp=form
+    &((based:nnote note.inp) (based:spend spend.inp))
+  ::
   ++  hashable
     |=  inp=form
     ^-  hashable:tip5
@@ -1873,21 +2137,15 @@
     ^-  (unit form)
     %-  mole
     |.
-    ~|  "tx invalid"
-    ?>  (validate:^tx tx new-page-number)
-    ::
-    ::  check that adding size of tx will not cause block size to be exceeded
-    =/  new-size=size  (add size.tx-acc total-size.tx)
-    ?.  (lte new-size max-block-size)
-      ~|  "adding new transaction {<id.tx>} would exceed max block size"
-      !!
+    ?.  (validate:^tx tx new-page-number)
+      ~>  %slog.[0 leaf+"tx invalid"]  !!
     ::
     ::  process outputs
     =.  balance.tx-acc
       %+  roll  ~(val z-by outputs.tx)
       |=  [op=output bal=_balance.tx-acc]
       ?:  (~(has z-by bal) name.note.op)
-        ~|  "tx output already exists in balance"
+        ~>  %slog.[0 leaf+"tx output already exists in balance"]
         !!
       (~(put z-by bal) name.note.op note.op)
     ::
@@ -1895,8 +2153,9 @@
     =/  [tic=timelock-range tac=form]
       %+  roll  ~(val z-by inputs.tx)
       |=  [ip=input tic=timelock-range tac=_tx-acc]
-      ?.  =((some note.ip) (~(get z-by balance.tx-acc) name.note.ip))
-        ~|  "tx input does not exist in balance"  !!
+      ?.  =(`note.ip (~(get z-by balance.tx-acc) name.note.ip))
+        ~>  %slog.[0 leaf+"tx input does not exist in balance"]
+        !!
       =.  balance.tac  (~(del z-by balance.tac) name.note.ip)
       =.  fees.tac  (add fees.tac fee.spend.ip)
       =.  tic
@@ -1907,10 +2166,9 @@
       [tic tac]
     ::
     ?.  (check:timelock-range tic new-page-number)
-      ~|  "failed timelock check"  !!
+      ~>  %slog.[0 leaf+"failed timelock check"]  !!
     ::
     %_  tac
-      size  new-size
       txs   (~(put z-in txs.tac) tx)
     ==
   --

@@ -38,6 +38,8 @@
 ::
 :: generate-proof is the main body of the prover.
 ++  generate-proof
+  :: Disabled jet hint for now, under development.
+  :: ~/  %generate-proof
   |=  $:  header=noun-digest:tip5
           nonce=noun-digest:tip5
           pow-len=@
@@ -75,9 +77,6 @@
   =.  proof  (~(push proof-stream proof) [%heights heights])
   =/  pre=preprocess-0  prep.stark-config
   ::
-  ::  remove preprocess data for unused tables
-  =.  pre
-    (remove-unused-constraints:nock-common pre table-names override)
   =/  clc  ~(. calc heights cd.pre)
   =*  num-colinearity-tests=@  num-colinearity-tests:fri:clc
   =*  fri-domain-len=@  init-domain-len:fri:clc
@@ -120,10 +119,10 @@
   ::  check that the tables have correct num of ext cols. Comment this out for production.
   ::
   ::?:  %+  levy  (zip-up tables table-exts)
-  ::    |=  [table=table-dat ext=table-mary]
-  ::    !=(step.p.ext ext-width.p.table)
-  ::  ::~&  %widths-mismatch
-  ::  ~|("prove: mismatch between table ext widths and actual ext widths" !!)
+      ::|=  [table=table-dat ext=table-mary]
+      ::!=(step.p.ext ext-width.p.table)
+    ::~&  %widths-mismatch
+    ::~|("prove: mismatch between table ext widths and actual ext widths" !!)
   ::~&  %ext-cols
   ::
   ::  convert the ext columns to marys
@@ -149,11 +148,8 @@
     (make-challenge-map:chal challenges s f)
   ::
   ::  build mega-extension columns
-  =/  table-mega-exts
-    %+  turn  tables
-    |=  t=table-dat
-    ^-  table-mary
-    (mega-extend:q.t p.t (weld chals-rd1 chals-rd2) return)
+  =/  table-mega-exts=(list table-mary) 
+    (build-mega-extend tables challenges return)
   ::~&  %tables-built
   =.  tables
     %+  turn  (zip-up tables table-mega-exts)
@@ -163,12 +159,12 @@
     (weld-exts:tlib p.t mega-ext)
   ::
   ::  check that the tables have correct num of ext cols. Comment this out for production.
-  ::  ::~&  >>  %check-mega-ext-cols
+  ::~&  >>  %check-mega-ext-cols
   ::?:  %+  levy  (zip-up tables table-mega-exts)
-  ::    |=  [table=table-dat mext=table-mary]
-  ::    !=(step.p.mext mega-ext-width.p.table)
-  ::  ::~&  %widths-mismatch
-  ::  ~|("prove: mismatch between table ext widths and actual ext widths" !!)
+      ::|=  [table=table-dat mext=table-mary]
+      ::!=(step.p.mext mega-ext-width.p.table)
+    ::~&  %widths-mismatch
+    ::~|("prove: mismatch between table ext widths and actual ext widths" !!)
   ::
   ::  convert the mega-ext columns to marys
   ::
@@ -180,7 +176,6 @@
     [p.t (add width mega-ext-width.t)]
   =/  mega-ext=codeword-commitments
     (compute-codeword-commitments mega-ext-marys fri-domain-len width)
-  =.  proof  (~(push proof-stream proof) [%m-root h.q.merk-heap.mega-ext])
   ::
   ::  get terminal values for use in permutation/evaluation arguments
   =/  dyn-map=(map @ bpoly)
@@ -194,9 +189,8 @@
     %+  roll  (range (lent tables))
     |=  [i=@ acc=bpoly]
     (~(weld bop acc) (~(got by dyn-map) i))
-  ::
+  ::  send terminals to verifier
   =.  proof  (~(push proof-stream proof) terms+terminals)
-  ::
   ::  reseed the rng
   =.  rng  ~(prover-fiat-shamir proof-stream proof)
   ::
@@ -213,7 +207,7 @@
   ::    [challenges (~(got by dyn-map) i) r.t]
   ::~&  %passed-tests
   ::
-  =/  num-constraints=@
+  =/  num-extra-constraints=@
     %+  roll  (range num-tables)
     |=  [i=@ acc=@]
     =/  cs  (~(got by count-map.pre) i)
@@ -223,12 +217,8 @@
       row.cs
       transition.cs
       terminal.cs
+      extra.cs
     ==
-  ::
-  ::  compute weights used in linear combination of composition polynomial
-  =^  comp-weights=bpoly  rng
-    =^  belt-list  rng  (belts:rng (mul 2 num-constraints))
-    [(init-bpoly belt-list) rng]
   ::
   =/  total-cols=@
     %+  roll  tables
@@ -258,6 +248,7 @@
     |=  [bm=mary em=mary mem=mary]
     ^-  mary
     (~(weld ave bm) (~(weld ave em) mem))
+  ::
   =/  second-row-trace-polys=(list mary)
     %+  turn  transposed-tables
     |=  polys=mary
@@ -294,10 +285,93 @@
     |=  [i=@ polys=mary]
     (precompute-ntts polys max-height ntt-len)
   ::
+  ::
+  ::  compute extra composition poly
+  =/  omicrons-belt
+    %+  turn  tables
+    |=  [t=table-mary *]
+    ~(omicron quot t)
+  =/  omicrons-bpoly=bpoly  (init-bpoly omicrons-belt)
+  =/  omicrons-fpoly=fpoly
+    (init-fpoly (turn omicrons-belt lift))
+  =^  extra-comp-weights=bpoly  rng
+    =^  belt-list  rng  (belts:rng (mul 2 num-extra-constraints))
+    [(init-bpoly belt-list) rng]
+  =/  extra-composition-chals=(map @ bpoly)
+    %-  ~(gas by *(map @ bpoly))
+    =-  -<
+    %+  roll  (range num-tables)
+    |=  [i=@ acc=(list [@ bpoly]) num=@]
+    =/  cs  (~(got by count-map.pre) i)
+    =/  num-extra-constraints=@
+      ;:  add
+          boundary.cs
+          row.cs
+          transition.cs
+          terminal.cs
+          extra.cs
+      ==
+    :_  (add num (mul 2 num-extra-constraints))
+    [[i (~(swag bop extra-comp-weights) num (mul 2 num-extra-constraints))] acc]
+  ::~&  %computing-extra-composition-poly
+  =/  extra-composition-poly=bpoly
+    %-  compute-composition-poly
+    :*  omicrons-bpoly
+        heights
+        tworow-trace-polys-eval
+        constraint-map.pre
+        count-map.pre
+        extra-composition-chals
+        chal-map
+        dyn-map
+        %.y
+    ==
+  =.  proof
+    (~(push proof-stream proof) [%poly extra-composition-poly])
+  =.  rng  ~(prover-fiat-shamir proof-stream proof)
+  =^  extra-comp-eval-point  rng  $:felt:rng
+  ::
+  ::  compute extra trace evals
+  ::~&  %evaluating-trace-at-new-comp-eval-point
+  =/  extra-trace-evaluations=fpoly
+    %-  init-fpoly
+    %-  zing
+    %+  turn  tworow-trace-polys
+    |=  polys=mary
+    %+  turn  (range len.array.polys)
+    |=  i=@
+    =/  b=bpoly  (~(snag-as-bpoly ave polys) i)
+    (bpeval-lift b extra-comp-eval-point)
+  ::
+  =.  proof
+    (~(push proof-stream proof) [%evals extra-trace-evaluations])
+  ::
+  ::  send mega extension columns to verifier
+  =.  proof  (~(push proof-stream proof) [%m-root h.q.merk-heap.mega-ext])
+  ::  reseed the rng
+  =/  rng  ~(prover-fiat-shamir proof-stream proof)
+  ::
   ::  compute the Composition Polynomial
   ::  This polynomial composes the trace polynomials with the constraints, takes quotients
   ::  over the rows where the constraint should be zero, adjusts the degree so they all
   ::  have the same maximal degree, and combines them into one big random linear combination.
+  ::
+  ::  compute weights used in linear combination of composition polynomial
+  =/  num-constraints=@
+    %+  roll  (range num-tables)
+    |=  [i=@ acc=@]
+    =/  cs  (~(got by count-map.pre) i)
+    ;:  add
+      acc
+      boundary.cs
+      row.cs
+      transition.cs
+      terminal.cs
+    ==
+  =^  comp-weights=bpoly  rng
+    =^  belt-list  rng  (belts:rng (mul 2 num-constraints))
+    [(init-bpoly belt-list) rng]
+  ::
   =/  composition-chals=(map @ bpoly)
     %-  ~(gas by *(map @ bpoly))
     =-  -<
@@ -314,13 +388,6 @@
     :_  (add num (mul 2 num-constraints))
     [[i (~(swag bop comp-weights) num (mul 2 num-constraints))] acc]
   ::
-  =/  omicrons-belt
-    %+  turn  tables
-    |=  [t=table-mary *]
-    ~(omicron quot t)
-  =/  omicrons-bpoly=bpoly  (init-bpoly omicrons-belt)
-  =/  omicrons-fpoly=fpoly
-    (init-fpoly (turn omicrons-belt lift))
   ::~&  %computing-composition-poly
   =/  composition-poly=bpoly
     %-  compute-composition-poly
@@ -332,6 +399,7 @@
         composition-chals
         chal-map
         dyn-map
+        %.n
     ==
   ::
   ::  decompose composition polynomial into one polynomial for each degree of the
@@ -356,6 +424,9 @@
     (bp-build-merk-heap:merkle composition-codeword-array)
   =.  proof
     (~(push proof-stream proof) [%comp-m h.q.composition-merk num-composition-pieces])
+  ::
+  ::
+  ::
   ::
   ::  reseed the rng
   =.  rng  ~(prover-fiat-shamir proof-stream proof)
@@ -406,18 +477,20 @@
   =^  deep-weights=fpoly  rng
     =^  felt-list  rng
       %-  felts:rng
-      (add (mul 2 total-cols) max-constraint-degree)
+      (add (mul 4 total-cols) max-constraint-degree)
     [(init-fpoly felt-list) rng]
+  =/  all-evals  (~(weld fop trace-evaluations) extra-trace-evaluations)
   ::~&  %computing-deep-poly
   =/  deep-poly=fpoly
     %-  compute-deep
     :*  trace-polys
-        trace-evaluations
+        all-evals
         composition-pieces-fpoly
         composition-piece-evaluations
         deep-weights
         omicrons-fpoly
         deep-challenge
+        extra-comp-eval-point
     ==
   ::
   ::  create DEEP codeword and push to proof
@@ -473,7 +546,7 @@
     m-pathbf+[(tail elem) path.opening]
   ::
   ::~&  %finished-proof
-  [%& objects.proof ~ 0]
+  [%& %0 objects.proof ~ 0]
 ::
 ::
 ++  build-table-dats
@@ -504,4 +577,12 @@
       :-  name:static:common:memory-table
       funcs:memory-table
   ==
+++  build-mega-extend
+  ~/  %build-mega-extend
+  |=  [tables=(list table-dat) chals=(list belt) return=fock-return]
+  ^-  (list table-mary)
+  %+  turn  tables
+  |=  t=table-dat
+  ^-  table-mary
+  (mega-extend:q.t p.t chals return)
 --

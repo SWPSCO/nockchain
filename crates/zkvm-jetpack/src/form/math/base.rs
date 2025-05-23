@@ -90,3 +90,20 @@ pub fn bpow(mut a: u64, mut b: u64) -> u64 {
     }
     reduce((c as u128) * (a as u128))
 }
+
+#[inline(always)]
+pub fn bdiv(a: u64, b: u64) -> u64 {
+    bmul(a, binv(b))
+}
+
+#[inline(always)]
+pub fn binv(a: u64) -> u64 {
+    // Due to fermat's little theorem, a^(p-1) = 1 (mod p), so a^(p-2) = a^(-1) (mod p)
+    // bpow already checks based, so we skip it here
+    bpow(a, PRIME - 2)
+}
+
+#[test]
+fn test_binv() {
+    assert_eq!(bmul(binv(888), 888), 1);
+}

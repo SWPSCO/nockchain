@@ -3,18 +3,206 @@ use nockvm::jets::hot::{HotEntry, K_138};
 
 use crate::jets::base_jets::*;
 use crate::jets::bp_jets::*;
+use crate::jets::cheetah_jets::*;
 use crate::jets::crypto_jets::*;
+use crate::jets::fext_jets::*;
+use crate::jets::mary_jets::*;
 use crate::jets::tip5_jets::*;
+use crate::jets::verifier_jets::*;
 
 pub fn produce_prover_hot_state() -> Vec<HotEntry> {
     let mut jets: Vec<HotEntry> = Vec::new();
     jets.extend(BASE_FIELD_JETS);
     jets.extend(BASE_POLY_JETS);
+    jets.extend(CURVE_JETS);
     jets.extend(ZTD_JETS);
     jets.extend(KEYGEN_JETS);
+    jets.extend(XTRA_JETS);
+    jets.extend(EXTENSION_FIELD_JETS);
 
     jets
 }
+
+pub const XTRA_JETS: &[HotEntry] = &[
+    (
+        &[
+            K_138,
+            Left(b"one"),
+            Left(b"two"),
+            Left(b"tri"),
+            Left(b"qua"),
+            Left(b"pen"),
+            Left(b"zeke"),
+            Left(b"ave"),
+            Left(b"weld"),
+        ],
+        1,
+        mary_weld_jet,
+    ),
+    (
+        &[
+            K_138,
+            Left(b"one"),
+            Left(b"two"),
+            Left(b"tri"),
+            Left(b"qua"),
+            Left(b"pen"),
+            Left(b"zeke"),
+            Left(b"ave"),
+            Left(b"swag"),
+        ],
+        1,
+        mary_swag_jet,
+    ),
+    (
+        &[
+            K_138,
+            Left(b"one"),
+            Left(b"two"),
+            Left(b"tri"),
+            Left(b"qua"),
+            Left(b"pen"),
+            Left(b"zeke"),
+            Left(b"ext-field"),
+            Left(b"misc-lib"),
+            Left(b"proof-lib"),
+            Left(b"utils"),
+            Left(b"fri"),
+            Left(b"table-lib"),
+            Left(b"stark-core"),
+            Left(b"fock-core"),
+            Left(b"pow"),
+            Left(b"stark-engine"),
+            Left(b"stark-verifier"),
+            Left(b"evaluate-deep"),
+        ],
+        1,
+        evaluate_deep_jet,
+    ),
+    (
+        &[
+            K_138,
+            Left(b"one"),
+            Left(b"two"),
+            Left(b"tri"),
+            Left(b"qua"),
+            Left(b"pen"),
+            Left(b"zeke"),
+            Left(b"ave"),
+            Left(b"transpose"),
+        ],
+        1,
+        mary_transpose_jet,
+    ),
+];
+
+pub const EXTENSION_FIELD_JETS: &[HotEntry] = &[
+    (
+        &[
+            K_138,
+            Left(b"one"),
+            Left(b"two"),
+            Left(b"tri"),
+            Left(b"qua"),
+            Left(b"pen"),
+            Left(b"zeke"),
+            Left(b"ext-field"),
+            Left(b"fadd"),
+        ],
+        1,
+        fadd_jet,
+    ),
+    (
+        &[
+            K_138,
+            Left(b"one"),
+            Left(b"two"),
+            Left(b"tri"),
+            Left(b"qua"),
+            Left(b"pen"),
+            Left(b"zeke"),
+            Left(b"ext-field"),
+            Left(b"fsub"),
+        ],
+        1,
+        fsub_jet,
+    ),
+    (
+        &[
+            K_138,
+            Left(b"one"),
+            Left(b"two"),
+            Left(b"tri"),
+            Left(b"qua"),
+            Left(b"pen"),
+            Left(b"zeke"),
+            Left(b"ext-field"),
+            Left(b"fneg"),
+        ],
+        1,
+        fneg_jet,
+    ),
+    (
+        &[
+            K_138,
+            Left(b"one"),
+            Left(b"two"),
+            Left(b"tri"),
+            Left(b"qua"),
+            Left(b"pen"),
+            Left(b"zeke"),
+            Left(b"ext-field"),
+            Left(b"fmul"),
+        ],
+        1,
+        fmul_jet,
+    ),
+    (
+        &[
+            K_138,
+            Left(b"one"),
+            Left(b"two"),
+            Left(b"tri"),
+            Left(b"qua"),
+            Left(b"pen"),
+            Left(b"zeke"),
+            Left(b"ext-field"),
+            Left(b"finv"),
+        ],
+        1,
+        finv_jet,
+    ),
+    (
+        &[
+            K_138,
+            Left(b"one"),
+            Left(b"two"),
+            Left(b"tri"),
+            Left(b"qua"),
+            Left(b"pen"),
+            Left(b"zeke"),
+            Left(b"ext-field"),
+            Left(b"fdiv"),
+        ],
+        1,
+        fdiv_jet,
+    ),
+    (
+        &[
+            K_138,
+            Left(b"one"),
+            Left(b"two"),
+            Left(b"tri"),
+            Left(b"qua"),
+            Left(b"pen"),
+            Left(b"zeke"),
+            Left(b"ext-field"),
+            Left(b"fpow"),
+        ],
+        1,
+        fpow_jet,
+    ),
+];
 
 pub const BASE_FIELD_JETS: &[HotEntry] = &[
     (
@@ -247,4 +435,24 @@ pub const KEYGEN_JETS: &[HotEntry] = &[(
     ],
     1,
     argon2_jet,
+)];
+
+pub const CURVE_JETS: &[HotEntry] = &[(
+    &[
+        K_138,
+        Left(b"one"),
+        Left(b"two"),
+        Left(b"tri"),
+        Left(b"qua"),
+        Left(b"pen"),
+        Left(b"zeke"),
+        Left(b"ext-field"),
+        Left(b"misc-lib"),
+        Left(b"cheetah"),
+        Left(b"curve"),
+        Left(b"affine"),
+        Left(b"ch-scal"),
+    ],
+    1,
+    ch_scal_jet,
 )];

@@ -5,7 +5,7 @@ use crate::noun::slab::NounSlab;
 use either::Either::{self, Left, Right};
 use nockvm::noun::D;
 use nockvm_macros::tas;
-use tracing::debug;
+use tracing::{debug, error};
 
 pub enum OnePunchWire {
     Poke,
@@ -114,6 +114,12 @@ async fn handle_effect(
     // Split out root bindings so they don't get dropped early
     let root = unsafe { eff.root() };
     debug!("poke_once_driver: root: {:?}", root);
+
+    if root.is_atom() {
+        error!("No effects were returned from one-shot poke.");
+        return Err(NockAppError::PokeFailed);
+    }
+
     let effect_cell = root.as_cell().unwrap_or_else(|err| {
         panic!(
             "Panicked with {err:?} at {}:{} (git sha: {:?})",

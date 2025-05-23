@@ -1,5 +1,4 @@
 use crate::{CrownError, Result};
-use assert_no_alloc::permit_alloc;
 use either::Either::*;
 use nockvm::interpreter::Slogger;
 use nockvm::jets::list::util::lent;
@@ -13,38 +12,36 @@ pub struct CrownSlogger;
 
 impl Slogger for CrownSlogger {
     fn slog(&mut self, stack: &mut NockStack, pri: u64, tank: Noun) {
-        permit_alloc(|| {
-            let mut buffer = Vec::new();
-            match slog_tank(stack, tank, &mut buffer) {
-                Ok(_) => {
-                    let message = String::from_utf8_lossy(&buffer)
-                        .trim_matches('\0')
-                        .replace('\n', " ")
-                        .to_string();
-                    if !message.is_empty() {
-                        if cfg!(feature = "slog-tracing") {
-                            match pri {
-                                0 => info!(target: "slogger", "{}", message),
-                                1 => warn!(target: "slogger", "{}", message),
-                                2 => debug!(target: "slogger", "{}", message),
-                                3 => trace!(target: "slogger", "{}", message),
-                                _ => info!(target: "slogger", "{}", message),
-                            }
-                        } else {
-                            let _ = writeln!(stderr(), "{}", message);
-                        }
-                    }
-                }
-                Err(e) => {
-                    let err_msg = format!("Failed to slog tank: {}", e);
+        let mut buffer = Vec::new();
+        match slog_tank(stack, tank, &mut buffer) {
+            Ok(_) => {
+                let message = String::from_utf8_lossy(&buffer)
+                    .trim_matches('\0')
+                    .replace('\n', " ")
+                    .to_string();
+                if !message.is_empty() {
                     if cfg!(feature = "slog-tracing") {
-                        error!(target: "slogger", "{}", err_msg);
+                        match pri {
+                            0 => info!(target: "slogger", "{}", message),
+                            1 => warn!(target: "slogger", "{}", message),
+                            2 => debug!(target: "slogger", "{}", message),
+                            3 => trace!(target: "slogger", "{}", message),
+                            _ => info!(target: "slogger", "{}", message),
+                        }
                     } else {
-                        let _ = writeln!(stderr(), "{}", err_msg);
+                        let _ = writeln!(stderr(), "{}", message);
                     }
                 }
             }
-        });
+            Err(e) => {
+                let err_msg = format!("Failed to slog tank: {}", e);
+                if cfg!(feature = "slog-tracing") {
+                    error!(target: "slogger", "{}", err_msg);
+                } else {
+                    let _ = writeln!(stderr(), "{}", err_msg);
+                }
+            }
+        }
     }
 
     fn flog(&mut self, _stack: &mut NockStack, cord: Noun) {
@@ -56,31 +53,29 @@ impl Slogger for CrownSlogger {
                 option_env!("GIT_SHA")
             )
         });
-        permit_alloc(|| {
-            let mut buffer = Vec::new();
-            match slog_cord(cord_atom, &mut buffer) {
-                Ok(_) => {
-                    let message = String::from_utf8_lossy(&buffer)
-                        .trim_matches('\0')
-                        .to_string();
-                    if !message.is_empty() {
-                        if cfg!(feature = "slog-tracing") {
-                            info!(target: "slogger", "{}", message);
-                        } else {
-                            let _ = writeln!(stderr(), "{}", message);
-                        }
-                    }
-                }
-                Err(e) => {
-                    let err_msg = format!("Failed to flog cord: {}", e);
+        let mut buffer = Vec::new();
+        match slog_cord(cord_atom, &mut buffer) {
+            Ok(_) => {
+                let message = String::from_utf8_lossy(&buffer)
+                    .trim_matches('\0')
+                    .to_string();
+                if !message.is_empty() {
                     if cfg!(feature = "slog-tracing") {
-                        error!(target: "slogger", "{}", err_msg);
+                        info!(target: "slogger", "{}", message);
                     } else {
-                        let _ = writeln!(stderr(), "{}", err_msg);
+                        let _ = writeln!(stderr(), "{}", message);
                     }
                 }
             }
-        });
+            Err(e) => {
+                let err_msg = format!("Failed to flog cord: {}", e);
+                if cfg!(feature = "slog-tracing") {
+                    error!(target: "slogger", "{}", err_msg);
+                } else {
+                    let _ = writeln!(stderr(), "{}", err_msg);
+                }
+            }
+        }
     }
 }
 

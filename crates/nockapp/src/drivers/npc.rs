@@ -289,6 +289,7 @@ async fn write_message(
 #[cfg(test)]
 mod tests {
     use crate::nockapp::driver::{IOAction, NockAppHandle};
+    use crate::NockAppExit;
 
     use super::*;
     use std::io::{Read, Write};
@@ -512,8 +513,9 @@ mod tests {
 
         // Create channels for driver communication
         let (tx_io, mut rx_io) = mpsc::channel(32);
-        let (tx_effect, rx_effect) = broadcast::channel(32);
-        let (tx_exit, _) = mpsc::channel(1);
+        let (tx_effect_chan, rx_effect) = broadcast::channel(32);
+        let tx_effect = Arc::new(tx_effect_chan);
+        let (tx_exit, _) = NockAppExit::new();
 
         let handle = NockAppHandle {
             io_sender: tx_io,

@@ -19,6 +19,6 @@
     (prove:np block-commitment nonce length ~)
   ?>  ?=(%& -.prove-result)
   =/  =proof:sp  p.prove-result
-  =/  proof-hash=tip5-hash-atom  (digest-to-atom:tip5 (hash-proof proof))
+  =/  proof-hash=tip5-hash-atom  (proof-to-pow proof)
   [proof proof-hash]
 --

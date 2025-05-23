@@ -22,12 +22,13 @@
     (~(gas z-in *(z-set lock:t)) pks)
   m
 ::
-::  +set-shares set .shares
+::  +set-shares validate and set .shares
 ++  set-shares
   |=  shr=(list [lock:t @])
-  =.  shares.m
-    (~(gas z-by *(z-map lock:t @)) shr)
-  m
+  =/  s=shares:t  (~(gas z-by *(z-map lock:t @)) shr)
+  ?.  (validate:shares:t s)
+    ~|('invalid shares' !!)
+  m(shares s)
 ::
 +|  %candidate-block
 ++  set-pow
@@ -66,7 +67,8 @@
 ++  heard-new-tx
   |=  raw=raw-tx:t
   ^-  mining-state:dk
-  ?.  mining.m  m  :: if we're not mining, do nothing
+  ~>  %slog.[3 'miner: heard-new-tx']
+  ~>  %slog.[3 (cat 3 'miner: heard-new-tx: raw-tx: ' (to-b58:hash:t id.raw))]
   ::
   ::  if the mining pubkey is not set, do nothing
   ?:  =(*(z-set lock:t) pubkeys.m)  m
@@ -120,7 +122,6 @@
 ++  heard-new-block
   |=  [c=consensus-state:dk p=pending-state:dk now=@da]
   ^-  mining-state:dk
-  ?.  mining.m  m  ::  if we're not mining, do nothing
   ::
   ::  do a sanity check that we have a heaviest block, and that the heaviest block
   ::  is not the parent of our current candidate block
@@ -143,7 +144,7 @@
     (to-b58:hash:t u.heaviest-block.c)
   ~>  %slog.[0 [%leaf print-var]]
   =.  candidate-block.m
-    %-  new:page:t
+    %-  new-candidate:page:t
     :*  (to-page:local-page:t (~(got z-by blocks.c) u.heaviest-block.c))
         now
         (~(got z-by targets.c) u.heaviest-block.c)

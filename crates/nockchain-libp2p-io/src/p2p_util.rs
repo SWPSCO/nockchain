@@ -1,16 +1,25 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 
 use libp2p::PeerId;
 use nockapp::noun::slab::NounSlab;
-use nockapp::NockAppError;
-use nockapp::{AtomExt, NounExt};
+use nockapp::{AtomExt, NockAppError, NounExt};
 use nockvm::noun::Noun;
 use nockvm_macros::tas;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::metrics::NockchainP2PMetrics;
 use crate::tip5_util::tip5_hash_to_base58;
+
+// The warn logs are specifically constructed for fail2ban
+// Changing these breaks the integration with the fail2ban regex
+pub fn log_fail2ban_ipv4(peer_id: &PeerId, ip: &Ipv4Addr) {
+    warn!("fail2ban: Blocked peer {peer_id} with IPv4 address: {ip}");
+}
+pub fn log_fail2ban_ipv6(peer_id: &PeerId, ip: &Ipv6Addr) {
+    warn!("fail2ban: Blocked peer {peer_id} with IPv6 address: {ip}");
+}
 
 pub trait PeerIdExt {
     fn from_noun(noun: Noun) -> Result<PeerId, NockAppError>;
@@ -585,5 +594,18 @@ mod tests {
         // Verify the other block ID is also no longer tracked
         // (since we removed the peers entirely)
         assert!(!tracker.is_tracking_block_id(other_block_id));
+    }
+
+    #[test]
+    fn test_fail2ban_logging() {
+        let peer_id: PeerId = libp2p::PeerId::from_bytes(&[0; 2]).unwrap();
+        assert_eq!("11", peer_id.to_base58());
+        let ipv4_addr = Ipv4Addr::new(192, 168, 1, 1);
+        let ipv6_addr = Ipv6Addr::new(0x2001, 0x0db8, 0x0db8, 0x0db8, 0x0db8, 0x0db8, 0x0db8, 0x1);
+        // Check the display representation of the IP addresses
+        let ipv4_display = format!("{}", ipv4_addr);
+        let ipv6_display = format!("{}", ipv6_addr);
+        assert_eq!(ipv4_display, "192.168.1.1");
+        assert_eq!(ipv6_display, "2001:db8:db8:db8:db8:db8:db8:1");
     }
 }

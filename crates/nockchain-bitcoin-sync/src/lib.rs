@@ -23,7 +23,7 @@ const TEST_GENESIS_BLOCK_HASH: &str =
     "00000000e6c3c75c18bdb06cc39d616d636fca0fc967c29ebf8225ddf7f2fe48";
 const TEST_GENESIS_BLOCK_HEIGHT: u64 = 2048;
 
-const GENESIS_SEAL_MSG: &str = "8K5RhhjnZQChv7cnhEiafkaxBReVhaySKEZatFEg7cagoK96kUo92sz";
+const GENESIS_SEAL_MSG: &str = "2c8Ltbg44dPkEGcNPupcVAtDgD87753M9pG2fg8yC2mTEqg5qAFvvbT";
 
 /// Helper function to get the test block used for fake genesis blocks
 fn get_test_block() -> BlockRef {
@@ -197,7 +197,7 @@ pub fn bitcoin_watcher_driver(
                     let hash_tuple = block_hash_to_belts(&mut poke_slab, &block.hash);
                     let poke_noun = T(
                         &mut poke_slab,
-                        &[D(tas!(b"command")), D(tas!(b"btc-data")), hash_tuple],
+                        &[D(tas!(b"command")), D(tas!(b"btc-data")), D(0), hash_tuple],
                     );
                     poke_slab.set_root(poke_noun);
 
@@ -241,7 +241,7 @@ pub fn bitcoin_watcher_driver(
                     let hash_tuple = block_hash_to_belts(&mut poke_slab, &test_block.hash);
                     let poke_noun = T(
                         &mut poke_slab,
-                        &[D(tas!(b"command")), D(tas!(b"btc-data")), hash_tuple],
+                        &[D(tas!(b"command")), D(tas!(b"btc-data")), D(0), hash_tuple],
                     );
                     poke_slab.set_root(poke_noun);
 
@@ -375,7 +375,7 @@ impl BitcoinWatcher {
                     );
 
                     // Check if the block has enough confirmations
-                    if block_info.confirmations >= 3 {
+                    if block_info.confirmations >= 2 {
                         debug!(
                             "Block has sufficient confirmations ({}), returning",
                             block_info.confirmations

@@ -76,9 +76,6 @@
   |=  keyc
   +>(prv key, pub (point key a-gen:curve), cad cai)
 ::
-::  TODO: why is the input base58 encoded? will it be?
-::  TODO: assert that key is in G
-::  pt is not inf (id), if you raise it by G-order it should give you inf
 ++  from-public
   |=  keyc
   +>(pub (de-a-pt key), cad cai)

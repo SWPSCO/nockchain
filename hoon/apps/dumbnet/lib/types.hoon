@@ -1,6 +1,9 @@
 /=  *   /common/zoon
+/=  zeke  /common/zeke
 /=  w   /common/wrapper
 /=  dt  /common/tx-engine
+/=  sp  /common/stark/prover
+/=  miner-kernel  /apps/dumbnet/miner
 |%
 +|  %state
 +$  kernel-state
@@ -34,7 +37,7 @@
     ::
     ::  Bitcoin block hash for genesis block
     ::>)  TODO: change face to btc-hash?
-      btc-data=(unit btc-hash:dt)
+      btc-data=(unit (unit btc-hash:dt))
       =genesis-seal:dt  ::  desired seal for genesis block
   ==
 ::
@@ -73,6 +76,7 @@
       shares=(z-map lock:dt @)         ::  shares of coinbase+fees among locks
       candidate-block=page:dt            ::  the next block we will attempt to mine.
       candidate-acc=tx-acc:dt           ::  accumulator for txs in candidate block
+      next-nonce=noun-digest:tip5:zeke  :: nonce being mined
   ==
 ::
 +$  init-phase  $~(%.y ?)
@@ -87,7 +91,7 @@
 ::
 +$  command
   $+  command
-  $%  [%mine p=[@ @ @ @ @]]  ::  mine at nonce .p
+  $%  [%pow prf=proof:sp dig=tip5-hash-atom:zeke bc=digest:tip5:zeke nonce=noun-digest:tip5:zeke] :: check if a proof of work is good for the next block, issue a block if so
       [%set-mining-key p=@t]  ::  set $lock for coinbase in mined blocks
       [%set-mining-key-advanced p=(list [share=@ m=@ keys=(list @t)])]  :: multisig and/or split coinbases
       [%enable-mining p=?]  ::  switch for generating candidate blocks for mining
@@ -96,7 +100,7 @@
       [%genesis p=[=btc-hash:dt block-height=@ message=cord]]  ::  emit genesis block with this template
       :: set expected btc height and msg hash of genesis block
       [%set-genesis-seal p=[height=page-number:dt msg-hash=@t]]
-      [%btc-data p=btc-hash:dt]  ::  data from BTC RPC node
+      [%btc-data p=(unit btc-hash:dt)]  ::  data from BTC RPC node
       test-command
   ==
 ::
@@ -115,7 +119,7 @@
       %born
   ==
 ::  commands that can only be performed if init-phase is %.n
-+$  non-init-command  ?(%timer)
++$  non-init-command  ?(%timer %pow)
 ::
 +$  fact
   $+  fact
@@ -133,8 +137,10 @@
       [%request p=request]  :: request specific tx or block
       [%track p=track]  :: runtime tracking of blocks for %liar-block-id effect
       [%seen p=seen]    ::  seen so don't reprocess
+      [%mine length=@ block-commitment=noun-digest:tip5:zeke nonce=noun-digest:tip5:zeke]
       lie
       span-effect
+      [%exit code=@]
   ==
 ::
 +$  seen

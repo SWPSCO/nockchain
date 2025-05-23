@@ -8,7 +8,7 @@ pub use bytes::ToBytes;
 use either::Either;
 pub use error::{CrownError, Result};
 use nockvm::hamt::Hamt;
-use nockvm::interpreter::{self, Context};
+use nockvm::interpreter::{self, Context, NockCancelToken};
 use nockvm::jets::cold::Cold;
 use nockvm::jets::hot::{Hot, HotEntry};
 use nockvm::jets::warm::Warm;
@@ -19,6 +19,8 @@ use nockvm::trace::TraceInfo;
 use slogger::CrownSlogger;
 use std::ptr::copy_nonoverlapping;
 use std::slice::from_raw_parts_mut;
+use std::sync::atomic::AtomicIsize;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 // urbit @da timestamp
@@ -32,7 +34,10 @@ const S1: u128 = 18446744073709551616;
 pub const NOCK_STACK_1KB: usize = 1 << 7;
 
 // nock stack size
-pub const NOCK_STACK_SIZE: usize = (NOCK_STACK_1KB << 10 << 10) * 8; // 2GB
+pub const NOCK_STACK_SIZE: usize = (NOCK_STACK_1KB << 10 << 10) * 8; // 8GB
+
+// HUGE nock stack size
+pub const NOCK_STACK_SIZE_HUGE: usize = (NOCK_STACK_1KB << 10 << 10) * 128; // 32GB
 
 /**
  *   ::  +from-unix: unix seconds to @da
@@ -148,6 +153,7 @@ pub fn create_context(
     let hot = Hot::init(&mut stack, hot_state);
     let warm = Warm::init(&mut stack, &mut cold, &hot);
     let slogger = Box::pin(CrownSlogger {});
+    let cancel = Arc::new(AtomicIsize::new(NockCancelToken::RUNNING_IDLE));
 
     interpreter::Context {
         stack,
@@ -158,5 +164,6 @@ pub fn create_context(
         cache,
         scry_stack: D(0),
         trace_info,
+        running_status: cancel,
     }
 }

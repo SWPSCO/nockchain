@@ -1,3 +1,5 @@
+pub mod mining;
+
 use std::error::Error;
 use std::fs;
 use std::path::Path;
@@ -6,8 +8,10 @@ use clap::{arg, command, ArgAction, Parser};
 use libp2p::identity::Keypair;
 use libp2p::multiaddr::Multiaddr;
 use libp2p::{allow_block_list, connection_limits, memory_connection_limits, PeerId};
+use nockapp::driver::Operation;
 use nockapp::kernel::boot;
-use nockapp::NockApp;
+use nockapp::wire::Wire;
+use nockapp::{one_punch_driver, NockApp, NounExt};
 use nockchain_bitcoin_sync::{bitcoin_watcher_driver, BitcoinRPCConnection, GenesisNodeType};
 use nockchain_libp2p_io::p2p::{
     MAX_ESTABLISHED_CONNECTIONS, MAX_ESTABLISHED_CONNECTIONS_PER_PEER,
@@ -22,11 +26,12 @@ use std::path::PathBuf;
 use clap::value_parser;
 use colors::*;
 use nockapp::noun::slab::NounSlab;
-use nockchain_libp2p_io::nc::MiningKeyConfig;
 use nockvm::jets::hot::HotEntry;
 use nockvm::noun::{D, T};
 use nockvm_macros::tas;
 use tracing::{debug, info, instrument};
+
+use crate::mining::MiningKeyConfig;
 
 /// Module for handling driver initialization signals
 pub mod driver_init {
@@ -149,10 +154,7 @@ const TESTNET_BACKBONE_NODES: &[&str] = &[];
 // TODO: feature flag testnet/realnet
 /** Backbone nodes for our realnet */
 #[allow(dead_code)]
-const REALNET_BACKBONE_NODES: &[&str] = &[];
-
-/** List of backbone nodes baked into the executable: we'll try to join these unconditionally */
-const BACKBONE_NODES: &[&str] = TESTNET_BACKBONE_NODES;
+const REALNET_BACKBONE_NODES: &[&str] = &["/dnsaddr/nockchain-backbone.zorp.io"];
 
 /** How often we should affirmatively ask other nodes for their heaviest chain */
 const CHAIN_INTERVAL_SECS: u64 = 20;
@@ -160,7 +162,7 @@ const CHAIN_INTERVAL_SECS: u64 = 20;
 /// The height of the bitcoin block that we want to sync our genesis block to
 /// Currently, this is the height of an existing block for testing. It will be
 /// switched to a future block for launch.
-const GENESIS_HEIGHT: u64 = 892723;
+const GENESIS_HEIGHT: u64 = 897767;
 
 /// Command line arguments
 #[derive(Parser, Debug, Clone)]
@@ -243,6 +245,12 @@ pub struct NockchainCli {
 
 impl NockchainCli {
     pub fn validate(&self) -> Result<(), String> {
+        if self.mine && !(self.mining_pubkey.is_some() || self.mining_key_adv.is_some()) {
+            return Err(
+                "Cannot specify mine without either mining_pubkey or mining_key_adv".to_string(),
+            );
+        }
+
         if self.mining_pubkey.is_some() && self.mining_key_adv.is_some() {
             return Err(
                 "Cannot specify both mining_pubkey and mining_key_adv at the same time".to_string(),
@@ -333,6 +341,11 @@ pub fn load_keypair(keypair_path: &Path, force_new: bool) -> Result<Keypair, Box
         let keypair_bytes = std::fs::read(keypair_path)?;
         let keypair = libp2p::identity::Keypair::from_protobuf_encoding(&keypair_bytes[..])?;
         let peer_id = keypair.public().to_peer_id();
+        let pubkey_path = keypair_path.with_extension(PEER_ID_FILE_EXTENSION);
+        if !pubkey_path.exists() {
+            info!("Writing pubkey to {pubkey_path:?}");
+            std::fs::write(pubkey_path, peer_id.to_base58())?;
+        }
         info!("Loaded identity as peer {peer_id}");
         Ok(keypair)
     } else {
@@ -445,7 +458,13 @@ pub async fn init_with_kernel(
         } else { c.max_system_memory_fraction.map(memory_connection_limits::Behaviour::with_max_percentage) }
     });
 
-    let backbone_peers = BACKBONE_NODES
+    let default_backbone_peers = if cli.as_ref().map(|c| c.fakenet).unwrap_or(false) {
+        TESTNET_BACKBONE_NODES
+    } else {
+        REALNET_BACKBONE_NODES
+    };
+
+    let backbone_peers = default_backbone_peers
         .iter()
         .map(|multiaddr_str| {
             multiaddr_str
@@ -484,6 +503,7 @@ pub async fn init_with_kernel(
     let mut driver_signals = driver_init::DriverInitSignals::new();
 
     // Register drivers that need initialization signals
+    let mining_init_tx = driver_signals.register_driver("mining");
     let libp2p_init_tx = driver_signals.register_driver("libp2p");
     let watcher_init_tx = driver_signals.register_driver("bitcoin_watcher");
 
@@ -521,7 +541,39 @@ pub async fn init_with_kernel(
         let watcher_driver =
             bitcoin_watcher_driver(Some(connection), node_type, message, Some(watcher_init_tx));
         nockapp.add_io_driver(watcher_driver).await;
+    } else {
+        // Realnet with no BTC node
+        let mut poke_slab = NounSlab::new();
+        let poke_noun = T(
+            &mut poke_slab,
+            &[D(tas!(b"command")), D(tas!(b"btc-data")), D(0)],
+        );
+        poke_slab.set_root(poke_noun);
+        nockapp
+            .poke(nockapp::wire::SystemWire.to_wire(), poke_slab)
+            .await
+            .expect("Failed to poke for no BTC hash");
     }
+
+    let mining_config = cli.as_ref().and_then(|c| {
+        if let Some(pubkey) = &c.mining_pubkey {
+            Some(vec![MiningKeyConfig {
+                share: 1,
+                m: 1,
+                keys: vec![pubkey.clone()],
+            }])
+        } else if let Some(mining_key_adv) = &c.mining_key_adv {
+            Some(mining_key_adv.clone())
+        } else {
+            None
+        }
+    });
+
+    let mine = cli.as_ref().map_or(false, |c| c.mine);
+
+    let mining_driver =
+        crate::mining::create_mining_driver(mining_config, mine, Some(mining_init_tx));
+    nockapp.add_io_driver(mining_driver).await;
 
     let libp2p_driver = nockchain_libp2p_io::nc::make_libp2p_driver(
         keypair,
@@ -531,17 +583,6 @@ pub async fn init_with_kernel(
         memory_limits,
         &peer_multiaddrs,
         equix_builder,
-        cli.as_ref().and_then(|c| {
-            if let Some(pubkey) = &c.mining_pubkey {
-                Some(vec![nockchain_libp2p_io::nc::MiningKeyConfig {
-                    share: 1,
-                    m: 1,
-                    keys: vec![pubkey.clone()],
-                }])
-            } else {
-                c.mining_key_adv.clone()
-            }
-        }),
         Some(libp2p_init_tx),
     );
     nockapp.add_io_driver(libp2p_driver).await;
@@ -586,6 +627,8 @@ pub async fn init_with_kernel(
     nockapp
         .add_io_driver(nockapp::timer_driver(CHAIN_INTERVAL_SECS, timer_slab))
         .await;
+
+    nockapp.add_io_driver(nockapp::exit_driver()).await;
 
     Ok(nockapp)
 }

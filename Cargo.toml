@@ -7,7 +7,6 @@ members = [
     "crates/nockchain-bitcoin-sync",
     "crates/nockchain-libp2p-io",
     "crates/nockchain",
-    "crates/nockvm/rust/assert_no_alloc",
     "crates/nockvm/rust/ibig",
     "crates/nockvm/rust/murmur3",
     "crates/nockvm/rust/nockvm_macros",
@@ -22,9 +21,6 @@ resolver = "2"
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-
-[workspace.dependencies.assert_no_alloc]
-path = "crates/nockvm/rust/assert_no_alloc"
 
 [workspace.dependencies.hoonc]
 path = "crates/hoonc"
@@ -69,6 +65,7 @@ libc = "0.2.171"
 memmap2 = "^0.9.5"
 num-derive = "0.4.2"
 signal-hook = "0.3"
+signal-hook-tokio = "0.3.1"
 static_assertions = "1.1.0"
 
 ## Sword crypto dependencies
@@ -143,7 +140,8 @@ hex-literal = "1.0.0"
 hickory-resolver = { version = "0.25.0-alpha.4", features = ["system-config"] }
 hickory-proto = "0.25.0-alpha.4"
 image = "0.24.7"
-libp2p = "0.55.0"
+# libp2p = "0.55.0"
+libp2p = { git = "https://github.com/libp2p/rust-libp2p.git", rev = "da0017ee887a868e231ed78c7de892779c17800d" }
 qrcode = "0.13"
 quickcheck = "1.0.3"
 quickcheck_macros = "1.0"

@@ -28,12 +28,13 @@
   ++  compute-constraint-degree
     |=  funcs=verifier-funcs:z
     ^-  constraint-degrees:z
-    =-  [(snag 0 -) (snag 1 -) (snag 2 -) (snag 3 -)]
+    =-  [(snag 0 -) (snag 1 -) (snag 2 -) (snag 3 -) (snag 4 -)]
     %+  turn
       :~  (unlabel-constraints:constraint-util:z boundary-constraints:funcs)
           (unlabel-constraints:constraint-util:z row-constraints:funcs)
           (unlabel-constraints:constraint-util:z transition-constraints:funcs)
           (unlabel-constraints:constraint-util:z terminal-constraints:funcs)
+          (unlabel-constraints:constraint-util:z extra-constraints:funcs)
       ==
     |=  l=(list mp-ultra:z)
     %+  roll
@@ -55,6 +56,7 @@
         (build-constraint-data row-constraints:funcs)
         (build-constraint-data transition-constraints:funcs)
         (build-constraint-data terminal-constraints:funcs)
+        (build-constraint-data extra-constraints:funcs)
     ==
     ::
     ++  build-constraint-data
@@ -78,6 +80,7 @@
         (count (unlabel-constraints:constraint-util:z row-constraints:funcs))
         (count (unlabel-constraints:constraint-util:z transition-constraints:funcs))
         (count (unlabel-constraints:constraint-util:z terminal-constraints:funcs))
+        (count (unlabel-constraints:constraint-util:z extra-constraints:funcs))
     ==
     ::
     ++  count
@@ -92,4 +95,4 @@
       ==
     --
   --  :: |^
---  :: %pre
+--

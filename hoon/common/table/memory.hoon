@@ -49,6 +49,7 @@
     %+  pelt-col  %kvsf  ::  key-value flags
     %+  pelt-col  %decode-mset
     %+  pelt-col  %op0-mset
+    %+  pelt-col  %data-k
     ~
   ++  variables
     ^-  (map col-name mp-mega)

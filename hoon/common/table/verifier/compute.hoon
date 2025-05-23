@@ -148,6 +148,12 @@
       =/  d-chal=mp-pelt    (r %d)
       =/  e=mp-pelt    (r %e)
       =/  f=mp-pelt    (r %f)
+      =/  j=mp-pelt    (r %j)
+      =/  k=mp-pelt    (r %k)
+      =/  l=mp-pelt    (r %l)
+      =/  m=mp-pelt    (r %m)
+      =/  n=mp-pelt    (r %n)
+      =/  o=mp-pelt    (r %o)
       ::
       %-  ~(gas by *(map col-name mp-ultra))
       ::
@@ -170,25 +176,25 @@
         %+  mpsub-pelt  (w %stack-kv)
         %+  mpmul-pelt  z
         ;:  mpadd-pelt
-          %+  mpmul-pelt  d-chal
+          %+  mpmul-pelt  m
           ;:  mpadd-pelt
-            (mpmul-pelt a (w %s-size))
-            (mpmul-pelt b (w %s-dyck))
-            (mpmul-pelt c (w %s-leaf))
+            (mpmul-pelt j (w %s-size))
+            (mpmul-pelt k (w %s-dyck))
+            (mpmul-pelt l (w %s-leaf))
           ==
         ::
-          %+  mpmul-pelt  e
+          %+  mpmul-pelt  n
           ;:  mpadd-pelt
-            (mpmul-pelt a (w %f-size))
-            (mpmul-pelt b (w %f-dyck))
-            (mpmul-pelt c (w %f-leaf))
+            (mpmul-pelt j (w %f-size))
+            (mpmul-pelt k (w %f-dyck))
+            (mpmul-pelt l (w %f-leaf))
           ==
         ::
-          %+  mpmul-pelt  f
+          %+  mpmul-pelt  o
           ;:  mpadd-pelt
-            (mpmul-pelt a (w %e-size))
-            (mpmul-pelt b (w %e-dyck))
-            (mpmul-pelt c (w %e-leaf))
+            (mpmul-pelt j (w %e-size))
+            (mpmul-pelt k (w %e-dyck))
+            (mpmul-pelt l (w %e-leaf))
           ==
         ==
       ::
@@ -1065,97 +1071,97 @@
       :-  :-  %stack-update
         =/  program
           ;:  mpadd-pelt
-            %+  mpmul-pelt  d
+            %+  mpmul-pelt  m
             ;:  mpadd-pelt
-              (mpmul-pelt a (w %s-size))
-              (mpmul-pelt b (w %s-dyck))
-              (mpmul-pelt c (w %s-leaf))
+              (mpmul-pelt j (w %s-size))
+              (mpmul-pelt k (w %s-dyck))
+              (mpmul-pelt l (w %s-leaf))
             ==
           ::
-            %+  mpmul-pelt  e
+            %+  mpmul-pelt  n
             ;:  mpadd-pelt
-              (mpmul-pelt a (w %f-size))
-              (mpmul-pelt b (w %f-dyck))
-              (mpmul-pelt c (w %f-leaf))
+              (mpmul-pelt j (w %f-size))
+              (mpmul-pelt k (w %f-dyck))
+              (mpmul-pelt l (w %f-leaf))
             ==
           ::
-            %+  mpmul-pelt  f
+            %+  mpmul-pelt  o
             ;:  mpadd-pelt
-              (mpmul-pelt a (w %e-size))
-              (mpmul-pelt b (w %e-dyck))
-              (mpmul-pelt c (w %e-leaf))
+              (mpmul-pelt j (w %e-size))
+              (mpmul-pelt k (w %e-dyck))
+              (mpmul-pelt l (w %e-leaf))
             ==
           ==
         ::
         =/  sp1
           ;:  mpadd-pelt
-            %+  mpmul-pelt  d
+            %+  mpmul-pelt  m
             ;:  mpadd-pelt
-              (mpmul-pelt a (w %sf1-s-size))
-              (mpmul-pelt b (w %sf1-s-dyck))
-              (mpmul-pelt c (w %sf1-s-leaf))
+              (mpmul-pelt j (w %sf1-s-size))
+              (mpmul-pelt k (w %sf1-s-dyck))
+              (mpmul-pelt l (w %sf1-s-leaf))
             ==
           ::
-            %+  mpmul-pelt  e
+            %+  mpmul-pelt  n
             ;:  mpadd-pelt
-              (mpmul-pelt a (w %sf1-f-size))
-              (mpmul-pelt b (w %sf1-f-dyck))
-              (mpmul-pelt c (w %sf1-f-leaf))
+              (mpmul-pelt j (w %sf1-f-size))
+              (mpmul-pelt k (w %sf1-f-dyck))
+              (mpmul-pelt l (w %sf1-f-leaf))
             ==
           ::
-            %+  mpmul-pelt  f
+            %+  mpmul-pelt  o
             ;:  mpadd-pelt
-              (mpmul-pelt a (w %sf1-e-size))
-              (mpmul-pelt b (w %sf1-e-dyck))
-              (mpmul-pelt c (w %sf1-e-leaf))
+              (mpmul-pelt j (w %sf1-e-size))
+              (mpmul-pelt k (w %sf1-e-dyck))
+              (mpmul-pelt l (w %sf1-e-leaf))
             ==
           ==
         ::
         =/  sp2
           ;:  mpadd-pelt
-            %+  mpmul-pelt  d
+            %+  mpmul-pelt  m
             ;:  mpadd-pelt
-              (mpmul-pelt a (w %sf2-s-size))
-              (mpmul-pelt b (w %sf2-s-dyck))
-              (mpmul-pelt c (w %sf2-s-leaf))
+              (mpmul-pelt j (w %sf2-s-size))
+              (mpmul-pelt k (w %sf2-s-dyck))
+              (mpmul-pelt l (w %sf2-s-leaf))
             ==
           ::
-            %+  mpmul-pelt  e
+            %+  mpmul-pelt  n
             ;:  mpadd-pelt
-              (mpmul-pelt a (w %sf2-f-size))
-              (mpmul-pelt b (w %sf2-f-dyck))
-              (mpmul-pelt c (w %sf2-f-leaf))
+              (mpmul-pelt j (w %sf2-f-size))
+              (mpmul-pelt k (w %sf2-f-dyck))
+              (mpmul-pelt l (w %sf2-f-leaf))
             ==
           ::
-            %+  mpmul-pelt  f
+            %+  mpmul-pelt  o
             ;:  mpadd-pelt
-              (mpmul-pelt a (w %sf2-e-size))
-              (mpmul-pelt b (w %sf2-e-dyck))
-              (mpmul-pelt c (w %sf2-e-leaf))
+              (mpmul-pelt j (w %sf2-e-size))
+              (mpmul-pelt k (w %sf2-e-dyck))
+              (mpmul-pelt l (w %sf2-e-leaf))
             ==
           ==
         ::
         =/  sp3
           ;:  mpadd-pelt
-            %+  mpmul-pelt  d
+            %+  mpmul-pelt  m
             ;:  mpadd-pelt
-              (mpmul-pelt a (w %sf3-s-size))
-              (mpmul-pelt b (w %sf3-s-dyck))
-              (mpmul-pelt c (w %sf3-s-leaf))
+              (mpmul-pelt j (w %sf3-s-size))
+              (mpmul-pelt k (w %sf3-s-dyck))
+              (mpmul-pelt l (w %sf3-s-leaf))
             ==
           ::
-            %+  mpmul-pelt  e
+            %+  mpmul-pelt  n
             ;:  mpadd-pelt
-              (mpmul-pelt a (w %sf3-f-size))
-              (mpmul-pelt b (w %sf3-f-dyck))
-              (mpmul-pelt c (w %sf3-f-leaf))
+              (mpmul-pelt j (w %sf3-f-size))
+              (mpmul-pelt k (w %sf3-f-dyck))
+              (mpmul-pelt l (w %sf3-f-leaf))
             ==
           ::
-            %+  mpmul-pelt  f
+            %+  mpmul-pelt  o
             ;:  mpadd-pelt
-              (mpmul-pelt a (w %sf3-e-size))
-              (mpmul-pelt b (w %sf3-e-dyck))
-              (mpmul-pelt c (w %sf3-e-leaf))
+              (mpmul-pelt j (w %sf3-e-size))
+              (mpmul-pelt k (w %sf3-e-dyck))
+              (mpmul-pelt l (w %sf3-e-leaf))
             ==
           ==
         ::
@@ -1266,12 +1272,12 @@
             (mpmul-pelt c (w %s-leaf))
           ==
         =/  maxis
-          (mpmul-pelt d (w %f-t-leaf))
+          (mpmul-pelt m (w %f-t-leaf))
         =/  mval
           ;:  mpadd-pelt
-            (mpmul-pelt e (w %e-size))
-            (mpmul-pelt f (w %e-dyck))
-            (mpmul-pelt g (w %e-leaf))
+            (mpmul-pelt j (w %e-size))
+            (mpmul-pelt k (w %e-dyck))
+            (mpmul-pelt l (w %e-leaf))
           ==
         =/  mvar
           :(mpadd-pelt mroot maxis mval)
@@ -1312,6 +1318,10 @@
       %^  tag-mp-pelt  %op0-mset-padding
         %+  mpscal-pelt  (v %pad)
         (mpsub-pelt (w %op0-mset) (w-n %op0-mset))
+      ~
+    ::
+    ++  extra-constraints
+      ^-  (map term mp-ultra)
       ~
     --
   --

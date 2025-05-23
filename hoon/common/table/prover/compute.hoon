@@ -185,39 +185,31 @@
   %+  print-pelt  dyck.n
   tail
 ::
-++  write-compressed-noun
-  ~/  %write-compressed-noun
-  |=  chals=ext-chals:chal
-  |=  [[s=tree-data f=tree-data e=tree-data] tail=(list belt)]
-  ^-  (list belt)
-  %+  print-pelt  ((compress-nouns chals) s f e)
-  tail
-::
 ++  compress-nouns
   ~/  %compress-nouns
-  |=  chals=ext-chals:chal
+  |=  chals=mega-ext-chals:chal
   |=  [s=tree-data f=tree-data e=tree-data]
   ^-  pelt
   ;:  padd
-    %+  pmul  d.chals
+    %+  pmul  m.chals
     ;:  padd
-      (pmul a.chals size.s)
-      (pmul b.chals dyck.s)
-      (pmul c.chals leaf.s)
+      (pmul j.chals size.s)
+      (pmul k.chals dyck.s)
+      (pmul l.chals leaf.s)
     ==
   ::
-    %+  pmul  e.chals
+    %+  pmul  n.chals
     ;:  padd
-      (pmul a.chals size.f)
-      (pmul b.chals dyck.f)
-      (pmul c.chals leaf.f)
+      (pmul j.chals size.f)
+      (pmul k.chals dyck.f)
+      (pmul l.chals leaf.f)
     ==
   ::
-    %+  pmul  f.chals
+    %+  pmul  o.chals
     ;:  padd
-      (pmul a.chals size.e)
-      (pmul b.chals dyck.e)
-      (pmul c.chals leaf.e)
+      (pmul j.chals size.e)
+      (pmul k.chals dyck.e)
+      (pmul l.chals leaf.e)
     ==
   ==
 ::
@@ -232,12 +224,12 @@
       (pmul c.chals leaf.s)
     ==
   =/  maxis=pelt
-    (pmul d.chals leaf.axis)
+    (pmul m.chals leaf.axis)
   =/  mval=pelt
     ;:  padd
-      (pmul e.chals size.e)
-      (pmul f.chals dyck.e)
-      (pmul g.chals leaf.e)
+      (pmul j.chals size.e)
+      (pmul k.chals dyck.e)
+      (pmul l.chals leaf.e)
     ==
   =/  mvar=pelt
     :(padd mroot maxis mval)
@@ -267,7 +259,7 @@
   ~/  %update-stack
   |=  [state=state-data row=row-data chals=mega-ext-chals:chal]
   ^-  pelt
-  =/  c  (compress-nouns (to-ext-chals chals))
+  =/  c  (compress-nouns chals)
   =/  program  (c s.row f.row e.row)
   =/  sp1  (c sf1-s.row sf1-f.row sf1-e.row)
   =/  sp2  (c sf2-s.row sf2-f.row sf2-e.row)
@@ -343,7 +335,6 @@
   ^-  bpoly
   =/  p  print-pelt
   =/  n  (write-noun alf.chals)
-  =/  c  (write-compressed-noun chals)
   %-  init-bpoly
   %+  n  s.row
   %+  n  f.row
@@ -479,7 +470,7 @@
   =/  z=pelt-chal:constraint-util  z.chals
   =/  z2=pelt-chal:constraint-util  (pmul z z)
   =/  z3=pelt-chal:constraint-util  (pmul z2 z)
-  =/  compress  (compress-nouns (to-ext-chals chals))
+  =/  compress  (compress-nouns chals)
   =/  stack=(list tree-data)
     (build-compute-queue:fock queue.fock-meta alf.chals)
   =|  rows=(list bpoly)
@@ -958,5 +949,6 @@
   ++  row-constraints         row-constraints:funcs:engine:verifier-compute
   ++  transition-constraints  transition-constraints:funcs:engine:verifier-compute
   ++  terminal-constraints    terminal-constraints:funcs:engine:verifier-compute
+  ++  extra-constraints       extra-constraints:funcs:engine:verifier-compute
   --
 --

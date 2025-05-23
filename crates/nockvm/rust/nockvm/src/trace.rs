@@ -124,18 +124,16 @@ pub fn write_serf_trace(info: &mut TraceInfo, name: &str, start: Instant) -> Res
         .as_micros() as f64;
     let dur = Instant::now().saturating_duration_since(start).as_micros() as f64;
 
-    assert_no_alloc::permit_alloc(|| {
-        let obj = object! {
-            "cat" => "event",
-            "name" => name,
-            "ph" => "X",
-            "pid" => info.pid,
-            "tid" => 1,
-            "ts" => ts,
-            "dur" => dur,
-        };
-        obj.write(&mut info.file)
-    })?;
+    let obj = object! {
+        "cat" => "event",
+        "name" => name,
+        "ph" => "X",
+        "pid" => info.pid,
+        "tid" => 1,
+        "ts" => ts,
+        "dur" => dur,
+    };
+    let _ = obj.write(&mut info.file);
     info.file.write_all(",\n".as_bytes())?;
 
     Ok(())
@@ -175,18 +173,16 @@ pub unsafe fn write_nock_trace(
             }
         };
 
-        assert_no_alloc::permit_alloc(|| {
-            let obj = object! {
-                "cat" => "nock",
-                "name" => pc_str,
-                "ph" => "X",
-                "pid" => info.pid,
-                "tid" => 1,
-                "ts" => ts,
-                "dur" => dur,
-            };
-            obj.write(&mut info.file)
-        })?;
+        let obj = object! {
+            "cat" => "nock",
+            "name" => pc_str,
+            "ph" => "X",
+            "pid" => info.pid,
+            "tid" => 1,
+            "ts" => ts,
+            "dur" => dur,
+        };
+        let _ = obj.write(&mut info.file);
         info.file.write_all(",\n".as_bytes())?;
 
         trace_stack = (*trace_stack).next;

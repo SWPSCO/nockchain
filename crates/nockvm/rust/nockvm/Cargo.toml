@@ -10,7 +10,6 @@ missing_safety_doc = "allow"
 # Please keep these alphabetized
 [dependencies]
 # Internal dependencies
-assert_no_alloc = { workspace = true, features = [] }
 ibig.workspace = true
 murmur3.workspace = true
 nockvm_crypto = { workspace = true }
@@ -45,6 +44,8 @@ cc = "1.0"
 default = ["mmap"]
 malloc = []
 mmap = []
+# Dangerous
+no_check_oom = []
 # FOR DEBUGGING MEMORY ISSUES ONLY
 check_all = ["check_acyclic", "check_forwarding", "check_junior"]
 check_acyclic = []

@@ -329,7 +329,7 @@
         %+  mpsub-pelt
           %+  mpadd-pelt  (w-n %kvs)
           %+  mpmul-pelt  (w %ln)
-          %-  ~(compress poly-tupler-pelt ~[a b c d])
+          %-  ~(compress poly-tupler-pelt ~[j k l m])
           :~  (w %parent-size)
               (w %parent-dyck)
               (w %parent-leaf)
@@ -342,7 +342,7 @@
           ;:  mpmul-pelt
             z
             (w %nc)
-            %-  ~(compress poly-tupler-pelt ~[a b c d])
+            %-  ~(compress poly-tupler-pelt ~[j k l m])
             :~  (w %lc-size)
                 (w %lc-dyck)
                 (w %lc-leaf)
@@ -354,7 +354,7 @@
           ;:  mpmul-pelt
             z
             (w %nc)
-            %-  ~(compress poly-tupler-pelt ~[a b c d])
+            %-  ~(compress poly-tupler-pelt ~[j k l m])
             :~  (w %rc-size)
                 (w %rc-dyck)
                 (w %rc-leaf)
@@ -366,7 +366,7 @@
           ;:  mpmul-pelt
             z  z
             (w %nc)
-            %-  ~(compress poly-tupler-pelt ~[a b c d])
+            %-  ~(compress poly-tupler-pelt ~[j k l m])
             :~  (w %rc-size)
                 (w %rc-dyck)
                 (w %rc-leaf)
@@ -405,7 +405,7 @@
         =/  mvar
           %+  mpadd-pelt
             input
-          %-  ~(compress poly-tupler-pelt ~[d e f g])
+          %-  ~(compress poly-tupler-pelt ~[m j k l])
           :~  [(v %axis) (mp-c 0) (mp-c 0)]
               (w %parent-size)
               (w %parent-dyck)
@@ -414,7 +414,7 @@
         =/  mvar-lc
           %+  mpadd-pelt
             input
-          %-  ~(compress poly-tupler-pelt ~[d e f g])
+          %-  ~(compress poly-tupler-pelt ~[m j k l])
           :~  [l-axis (mp-c 0) (mp-c 0)]
               (w %lc-size)
               (w %lc-dyck)
@@ -423,7 +423,7 @@
         =/  mvar-rc
           %+  mpadd-pelt
             input
-          %-  ~(compress poly-tupler-pelt ~[d e f g])
+          %-  ~(compress poly-tupler-pelt ~[m j k l])
           :~  [r-axis (mp-c 0) (mp-c 0)]
               (w %rc-size)
               (w %rc-dyck)
@@ -451,6 +451,42 @@
         ::
           %+  mpscal-pelt  (mpmul (mpsub one (v %op-r)) (v %mult-rc))
           (mpmul-pelt (mpsub-pelt bet mvar) (mpsub-pelt bet mvar-lc))
+        ==
+      ~
+    ::
+    ++  extra-constraints
+      ^-  (map term mp-ultra)
+      ~+
+      ~&  %processing-extra-constraints
+      =,  constraint-util
+      =/  r   ~(r rnd:chal (make-chal-mps:chal chal-names-all:chal))
+      =/  [j=mp-pelt k=mp-pelt l=mp-pelt m=mp-pelt n=mp-pelt o=mp-pelt ww=mp-pelt x=mp-pelt y=mp-pelt]
+        [(r %j) (r %k) (r %l) (r %m) (r %n) (r %o) (r %w) (r %x) (r %y)]
+      =/  [alf=mp-pelt bet=mp-pelt gam=mp-pelt z=mp-pelt]
+        [(r %alf) (r %bet) (r %gam) (r %z)]
+      %-  ~(gas by *(map term mp-ultra))
+      ::
+      %^  tag-mp-pelt  %data-constraint-1
+        =/  p1
+          %-  ~(compress poly-tupler-pelt ~[j k l m])
+          :~  (w %ln)
+              (w %nc)
+              (w %kvs)
+              (w %kvs-ioz)
+          ==
+        =/  p2
+          %-  ~(compress poly-tupler-pelt ~[n o ww x])
+          :~  (w %ln)
+              (w %nc)
+              (w %kvs)
+              (w %kvs-ioz)
+          ==
+        %+  mpsub-pelt  (w %data-k)
+        ;:  mpmul-pelt
+          p1
+          p2
+          (mpadd-pelt p1 p2)
+          (w %kvs-ioz)
         ==
       ~
     --

@@ -8,14 +8,14 @@ nockapp = { workspace = true }
 nockvm = { workspace = true }
 nockvm_macros = { workspace = true }
 
-bytes = { workspace = true }
 bs58 = { workspace = true }
+bytes = { workspace = true }
 either = { workspace = true }
 equix.workspace = true
 futures = { workspace = true }
 gnort = { workspace = true }
-hickory-resolver = { workspace = true }
 hickory-proto = { workspace = true }
+hickory-resolver = { workspace = true }
 ibig = { workspace = true }
 libp2p = { workspace = true, features = [
     "ping",
@@ -29,6 +29,7 @@ libp2p = { workspace = true, features = [
     "request-response",
     "memory-connection-limits",
     "cbor",
+    "peer-store",
 ] }
 serde = { workspace = true, features = ["alloc", "derive", "serde_derive"] }
 serde_bytes = { workspace = true, features = ["alloc"] }

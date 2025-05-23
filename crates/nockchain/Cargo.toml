@@ -7,8 +7,8 @@ edition.workspace = true
 
 [dependencies]
 hoonc.workspace = true
+kernels = { workspace = true, features = ["dumb", "miner"] }
 nockapp.workspace = true
-kernels = { workspace = true, features = ["dumb"] }
 nockchain-bitcoin-sync.workspace = true
 nockvm.workspace = true
 nockvm_macros.workspace = true
@@ -17,6 +17,7 @@ bitcoincore-rpc.workspace = true
 bs58.workspace = true
 clap.workspace = true
 equix.workspace = true
+futures.workspace = true
 libp2p = { workspace = true, features = [
     "ping",
     "kad",

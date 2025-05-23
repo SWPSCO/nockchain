@@ -12,7 +12,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     boot::init_default_tracing(&cli.nockapp_cli);
 
     let prover_hot_state = produce_prover_hot_state();
-    let nockchain =
+    let mut nockchain =
         nockchain::init_with_kernel(Some(cli), KERNEL, prover_hot_state.as_slice()).await?;
     nockchain.run().await?;
     Ok(())

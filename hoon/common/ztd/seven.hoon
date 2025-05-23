@@ -174,6 +174,7 @@
   ++  row-constraints         row-constraints:*verifier-funcs
   ++  transition-constraints  transition-constraints:*verifier-funcs
   ++  terminal-constraints    terminal-constraints:*verifier-funcs
+  ++  extra-constraints       extra-constraints:*verifier-funcs
   --
 ::
 ++  verifier-funcs
@@ -196,6 +197,10 @@
   ::
   ::  apply to the final row only
   ++  terminal-constraints
+    *(map term mp-ultra)
+  ::
+  ::  apply to extra composition poly only
+  ++  extra-constraints
     *(map term mp-ultra)
   --
 ::
@@ -614,6 +619,7 @@
     ++  row-constraints         row-constraints:fs
     ++  transition-constraints  transition-constraints:fs
     ++  terminal-constraints    terminal-constraints:fs
+    ++  extra-constraints       extra-constraints:fs
     --
   ::
   ::  (representing the state of the computation at each step), but rather

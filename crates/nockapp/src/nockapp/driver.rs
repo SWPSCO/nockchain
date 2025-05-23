@@ -1,12 +1,14 @@
 use crate::noun::slab::NounSlab;
 use futures::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
 use tokio::task::JoinSet;
 use tracing::instrument;
 
 use super::error::NockAppError;
 use super::wire::WireRepr;
+use super::NockAppExit;
 
 pub type IODriverFuture = Pin<Box<dyn Future<Output = Result<(), NockAppError>> + Send>>;
 pub type IODriverFn = Box<dyn FnOnce(NockAppHandle) -> IODriverFuture>;
@@ -38,9 +40,9 @@ where
 
 pub struct NockAppHandle {
     pub io_sender: ActionSender,
-    pub effect_sender: EffectSender,
+    pub effect_sender: Arc<EffectSender>,
     pub effect_receiver: Mutex<EffectReceiver>,
-    pub exit: mpsc::Sender<usize>,
+    pub exit: NockAppExit,
 }
 
 /// IO actions sent between [`NockAppHandle`] and [`crate::NockApp`] over channels.

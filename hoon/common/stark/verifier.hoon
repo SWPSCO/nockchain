@@ -64,7 +64,7 @@
     ::
     ::  number of static items in proof-data
     ::
-      10
+      12
     ::
     ::  number of items written by FRI
     ::
@@ -101,12 +101,12 @@
   =/  chal-map=(map term belt)
       (bp-zip-chals-list:chal chal-names-basic:chal challenges)
   ::
-  =/  [alf=pelt a=pelt b=pelt c=pelt d=pelt z=pelt]
+  =/  [alf=pelt j=pelt k=pelt l=pelt m=pelt z=pelt]
     :*  (got-pelt chal-map %alf)
-        (got-pelt chal-map %a)
-        (got-pelt chal-map %b)
-        (got-pelt chal-map %c)
-        (got-pelt chal-map %d)
+        (got-pelt chal-map %j)
+        (got-pelt chal-map %k)
+        (got-pelt chal-map %l)
+        (got-pelt chal-map %m)
         (got-pelt chal-map %z)
     ==
   ::
@@ -117,15 +117,11 @@
   =/  prod-data
     (build-tree-data:fock p.puzzle alf)
   ::
-  ::  get merkle root of mega-extension tables
-  =^  mega-ext-root   proof
-    =^(m proof ~(pull proof-stream proof) ?>(?=(%m-root -.m) p.m^proof))
-  ::
-  =.  rng  ~(verifier-fiat-shamir proof-stream proof)
-  ::
   ::  get terminals
   =^  terminals  proof
     =^(t proof ~(pull proof-stream proof) ?>(?=(%terms -.t) p.t^proof))
+  ::
+  =.  rng  ~(verifier-fiat-shamir proof-stream proof)
   ::
   ::  verify that len.terminals is as expected
   ?.  .=  len.terminals
@@ -142,7 +138,6 @@
     ~&  "len.terminals is not equal to the data buffer"
     !!
   ::
-  =.  rng  ~(verifier-fiat-shamir proof-stream proof)
   ::
   =/  [terminal-map=(map term belt) dyn-map=(map @ bpoly)]
     =-  [term-map dyn-map]
@@ -157,10 +152,89 @@
     %-  ~(put by dyn-map)
     [table-num (~(swag bop terminals) idx (lent terms))]
   ::
-  ?.  (linking-checks subj-data form-data prod-data a b c d z terminal-map)
+  ?.  (linking-checks subj-data form-data prod-data j k l m z terminal-map)
     ~&  "failed input linking checks"  !!
   ::
   ::
+  ::  evaluate the second composition poly
+  =/  total-extra-constraints=@
+    %+  roll  (range num-tables)
+    |=  [i=@ acc=@]
+    =/  cs  (~(got by count-map.pre) i)
+    ;:  add
+        acc
+        boundary.cs
+        row.cs
+        transition.cs
+        terminal.cs
+        extra.cs
+    ==
+  =^  extra-comp-weights=bpoly  rng
+    =^  belts  rng  (belts:rng (mul 2 total-extra-constraints))
+    [(init-bpoly belts) rng]
+  =/  extra-composition-chals=(map @ bpoly)
+    %-  ~(gas by *(map @ bpoly))
+    =-  -<
+    %+  roll  (range num-tables)
+    |=  [i=@ acc=(list [@ bpoly]) num=@]
+    =/  cs  (~(got by count-map.pre) i)
+    =/  num-constraints=@
+      ;:  add
+          boundary.cs
+          row.cs
+          transition.cs
+          terminal.cs
+          extra.cs
+      ==
+    :_  (add num (mul 2 num-constraints))
+    [[i (~(scag bop (~(slag bop extra-comp-weights) num)) (mul 2 num-constraints))] acc]
+  ::
+  =^  extra-comp-bpoly  proof
+    =^(c proof ~(pull proof-stream proof) ?>(?=(%poly -.c) p.c^proof))
+  ::
+  =.  rng  ~(verifier-fiat-shamir proof-stream proof)
+  ::
+  =^  extra-comp-eval-point  rng  $:felt:rng
+  ::
+  =^  extra-trace-evaluations=fpoly  proof
+    =^(t proof ~(pull proof-stream proof) ?>(?=(%evals -.t) p.t^proof))
+  ::
+  ::  check that the size of the evaluations is exactly twice the total number of
+  ::  columns across all tables
+  =/  total-cols=@
+    %+  roll  table-full-widths
+    |=  [w=@ acc=@]
+    (add w acc)
+  ?>  =(len.extra-trace-evaluations (mul 2 total-cols))
+  ?>  ~(chck fop extra-trace-evaluations)
+  ::
+  =/  extra-composition-eval=felt
+    %-  eval-composition-poly
+    :*  extra-trace-evaluations
+        heights
+        constraint-map.pre
+        count-map.pre
+        dyn-map
+        extra-composition-chals
+        challenges
+        max-degree:clc
+        extra-comp-eval-point
+        table-full-widths
+        s
+        f
+        %.y
+    ==
+  ::
+  =/  extra-comp-bpoly-eval  (bpeval-lift extra-comp-bpoly extra-comp-eval-point)
+  ::
+  ::  check that the extra composition eval equals the eval pt
+  ?>  =(extra-composition-eval extra-comp-bpoly-eval)
+  ::
+  ::  get merkle root of mega-extension tables
+  =^  mega-ext-root   proof
+    =^(m proof ~(pull proof-stream proof) ?>(?=(%m-root -.m) p.m^proof))
+  ::
+  =.  rng  ~(verifier-fiat-shamir proof-stream proof)
   ::
   ::  We now use the randomness to compute the expected fingerprints of the compute stack and product stack based on the given [s f] and product, respectively.
   ::  We then dynamically generate constraints that force the cs and ps to be equivalent to the expected fingerprints.
@@ -168,7 +242,7 @@
   ::  The boundary constraint then ensures that the computation in cleartext is linked to the computation in the trace.
   ::
   ::  generate scalars for the random linear combination of the composition polynomial
-  =/  num-constraints=@
+  =/  total-constraints=@
     %+  roll  (range num-tables)
     |=  [i=@ acc=@]
     =/  cs  (~(got by count-map.pre) i)
@@ -180,7 +254,7 @@
         terminal.cs
     ==
   =^  comp-weights=bpoly  rng
-    =^  belts  rng  (belts:rng (mul 2 num-constraints))
+    =^  belts  rng  (belts:rng (mul 2 total-constraints))
     [(init-bpoly belts) rng]
   =/  composition-chals=(map @ bpoly)
     %-  ~(gas by *(map @ bpoly))
@@ -203,6 +277,7 @@
   =^  comp-root  proof
     =^(c proof ~(pull proof-stream proof) ?>(?=(%comp-m -.c) [p.c num.c]^proof))
   ::
+  ::
   =.  rng  ~(verifier-fiat-shamir proof-stream proof)
   ::
   ::  generate the DEEP challenge
@@ -222,12 +297,9 @@
   =^  trace-evaluations=fpoly  proof
     =^(t proof ~(pull proof-stream proof) ?>(?=(%evals -.t) p.t^proof))
   ::
+  ::
   ::  check that the size of the evaluations is exactly twice the total number of
   ::  columns across all tables
-  =/  total-cols=@
-    %+  roll  table-full-widths
-    |=  [w=@ acc=@]
-    (add w acc)
   ?>  =(len.trace-evaluations (mul 2 total-cols))
   ?>  ~(chck fop trace-evaluations)
   ::
@@ -241,8 +313,8 @@
       ==
       ~&  >>  %num-composition-piece-evals-wrong
       !!
-  =.  rng  ~(verifier-fiat-shamir proof-stream proof)
   ::
+  =.  rng  ~(verifier-fiat-shamir proof-stream proof)
   :: verify the composition polynomial equals the composition pieces by evaluating each side
   :: at the DEEP challenge point
   =/  composition-eval=felt
@@ -259,6 +331,7 @@
         table-full-widths
         s
         f
+        %.n
     ==
   ::
   =/  decomposition-eval=felt
@@ -273,11 +346,12 @@
     ~&  %invalid-proof  !!
   ::~&  %composition-eval-passed
   ::
+  ::
   ::  generate random weights for DEEP composition polynomial
   =^  deep-weights=fpoly  rng
     =^  felt-list  rng
       %-  felts:rng
-      (add len.trace-evaluations len.composition-piece-evaluations)
+      :(add len.trace-evaluations len.extra-trace-evaluations len.composition-piece-evaluations)
     [(init-fpoly felt-list) rng]
   ::
   ::  read the merkle root of the DEEP composition polynomial
@@ -378,13 +452,14 @@
   ::
   :: evaluate DEEP polynomial at the indices
   =/  omega=felt  (lift omega:clc)
+  =/  all-evals  (~(weld fop trace-evaluations) extra-trace-evaluations)
   =/  eval-res=?
     %+  roll  elems
     |=  [[idx=@ trace-elems=(list belt) comp-elems=(list belt) deep-elem=felt] acc=?]
     ^-  ?
     =/  deep-eval
       %-  evaluate-deep
-      :*  trace-evaluations
+      :*  all-evals
           composition-piece-evaluations
           trace-elems
           comp-elems
@@ -395,6 +470,7 @@
           omega
           idx
           deep-challenge
+          extra-comp-eval-point
       ==
     ~|  "DEEP codeword doesn't match evaluation"
     ?>  =(deep-eval deep-elem)
@@ -424,12 +500,12 @@
 ++  linking-checks
   ~/  %linking-checks
   |=  $:  s=tree-data  f=tree-data  p=tree-data
-          a=pelt  b=pelt  c=pelt  d=pelt  z=pelt
+          j=pelt  k=pelt  l=pelt  m=pelt  z=pelt
           mp=(map term belt)
       ==
   ^-  ?
-  =/  ifp-f  (compress-pelt ~[a b c] ~[size dyck leaf]:f)
-  =/  ifp-s  (compress-pelt ~[a b c] ~[size dyck leaf]:s)
+  =/  ifp-f  (compress-pelt ~[j k l] ~[size dyck leaf]:f)
+  =/  ifp-s  (compress-pelt ~[j k l] ~[size dyck leaf]:s)
   ?&
       =;  bool
         ?:  bool  bool
@@ -443,10 +519,10 @@
         ?:  bool  bool
         ~&("memory table kvs input check failed" bool)
       .=  ?@  n.s
-            (pmul z (padd ifp-f (pscal 0 d)))
+            (pmul z (padd ifp-f (pscal 0 m)))
           %+  padd
-            (pmul z (padd ifp-s (pscal 1 d)))
-          :(pmul z z (padd ifp-f (pscal 0 d)))
+            (pmul z (padd ifp-s (pscal 1 m)))
+          :(pmul z z (padd ifp-f (pscal 0 m)))
       (got-pelt mp %memory-kvs)
     ::
       =;  bool
@@ -520,12 +596,13 @@
           table-full-widths=(list @)
           s=*
           f=*
+          is-extra=?
       ==
   ^-  felt
   =/  max-height=@
     %-  bex  %-  xeb  %-  dec
     (roll heights max)
-  =/  dp  (degree-processing heights constraint-map)
+  =/  dp  (degree-processing heights constraint-map is-extra)
   =/  boundary-zerofier=felt
     (finv (fsub deep-challenge (lift 1)))
   =/  chal-map=(map @ belt)
@@ -594,12 +671,27 @@
         chal-map
         current-evals
       ::
+        %+  ~(swag bop chals)
+          (mul 2 :(add boundary.counts row.counts transition.counts))
+        (mul 2 terminal.counts)
+      ::
+    ==
+  ::
+    ?.  is-extra  (lift 0)
+    %+  fmul  row-zerofier
+    %-  evaluate-constraints
+    :*  extra.constraints
+        dyns
+        chal-map
+        current-evals
+      ::
         %-  ~(slag bop chals)
         %+  mul  2
         ;:  add
           boundary.counts
           row.counts
           transition.counts
+          terminal.counts
         ==
       ::
     ==
@@ -655,54 +747,90 @@
           omega=felt
           index=@
           deep-challenge=felt
+          new-comp-eval=felt
       ==
   ^-  felt
   =/  omega-pow  (fmul (lift g) (fpow omega index))
   |^
-  =;  dat=[acc=felt num=@ @]
-    =-  -<
-    =/  denom  (fsub omega-pow (fpow deep-challenge num-comp-pieces))
-    %-  process-belt
-    :*  comp-elems
-        comp-evaluations
-        (~(slag fop weights) num.dat)
-        num-comp-pieces
-        0
-        denom
-        acc.dat
-    ==
-  %^  zip-roll  (range (lent heights))  heights
-  |=  [[i=@ height=@] acc=_(lift 0) num=@ total-full-width=@]
-  =/  full-width  (snag i full-widths)
-  =/  omicron  (lift (ordered-root height))
-  =/  current-trace-elems  (swag [total-full-width full-width] trace-elems)
-  =/  dat=[acc=felt num=@]  [acc num]
-  ::  first row trace columns
-  =/  denom  (fsub omega-pow deep-challenge)
-  =.  dat
-    %-  process-belt
-    :*  current-trace-elems
-        trace-evaluations
-        weights
-        full-width
-        num.dat
-        denom
-        acc.dat
-    ==
-  ::  second row trace columns obtained by shifting by omicron
-  =.  denom  (fsub omega-pow (fmul deep-challenge omicron))
-  =/  acc  acc.dat
-  =.  dat
-    %-  process-belt
-    :*  current-trace-elems
-        trace-evaluations
-        weights
-        full-width
-        num.dat
-        denom
-        acc.dat
-    ==
-  [acc.dat num.dat (add total-full-width full-width)]
+  =/  [acc=felt num=@ @]
+    %^  zip-roll  (range (lent heights))  heights
+    |=  [[i=@ height=@] acc=_(lift 0) num=@ total-full-width=@]
+    =/  full-width  (snag i full-widths)
+    =/  omicron  (lift (ordered-root height))
+    =/  current-trace-elems  (swag [total-full-width full-width] trace-elems)
+    =/  dat=[acc=felt num=@]  [acc num]
+    ::  first row trace columns
+    =/  denom  (fsub omega-pow deep-challenge)
+    =.  dat
+      %-  process-belt
+      :*  current-trace-elems
+          trace-evaluations
+          weights
+          full-width
+          num.dat
+          denom
+          acc.dat
+      ==
+    ::  second row trace columns obtained by shifting by omicron
+    =.  denom  (fsub omega-pow (fmul deep-challenge omicron))
+    =.  dat
+      %-  process-belt
+      :*  current-trace-elems
+          trace-evaluations
+          weights
+          full-width
+          num.dat
+          denom
+          acc.dat
+      ==
+    [acc.dat num.dat (add total-full-width full-width)]
+  ::
+  ::
+  =/  [acc=felt num=@ @]
+    %^  zip-roll  (range (lent heights))  heights
+    |=  [[i=@ height=@] acc=_acc num=_num total-full-width=@]
+    =/  full-width  (snag i full-widths)
+    =/  omicron  (lift (ordered-root height))
+    =/  current-trace-elems  (swag [total-full-width full-width] trace-elems)
+    =/  dat=[acc=felt num=@]  [acc num]
+    ::  first row trace columns
+    ::  evaluate new evals
+    =/  denom  (fsub omega-pow new-comp-eval)
+    =.  dat
+      %-  process-belt
+      :*  current-trace-elems
+          trace-evaluations
+          weights
+          full-width
+          num.dat
+          denom
+          acc.dat
+      ==
+    ::  second row trace columns obtained by shifting by omicron
+    =.  denom  (fsub omega-pow (fmul new-comp-eval omicron))
+    =.  dat
+      %-  process-belt
+      :*  current-trace-elems
+          trace-evaluations
+          weights
+          full-width
+          num.dat
+          denom
+          acc.dat
+      ==
+    [acc.dat num.dat (add total-full-width full-width)]
+  ::
+  =/  denom  (fsub omega-pow (fpow deep-challenge num-comp-pieces))
+  =-  -<
+  %-  process-belt
+  :*  comp-elems
+      comp-evaluations
+      (~(slag fop weights) num)
+      num-comp-pieces
+      0
+      denom
+      acc
+  ==
   ::
   ++  process-belt
     |=  $:  elems=(list belt)

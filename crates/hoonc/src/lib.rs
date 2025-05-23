@@ -1,19 +1,21 @@
-use clap::{arg, command, ColorChoice, Parser};
-use nockvm::interpreter::{self, Context};
 use std::env::current_dir;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
+
+use clap::{arg, command, ColorChoice, Parser};
+use nockapp::driver::Operation;
+use nockapp::kernel::boot::{self, default_boot_cli, Cli as BootCli};
+use nockapp::noun::slab::NounSlab;
+use nockapp::one_punch::OnePunchWire;
+use nockapp::wire::Wire;
+use nockapp::{system_data_dir, AtomExt, Noun, NounExt};
+use nockvm::interpreter::{self, Context};
+use nockvm::noun::{Atom, D, T};
+use nockvm_macros::tas;
 use tokio::fs::{self, File};
 use tokio::io::AsyncReadExt;
 use tracing::{debug, info, instrument, trace};
 use walkdir::{DirEntry, WalkDir};
-
-use nockapp::driver::Operation;
-use nockapp::kernel::boot::{self, default_boot_cli, Cli as BootCli};
-use nockapp::noun::slab::NounSlab;
-use nockapp::{system_data_dir, AtomExt, Noun, NounExt};
-use nockvm::noun::{Atom, D, T};
-use nockvm_macros::tas;
 
 pub const OUT_JAM_NAME: &str = "out.jam";
 
@@ -28,6 +30,9 @@ pub struct ChooCli {
     #[command(flatten)]
     pub boot: BootCli,
 
+    //  TODO: REPRODUCIBILITY:
+    //  make entry path relative to the dependency directory
+    //  we may have to go back to requiring that the entry exists in the dependency directory
     #[arg(help = "Path to file to compile")]
     pub entry: std::path::PathBuf,
 
@@ -200,6 +205,9 @@ pub async fn initialize_hoonc_(
         Some(data_dir),
     )
     .await?;
+    nockapp.add_io_driver(nockapp::file_driver()).await;
+    nockapp.add_io_driver(nockapp::exit_driver()).await;
+
     let mut slab = NounSlab::new();
     let hoon_cord = Atom::from_value(&mut slab, HOON_TXT)
         .unwrap_or_else(|_| {
@@ -214,10 +222,9 @@ pub async fn initialize_hoonc_(
     let bootstrap_poke = T(&mut slab, &[D(tas!(b"boot")), hoon_cord]);
     slab.set_root(bootstrap_poke);
 
-    nockapp
-        .add_io_driver(nockapp::one_punch_driver(slab, Operation::Poke))
-        .await;
-
+    // It's OK to do a raw poke for boot because it doesn't yield any effects that need to be processed.
+    // We do a raw poke here to ensure boot is done before we start the build poke.
+    let _boot_result = nockapp.poke(OnePunchWire::Poke.to_wire(), slab).await?;
     let mut slab = NounSlab::new();
     let entry_contents = {
         let mut contents_vec: Vec<u8> = vec![];
@@ -293,11 +300,11 @@ pub async fn initialize_hoonc_(
         ],
     );
     slab.set_root(poke);
+    // The build poke yields effects (principally the file write effect), so we need to embed the poke
+    // as a one_punch IO driver so that nockapp.run() can process the effects.
     nockapp
         .add_io_driver(nockapp::one_punch_driver(slab, Operation::Poke))
         .await;
-    nockapp.add_io_driver(nockapp::file_driver()).await;
-    nockapp.add_io_driver(nockapp::exit_driver()).await;
     Ok((nockapp, out_path_string.into()))
 }
 
@@ -340,7 +347,7 @@ pub fn canonicalize_and_string(path: &std::path::Path) -> String {
 
 /// Run the build and verify the output file, used to build files outside of cli.
 pub async fn run_build(
-    nockapp: nockapp::NockApp,
+    mut nockapp: nockapp::NockApp,
     out_path: Option<PathBuf>,
 ) -> Result<Vec<u8>, Error> {
     nockapp.run().await?;

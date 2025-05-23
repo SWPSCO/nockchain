@@ -66,6 +66,8 @@ pub const REQ_RES_PROTOCOL_VERSION: &str = "/nockchain-1-req-res";
 pub const KAD_PROTOCOL_VERSION: &str = "/nockchain-1-kad";
 pub const IDENTIFY_PROTOCOL_VERSION: &str = "/nockchain-1-identify";
 
+const PEER_STORE_RECORD_CAPACITY: usize = 10 * 1024;
+
 #[derive(Debug)]
 pub enum SwarmAction {
     SendResponse {
@@ -99,6 +101,8 @@ pub struct NockchainBehaviour {
     connection_limits: connection_limits::Behaviour,
     /// Memory connection limits
     memory_connection_limits: Toggle<memory_connection_limits::Behaviour>,
+    /// Peer store for tracking peer information (including addresses)
+    pub peer_store: libp2p::peer_store::Behaviour<libp2p::peer_store::memory_store::MemoryStore>,
     /// Actual comms
     pub request_response: cbor::Behaviour<NockchainRequest, NockchainResponse>,
 }
@@ -142,6 +146,13 @@ impl NockchainBehaviour {
                 Toggle::<allow_block_list::Behaviour<allow_block_list::AllowedPeers>>::from(
                     allowed,
                 );
+            let peer_store_config = libp2p::peer_store::memory_store::Config::default();
+            let record_capacity = PEER_STORE_RECORD_CAPACITY.try_into().unwrap();
+            let peer_store_config = peer_store_config.set_record_capacity(record_capacity);
+            let peer_store_memory =
+                libp2p::peer_store::memory_store::MemoryStore::new(peer_store_config);
+
+            let peer_store_behaviour = libp2p::peer_store::Behaviour::new(peer_store_memory);
             NockchainBehaviour {
                 ping: ping::Behaviour::default(),
                 identify: identify_behaviour,
@@ -151,6 +162,7 @@ impl NockchainBehaviour {
                 request_response: request_response_behaviour,
                 connection_limits: connection_limits_behaviour,
                 memory_connection_limits,
+                peer_store: peer_store_behaviour,
             }
         }
     }
@@ -216,6 +228,8 @@ pub enum NockchainEvent {
     Kad(kad::Event),
     /// Request or response received from peer
     RequestResponse(request_response::Event<NockchainRequest, NockchainResponse>),
+    /// Peer store events
+    PeerStore(libp2p::peer_store::memory_store::Event),
 }
 
 impl From<identify::Event> for NockchainEvent {
@@ -245,6 +259,12 @@ impl From<Infallible> for NockchainEvent {
 impl From<request_response::Event<NockchainRequest, NockchainResponse>> for NockchainEvent {
     fn from(event: request_response::Event<NockchainRequest, NockchainResponse>) -> Self {
         Self::RequestResponse(event)
+    }
+}
+
+impl From<libp2p::peer_store::memory_store::Event> for NockchainEvent {
+    fn from(event: libp2p::peer_store::memory_store::Event) -> Self {
+        Self::PeerStore(event)
     }
 }
 

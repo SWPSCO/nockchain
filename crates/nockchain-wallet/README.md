@@ -1,6 +1,6 @@
 # Nockchain Wallet
 
-## Key Management
+## Setup
 
 ### Generate New Key Pair
 
@@ -9,15 +9,43 @@
 nockchain-wallet keygen
 ```
 
-### Import Private Key
+### Importing and Exporting Keys
+
+The wallet supports importing and exporting keys:
 
 ```bash
-# Import keys from a jammed file
-nockchain-wallet import-keys --input path/to/keys.jam
+# Export all wallet keys to a file (default: keys.export)
+nockchain-wallet export-keys
+
+# Import keys from the exported file
+nockchain-wallet import-keys --input keys.export
 
 # Import a master public key and chain code
-nockchain-wallet import-master-pubkey --key <base58-key> --knot <base58-chain-code>
+nockchain-wallet import-master-pubkey --key <base58-key> --chain-code <base58-chain-code>
 ```
+
+The exported keys file contains all wallet keys as a `jam` file that can be imported on another instance.
+
+Can be used for:
+- Backing up your wallet
+- Migrating to a new device
+- Sharing public keys with other users
+
+### Connecting to Nockchain
+
+The wallet needs to connect to a running nockchain instance to perform operations like checking balances, broadcasting transactions, etc.
+
+```bash
+# Connect to nockchain using a Unix domain socket
+nockchain-wallet --nockchain-socket ./nockchain.sock <command>
+```
+
+Note: Make sure nockchain is running and the socket path matches your nockchain configuration.
+
+
+
+# Advanced Options
+
 
 ### Generate Master Private Key from Seed Phrase
 
@@ -44,19 +72,6 @@ nockchain-wallet derive-child --key-type <pub|priv> --index <0-255>
 Derives a child public or private key at the given index from the current master key.
 
 
-## Connecting to Nockchain
-
-The wallet needs to connect to a running nockchain instance to perform operations like checking balances, broadcasting transactions, etc.
-
-```bash
-# Connect to nockchain using a Unix domain socket
-nockchain-wallet --nockchain-socket ./test-leader/nockchain.sock <command>
-
-# Example: broadcasting a transaction
-nockchain-wallet --nockchain-socket ./test-leader/nockchain.sock make-tx --draft my_draft
-```
-
-Note: Make sure nockchain is running and the socket path matches your nockchain configuration.
 
 
 ## Listing Notes

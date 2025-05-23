@@ -1005,6 +1005,14 @@ impl Atom {
         }
     }
 
+    pub fn as_bool(self) -> Result<bool> {
+        if self.is_direct() {
+            Ok(unsafe { self.direct.data() == 0 })
+        } else {
+            Err(Error::NotRepresentable)
+        }
+    }
+
     /** Produce a SoftFloat-compatible ordered pair of 64-bit words */
     pub unsafe fn as_u64_pair(self) -> Result<[u64; 2]> {
         if self.is_direct() {

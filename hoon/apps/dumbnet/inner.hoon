@@ -39,7 +39,7 @@
     ::
         [%blocks ~]
       ^-  (unit (unit (z-map block-id:t page:t)))
-      ``(~(run by blocks.c.k) to-page:local-page:t)
+      ``(~(run z-by blocks.c.k) to-page:local-page:t)
     ::
         [%transactions ~]
       ^-  (unit (unit (z-mip block-id:t tx-id:t tx:t)))
@@ -139,9 +139,13 @@
     |^
     =/  cause  ((soft cause:dk) dat)
     ?~  cause
-      ~>  %slog.[0 [%leaf "error: badly formatted cause, should never occur"]]
+      ~>  %slog.[0 [%leaf "error: badly formatted cause, should never occur."]]
       ~&  ;;([thing=@t ver=@ type=@t] [-.dat +<.dat +>-.dat])
-      `k
+      =/  peer-id  (get-peer-id wir)
+      ?~  peer-id
+        `k
+      ~>  %slog.[0 [leaf+"peer-id found in wire of badly formatted cause, emitting %liar-peer"]]
+      [[%liar-peer u.peer-id %invalid-fact]~ k]
     =/  cause  u.cause
     ::~&  "inner dumbnet cause: {<[-.cause -.+.cause]>}"
     =^  effs  k
@@ -162,7 +166,7 @@
     ::
     ::  +heard-genesis-block: check if block is a genesis block and decide whether to keep it
     ++  heard-genesis-block
-      |=  [wir=wire now=@da pag=page:t]
+      |=  [wir=wire now=@da eny=@ pag=page:t]
       ^-  [(list effect:dk) kernel-state:dk]
       ?:  (check-duplicate-block digest.pag)
         :: do nothing (idempotency), we already have block
@@ -178,7 +182,7 @@
         [[(liar-effect wir %not-a-genesis-block)]~ k]
       ::  heard valid genesis block
       ~>  %slog.[0 leaf+"validated genesis block!"]
-      (new-block now pag *tx-acc:t)
+      (new-block now eny pag *tx-acc:t)
     ::
     ++  heard-block
       |=  [wir=wire now=@da pag=page:t eny=@]
@@ -186,7 +190,7 @@
       ?:  =(*page-number:t height.pag)
         ::  heard genesis block
         ~>  %slog.[0 leaf+"heard genesis block"]
-        (heard-genesis-block wir now pag)
+        (heard-genesis-block wir now eny pag)
       ?~  heaviest-block.c.k
         =/  peer-id=(unit @)  (get-peer-id wir)
         ?~  peer-id
@@ -292,7 +296,7 @@
       ::
       ::  block has no missing transactions, so we check that its transactions
       ::  are valid
-      (process-block-with-txs now pag block-effs)
+      (process-block-with-txs now eny pag block-effs)
     ::
     ::  +heard-elders: handle response to parent hashes request
     ++  heard-elders
@@ -357,8 +361,9 @@
       ==
     ::
     ++  check-genesis
-     |=  [pag=page:t =btc-hash:t =genesis-seal:t]
+     |=  [pag=page:t btc-hash=(unit btc-hash:t) =genesis-seal:t]
      ^-  ?
+     =/  check-digest  (check-digest:page:t pag)
      =/  check-pow-hash=?
       ?.  check-pow-flag:t
          ::  this case only happens during testing
@@ -366,8 +371,13 @@
          %.y
        %-  check-target:mine
        :_  target.pag
-       (digest-to-atom:tip5:zeke (hash-proof:zeke (need pow.pag)))
+       (proof-to-pow:zeke (need pow.pag))
      =/  check-pow-valid=?  (check-pow pag)
+     ::
+     ::  check if timestamp is in base field, this will anchor subsequent timestamp checks
+     ::  since child block timestamps have to be within a certain range of the most recent
+     ::  N blocks.
+     =/  check-timestamp=?  (based:zeke timestamp.pag)
      =/  check-txs=?  =(tx-ids.pag *(z-set tx-id:t))
      =/  check-epoch=?  =(epoch-counter.pag *@)
      =/  check-target=?  =(target.pag genesis-target:t)
@@ -375,14 +385,30 @@
      =/  check-coinbase=?  =(coinbase.pag *(z-map lock:t @))
      =/  check-height=?  =(height.pag *page-number:t)
      =/  check-btc-hash=?
-       =(parent.pag (hash:btc-hash:t btc-hash))
+       ?~  btc-hash  ~>  %slog.[0 leaf+"Not checking btc hash when validating genesis block"]  %.y
+       =(parent.pag (hash:btc-hash:t u.btc-hash))
      ::
      ::  check that the message matches what's in the seal
      =/  check-msg=?
        ?~  genesis-seal  %.y
        =((hash:page-msg:t msg.pag) msg-hash.u.genesis-seal)
-     ?&  check-pow-hash
+     ~&  :*  check-digest+check-digest
+             check-pow-hash+check-pow-hash
+             check-pow-valid+check-pow-valid
+             check-timestamp+check-timestamp
+             check-txs+check-txs
+             check-epoch+check-epoch
+             check-target+check-target
+             check-work+check-work
+             check-coinbase+check-coinbase
+             check-height+check-height
+             check-msg+check-msg
+             check-btc-hash+check-btc-hash
+         ==
+     ?&  check-digest
+         check-pow-hash
          check-pow-valid
+         check-timestamp
          check-txs
          check-epoch
          check-target
@@ -423,20 +449,27 @@
       ==
     ::
     ++  heard-tx
-      |=  [wir=wire now=@da raw=raw-tx:t]
+      |=  [wir=wire now=@da raw=raw-tx:t eny=@]
       ^-  [(list effect:dk) kernel-state:dk]
+      ~>  %slog.[3 leaf+"heard-tx"]
       =/  id-b58  (to-b58:hash:t id.raw)
+      ~>  %slog.[3 leaf+(trip (cat 3 'raw-tx: ' id-b58))]
       ::
       ::  check tx-id. this is the fastest check to do, so we try it first before
       ::  calling validate:raw-tx (which also checks the id)
       ?.  =((compute-id:raw-tx:t raw) id.raw)
+        ~>  %slog.[3 leaf+"tx-id-invalid"]
         :_  k
         [(liar-effect wir %tx-id-invalid)]~
       ::
       ::  do we already have raw-tx?
       ?:  (~(has z-by raw-txs.p.k) id.raw)
         :: do nothing (idempotency), we already have it
+        ~>  %slog.[3 leaf+"tx-id-already-seen"]
         `k
+      ?:  (based:raw-tx:t raw)
+        :_  k
+        [(liar-effect wir %raw-tx-not-based)]~
       ::
       ::  check if raw-tx is part of a pending block
       ::
@@ -456,27 +489,32 @@
             |=  [id=block-id:t pend=_p.k]
             (remove-pending-block:pen id)
           ::
+          ~>  %slog.[3 leaf+"page-pending-raw-tx-invalid"]
           :_  k
           [(liar-effect wir %page-pending-raw-tx-invalid) ~]
         ::  add to raw-txs map, remove from tx-block jug, remove from
         ::  block-tx jug
         =.  p.k  (add-tx-in-pending-block:pen raw)
-        (process-ready-blocks now raw)
+        ~>  %slog.[3 leaf+"process-ready-blocks"]
+        (process-ready-blocks now eny raw)
       ::  no pending blocks waiting on tx
       ::
       ::  check if any inputs are absent in heaviest balance
       ?.  (inputs-in-heaviest-balance:con raw)
         ::  input(s) in tx not in balance, discard tx
+        ~>  %slog.[3 leaf+"inputs-in-heaviest-balance"]
         `k
       ::  all inputs in balance
       ::
       ::  check if any inputs are in spent-by
       ?:  (inputs-in-spent-by:pen raw)
         ::  inputs present in spent-by, discard tx
+        ~>  %slog.[3 leaf+"inputs-in-spent-by"]
         `k
       ::  inputs not present in spent-by
       ?.  (validate:raw-tx:t raw)
         ::  raw-tx doesn't validate.
+        ~>  %slog.[3 leaf+"raw-tx-invalid"]
         :_  k
         [(liar-effect wir %tx-inputs-not-in-spent-by-and-invalid)]~
       ::
@@ -487,12 +525,13 @@
       ::  determined that no pending blocks were waiting on this this,
       ::  so we just tell the miner.
       =.  m.k  (heard-new-tx:min raw)
-      :-  ~[[%seen %tx id.raw]]
+      ~>  %slog.[3 leaf+"heard-new-tx"]
+      :-  ~[[%seen %tx id.raw] [%gossip %0 %heard-tx raw]]
       k
     ::
     ::  +process-ready-blocks: process blocks no longer waitings on txs
     ++  process-ready-blocks
-      |=  [now=@da raw=raw-tx:t]
+      |=  [now=@da eny=@ raw=raw-tx:t]
       ^-  [(list effect:dk) kernel-state:dk]
       ::  .work contains block-ids for blocks that no longer have any
       ::  missing transactions
@@ -503,11 +542,13 @@
         ::  process the block, skipping the steps that we know its already
         ::  done by the fact that it was in pending-blocks.p.k
         =^  new-effs  k
-          %^  process-block-with-txs  now
+          %:  process-block-with-txs
+            now  eny
             (to-page:local-page:t (~(got z-by pending-blocks.p.k) bid))
-          :: if the block is bad, then tell the driver never to send it
-          :: to us again
-          ~[[%seen %block bid]]
+            :: if the block is bad, then tell the driver never to send it
+            :: to us again
+            ~[[%seen %block bid]]
+          ==
         ::  remove the block from pending blocks. at this point, its either
         ::  been discarded by the kernel or lives in the consensus state
         =.  p.k  (remove-pending-block:pen bid)
@@ -537,7 +578,7 @@
     ::    only if the block is bad. If the block is good then ++new-block
     ::    emits effects and bad-block-effs is ignored.
     ++  process-block-with-txs
-      |=  [now=@da pag=page:t bad-block-effs=(list effect:dk)]
+      |=  [now=@da eny=@ pag=page:t bad-block-effs=(list effect:dk)]
       ^-  [(list effect:dk) kernel-state:dk]
       =/  digest-b58  (to-b58:hash:t digest.pag)
       ::
@@ -547,7 +588,7 @@
         (validate-page-with-txs:con p.k pag)
       ?-    -.new-transfers
           %.y
-        (new-block now pag +.new-transfers)
+        (new-block now eny pag +.new-transfers)
         ::
           %.n
         ::  did not validate, so we throw the block out and stop
@@ -557,7 +598,7 @@
     ::
     ::  +new-block: update kernel state with new valid block.
     ++  new-block
-      |=  [now=@da pag=page:t acc=tx-acc:t]
+      |=  [now=@da eny=@ pag=page:t acc=tx-acc:t]
       ^-  [(list effect:dk) kernel-state:dk]
       ::
       ::  page is validated, update consensus and derived state
@@ -598,6 +639,10 @@
       ::
       ::  update derived state
       =.  d.k  (update:der c.k pag)
+      ?.  =(old-heavy heaviest-block.c.k)
+        =^  mining-effs  k  (do-mine (hash-noun-varlen:tip5:zeke [%nonce eny]))
+        =.  effs  (weld mining-effs effs)
+        effs^k
       ::
       effs^k
     ::
@@ -638,6 +683,7 @@
     ++  handle-command
       |=  [now=@da =command:dk]
       ^-  [(list effect:dk) kernel-state:dk]
+      ~>  %slog.[0 (cat 3 'command: ' -.command)]
       ::  ~&  "handling command: {<-.command>}"
       ?:  &(?=(init-command:dk -.command) !init.a.k)
         ::  kernel no longer in init phase, can't do init command
@@ -652,8 +698,8 @@
           %born
         do-born
       ::
-          %mine
-        do-mine
+          %pow
+        do-pow
       ::
           %set-mining-key
         do-set-mining-key
@@ -707,31 +753,32 @@
         :_  k
         [%request %block %by-height height]~
       ::
-      ++  do-mine
+      ++  do-pow
         ^-  [(list effect:dk) kernel-state:dk]
-        ?>  ?=([%mine *] command)
-        ?:  =(*(z-set lock:t) pubkeys.m.k)
-          ::~&  "cannot mine without first setting pubkey with %set-mining-key"
-          `k
-        ?.  mining.m.k
-          `k
+        ?>  ?=([%pow *] command)
         =/  commit=block-commitment:t
           (block-commitment:page:t candidate-block.m.k)
-        =/  [prf=proof:sp dig=tip5-hash-atom:zeke]
-          (prove-block:mine commit p.command)
-        ?:  %+  check-target:mine  dig
+        ?.  =(bc.command commit)
+          ~&  "mined for wrong (old) block commitment"  `k
+        ?.  =(nonce.command next-nonce.m.k)
+          ~&  "mined wrong (old) nonce"  `k
+        ?:  %+  check-target:mine  dig.command
             (~(got z-by targets.c.k) parent.candidate-block.m.k)
-          =.  m.k  (set-pow:min prf)
+          =.  m.k  (set-pow:min prf.command)
           =.  m.k  set-digest:min
-          ::
           (heard-block /poke/miner now candidate-block.m.k eny)
-        `k
+        :: mine the next nonce
+        (do-mine (atom-to-digest:tip5:zeke dig.command))
       ::
       ++  do-set-mining-key
         ^-  [(list effect:dk) kernel-state:dk]
         ?>  ?=([%set-mining-key *] command)
-        =/  pk=schnorr-pubkey:t  (from-b58:schnorr-pubkey:t p.command)
-        =/  =lock:t  (new:lock:t pk)
+        =/  pk=(unit schnorr-pubkey:t)
+          (mole |.((from-b58:schnorr-pubkey:t p.command)))
+        ?~  pk
+          ~>  %slog.[0 leaf+"invalid mining pubkey, exiting"]
+          [[%exit 1]~ k]
+        =/  =lock:t  (new:lock:t u.pk)
         =.  m.k  (set-pubkeys:min [lock]~)
         =.  m.k  (set-shares:min [lock 100]~)
         ::  ~&  >  "pubkeys.m set to {<pubkeys.m.k>}"
@@ -742,20 +789,26 @@
         ^-  [(list effect:dk) kernel-state:dk]
         ?>  ?=([%set-mining-key-advanced *] command)
         ?:  (gth (lent p.command) 2)
-        ~>  %slog.[0 [%leaf "coinbase split for more than two locks not yet supported, doing nothing"]]
-          `k
+        ~>  %slog.[0 [%leaf "coinbase split for more than two locks not yet supported, exiting"]]
+          [[%exit 1]~ k]
         ?~  p.command
-        ~>  %slog.[0 [%leaf "empty list of locks, doing nothing."]]
-          `k
+        ~>  %slog.[0 [%leaf "empty list of locks, exiting."]]
+          [[%exit 1]~ k]
         ::
-        =/  keys=(list lock:t)
-          %+  turn  p.command
-          |=  [s=@ m=@ ks=(list @t)]
-          (from-b58:lock:t m ks)
-        =/  shares=(list [lock:t @])
-          %+  turn  p.command
-          |=  [s=@ m=@ ks=(list @t)]
-          [(from-b58:lock:t m ks) s]
+        =/  [keys=(list lock:t) shares=(list [lock:t @]) crash=?]
+          %+  roll  `(list [@ @ (list @t)])`p.command
+          |=  $:  [s=@ m=@ ks=(list @t)]
+                  locks=(list lock:t)
+                  shares=(list [lock:t @])
+                  crash=_`?`%|
+              ==
+          =+  r=(mole |.((from-b58:lock:t m ks)))
+          ?~  r
+            [~ ~ %&]
+          [[u.r locks] [[u.r s] shares] crash]
+        ?:  crash
+          ~>  %slog.[0 leaf+"invalid public keys provided, exiting"]
+          [[%exit 1]~ k]
         =.  m.k  (set-pubkeys:min keys)
         =.  m.k  (set-shares:min shares)
         ::  ~&  >  "pubkeys.m set to {<pubkeys.m.k>}"
@@ -823,20 +876,20 @@
         =/  genesis-page=page:t
           (new-genesis:page:t genesis-template now)
         =.  candidate-block.m.k  genesis-page
-        =.  c.k  (add-btc-data:con btc-hash.p.command)
+        =.  c.k  (add-btc-data:con `btc-hash.p.command)
         `k
       ::
       ++  do-btc-data
         ^-  [(list effect:dk) kernel-state:dk]
         ?>  ?=([%btc-data *] command)
         =.  c.k  (add-btc-data:con p.command)
-        ~>  %slog.[0 leaf+"received btc block hash, waiting to hear nockchain genesis block!"]
         `k
       --::+handle-command
     ::
     ++  handle-fact
       |=  [wir=wire eny=@ our=@ux now=@da =fact:dk]
       ^-  [(list effect:dk) kernel-state:dk]
+      ~>  %slog.[0 (cat 3 'fact: ' +<.fact)]
       ?:  init.a.k
         ::  kernel in init phase, fact ignored
         `k
@@ -845,11 +898,27 @@
         (heard-block wir now p.data.fact eny)
       ::
           %heard-tx
-        (heard-tx wir now p.data.fact)
+        (heard-tx wir now p.data.fact eny)
       ::
           %heard-elders
         (heard-elders wir now p.data.fact)
       ==
-  --::  +poke
---::  +kernel
+      ::
+      ++  do-mine
+        |=  nonce=noun-digest:tip5:zeke
+        ^-  [(list effect:dk) kernel-state:dk]
+        ?.  mining.m.k
+          `k
+        ?:  =(*(z-set lock:t) pubkeys.m.k)
+          ::~&  "cannot mine without first setting pubkey with %set-mining-key"
+          `k
+        =/  commit=block-commitment:t
+          (block-commitment:page:t candidate-block.m.k)
+        =.  next-nonce.m.k  nonce
+        ~&  mining-on+nonce
+        :_  k
+        [%mine pow-len:zeke commit nonce]~
+    --::  +poke
+  --::  +kernel
 --
+:: churny churn 1

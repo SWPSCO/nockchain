@@ -1,13 +1,17 @@
 /=  *  /common/zeke
 /=  stark-prover  /common/stark/prover
 /=  common  /common/nock-common
-/#  sc=stark-config
+/#  softed-constraints
 ::
 |%
 ::
 ++  prover
   =|  in=stark-input
   ::  +<+< = stark-engine door sample wrt stark-verifier core
+  =/  sc=stark-config
+    %*  .  *stark-config
+      prep  softed-constraints
+    ==
   %_    stark-prover
       +<+<
     %_  in

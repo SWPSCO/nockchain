@@ -1,4 +1,4 @@
-use std::ops::{Add, Mul, Neg, Sub};
+use std::ops::{Add, Div, Mul, Neg, Sub};
 
 use nockvm::noun::Noun;
 use num_traits::Pow;
@@ -56,6 +56,11 @@ impl Belt {
         }
         Ok(ROOTS[log_of_self as usize].into())
     }
+
+    #[inline(always)]
+    pub fn inv(&self) -> Self {
+        Belt(binv(self.0))
+    }
 }
 
 impl Add for Belt {
@@ -107,6 +112,16 @@ impl Pow<usize> for Belt {
     #[inline(always)]
     fn pow(self, rhs: usize) -> Self::Output {
         Belt(bpow(self.0, rhs as u64))
+    }
+}
+
+impl Div for Belt {
+    type Output = Self;
+
+    #[inline(always)]
+    #[allow(clippy::suspicious_arithmetic_impl)]
+    fn div(self, rhs: Self) -> Self::Output {
+        self * rhs.inv()
     }
 }
 

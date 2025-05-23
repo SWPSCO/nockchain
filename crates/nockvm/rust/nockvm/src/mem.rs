@@ -1,7 +1,6 @@
 // TODO: fix stack push in PC
 use crate::noun::{Atom, Cell, CellMemory, IndirectAtom, Noun, NounAllocator};
 use crate::{assert_acyclic, assert_no_forwarding_pointers, assert_no_junior_pointers};
-use assert_no_alloc::permit_alloc;
 use either::Either::{self, Left, Right};
 use ibig::Stack;
 use memmap2::MmapMut;
@@ -414,6 +413,8 @@ impl NockStack {
     // Types of size: word (words: usize)
     /// Check if an allocation or pointer retrieval indicates an invalid request or an invalid state
     pub(crate) fn alloc_would_oom_(&self, alloc: Allocation, words: usize) {
+        #[cfg(feature = "no_check_oom")]
+        return;
         let _memory_state = self.memory_state(Some(words));
         if self.pc && !alloc.alloc_type.allowed_when_pc() {
             panic_any(self.cannot_alloc_in_pc(Some(words)));
@@ -734,20 +735,18 @@ impl NockStack {
         // Calculate the pointer offset from the base in words
         let ptr_u64 = ptr as *const u64;
         // We need to permit alloc here for panic reasons
-        assert_no_alloc::permit_alloc(|| {
-            debug_assert!(
-                ptr_u64 >= self.start,
-                "is_in_frame: {} >= {}",
-                ptr_u64 as usize,
-                self.start as usize,
-            );
-            debug_assert!(
-                ptr_u64 < self.start.add(self.size),
-                "is_in_frame: {} < {}",
-                ptr_u64 as usize,
-                self.start.add(self.size) as usize,
-            );
-        });
+        debug_assert!(
+            ptr_u64 >= self.start,
+            "is_in_frame: {} >= {}",
+            ptr_u64 as usize,
+            self.start as usize,
+        );
+        debug_assert!(
+            ptr_u64 < self.start.add(self.size),
+            "is_in_frame: {} < {}",
+            ptr_u64 as usize,
+            self.start.add(self.size) as usize,
+        );
 
         let ptr_offset = (ptr_u64 as usize - self.start as usize) / 8;
 
@@ -806,13 +805,17 @@ impl NockStack {
 
     // Get the offset of the previous alloc pointer
     unsafe fn prev_alloc_offset(&self) -> usize {
-        let prev_alloc_ptr = *self.prev_alloc_pointer_pointer();
-        if prev_alloc_ptr == self.start as *mut u64 {
-            0
-        } else {
-            // Calculate offset from base pointer in words
-            (prev_alloc_ptr as usize - self.start as usize) / 8
-        }
+        // let prev_alloc_ptr = *self.prev_alloc_pointer_pointer();
+        // if prev_alloc_ptr == self.start as *mut u64 {
+        //     0
+        // } else {
+        //     // Calculate offset from base pointer in words
+        //     (prev_alloc_ptr as usize - self.start as usize) / 8
+        // }
+        // seems to be ~5x faster
+        let ptr = *self.prev_alloc_pointer_pointer() as usize;
+        // ptr == start  ⇒  diff==0
+        ((ptr).wrapping_sub(self.start as usize)) >> 3
     }
 
     /** Mutable pointer to a slot in a stack frame: east stack */
@@ -1453,12 +1456,10 @@ impl NockStack {
 
         // Check for null pointers before calculating offsets
         if prev_frame_ptr.is_null() || prev_stack_ptr.is_null() || prev_alloc_ptr.is_null() {
-            permit_alloc(|| {
-                panic!(
-                    "serf: frame_pop: null NockStack pointer f={:p} s={:p} a={:p}",
-                    prev_frame_ptr, prev_stack_ptr, prev_alloc_ptr
-                );
-            });
+            panic!(
+                "serf: frame_pop: null NockStack pointer f={:p} s={:p} a={:p}",
+                prev_frame_ptr, prev_stack_ptr, prev_alloc_ptr
+            );
         }
 
         // Calculate the offsets from base pointer

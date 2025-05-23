@@ -118,17 +118,16 @@ pub fn bpmul_jet(context: &mut Context, subject: Noun) -> Result {
         return jet_err();
     };
 
-    let res_len = bp_poly.len() + bq_poly.len() - 1;
-
-    //let (res_cell, mut res_poly): (Cell, BPolySliceMut) =
-    //    Cell::new_zeroed_handle_mut(&mut context.stack, Some(res_len as usize));
+    let res_len = if bp_poly.is_zero() | bq_poly.is_zero() {
+        1
+    } else {
+        bp_poly.len() + bq_poly.len() - 1
+    };
 
     let (res_atom, res_poly): (IndirectAtom, &mut [Belt]) =
         new_handle_mut_slice(&mut context.stack, Some(res_len));
 
-    //(c, BPolySliceMut::try_from(c).unwrap_or_else(|| panic!("Panicked at {}:{} (git sha: {:?})", file!(), line!(), option_env!("GIT_SHA"))))
     bpmul(bp_poly.0, bq_poly.0, res_poly);
-
     let res_cell = finalize_poly(&mut context.stack, Some(res_len), res_atom);
 
     Ok(res_cell)

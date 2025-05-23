@@ -310,13 +310,15 @@ pub mod util {
     }
 
     pub mod test {
+        use std::sync::atomic::AtomicIsize;
+        use std::sync::Arc;
+
         use super::*;
         use crate::hamt::Hamt;
-        use crate::interpreter::Slogger;
+        use crate::interpreter::{NockCancelToken, Slogger};
         use crate::mem::NockStack;
         use crate::noun::{Atom, Noun, D, T};
         use crate::unifying_equality::unifying_equality;
-        use assert_no_alloc::assert_no_alloc;
         use ibig::UBig;
 
         struct TestSlogger {}
@@ -338,6 +340,7 @@ pub mod util {
             let hot = Hot::init(&mut stack, URBIT_HOT_STATE);
             let cache = Hamt::<Noun>::new(&mut stack);
             let slogger = std::boxed::Box::pin(TestSlogger {});
+            let cancel = Arc::new(AtomicIsize::new(NockCancelToken::RUNNING_IDLE));
 
             Context {
                 stack,
@@ -348,6 +351,7 @@ pub mod util {
                 cache,
                 scry_stack: D(0),
                 trace_info: None,
+                running_status: cancel,
             }
         }
 
@@ -439,15 +443,13 @@ pub mod util {
 
         pub fn assert_jet_size(context: &mut Context, jet: Jet, sam: Noun, siz: usize) {
             let sam = T(&mut context.stack, &[D(0), sam, D(0)]);
-            let res = assert_no_alloc(|| {
-                jet(context, sam).unwrap_or_else(|err| {
-                    panic!(
-                        "Panicked with {err:?} at {}:{} (git sha: {:?})",
-                        file!(),
-                        line!(),
-                        option_env!("GIT_SHA")
-                    )
-                })
+            let res = jet(context, sam).unwrap_or_else(|err| {
+                panic!(
+                    "Panicked with {err:?} at {}:{} (git sha: {:?})",
+                    file!(),
+                    line!(),
+                    option_env!("GIT_SHA")
+                )
             });
             assert!(res.is_atom(), "jet result not atom");
             let res_siz = res

@@ -1,4 +1,4 @@
-// #![feature(ptr_as_ref_unchecked)]
+#![feature(cold_path)]
 #![allow(dead_code)]
 
 extern crate lazy_static;
@@ -48,22 +48,6 @@ pub fn check_endian() {
         panic!("Sword only supports little-endian. This system has an unknown endianness, which is not supported.");
     }
 }
-
-// Use the allocator from assert_no_alloc.
-//
-// DO NOT COMMENT THIS OUT
-//
-// if you need to allow allocations somewhere for debugging, wrap your debug code in
-// ```
-// permit_alloc( || {
-//   your.code.goes.here()
-// })
-// ```
-//
-// (see https://docs.rs/assert_no_alloc/latest/assert_no_alloc/#advanced-use)
-#[cfg(debug_assertions)]
-#[global_allocator]
-static A: assert_no_alloc::AllocDisabler = assert_no_alloc::AllocDisabler;
 
 pub(crate) use gdb;
 

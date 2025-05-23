@@ -189,12 +189,12 @@ unsafe fn senior_pointer_first(
             a < high_pointer && a >= low_pointer,
             b < high_pointer && b >= low_pointer,
         ) {
+            (true, false) => break (b, a), // a is in the frame, b is not, so b is senior
+            (false, true) => break (a, b), // b is in the frame, a is not, so a is senior
             (true, true) => {
                 // both pointers are in the same frame, pick arbitrarily (lower in mem)
                 break lower_pointer_first(a, b);
             }
-            (true, false) => break (b, a), // a is in the frame, b is not, so b is senior
-            (false, true) => break (a, b), // b is in the frame, a is not, so a is senior
             (false, false) => {
                 // chase up the stack
                 #[allow(clippy::comparison_chain)]
@@ -228,6 +228,7 @@ unsafe fn senior_pointer_first(
                     // "previous previous" stack pointer. this is the other boundary of the previous allocation arena
                     high_pointer = *(frame_pointer.sub(STACK + 1)) as *const u64;
                 } else {
+                    core::hint::cold_path();
                     panic!("senior_pointer_first: stack_pointer == alloc_pointer");
                 }
             }

@@ -4,16 +4,21 @@ version = "0.2.0"
 edition.workspace = true
 
 [dependencies]
-nockapp = { workspace = true }
+bincode = { workspace = true }
+blake3 = { workspace = true }
+bytes = { workspace = true }
+clap = { workspace = true, features = ["derive", "cargo", "color", "env"] }
 dirs = { workspace = true }
+futures = { workspace = true }
+nockapp = { workspace = true }
 nockvm = { workspace = true }
 nockvm_macros = { workspace = true }
-clap = { workspace = true, features = ["derive", "cargo", "color", "env"] }
-futures = { workspace = true }
 tempfile = { workspace = true }
-tokio = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
 tracing = { workspace = true }
-bytes = { workspace = true }
+tracing-subscriber = { workspace = true }
+# tracing-tracy = { workspace = true, features = ["flush-on-exit"] }
 walkdir = "2.5.0"
 
 [[bin]]
