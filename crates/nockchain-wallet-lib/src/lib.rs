@@ -304,6 +304,7 @@ impl Wallet {
         sync_slab.modify(move |original_root| vec![tag_noun, original_root]);
 
         Ok((sync_slab, operation))
+    }
 
     /// Prepares a wallet command for execution.
     ///
