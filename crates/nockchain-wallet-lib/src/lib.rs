@@ -280,6 +280,7 @@ impl Wallet {
         let sync_run_cell = Cell::new(&mut sync_slab, tag_noun, *original_root_noun_clone);
         let sync_run_noun = sync_run_cell.as_noun();
         sync_slab.set_root(sync_run_noun);
+        tracing::info!("sync_slab: {:?}", sync_slab);
 
         Ok((sync_slab, operation))
     }
