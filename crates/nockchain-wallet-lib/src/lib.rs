@@ -274,6 +274,7 @@ impl Wallet {
     /// # Returns
     ///
     /// A result containing the wrapped command noun and operation, or an error
+    /*
     pub fn wrap_with_sync_run(
         command_noun_slab: NounSlab,
         operation: Operation,
@@ -289,6 +290,20 @@ impl Wallet {
 
         Ok((sync_slab, operation))
     }
+    */
+
+    pub fn wrap_with_sync_run(
+        command_noun_slab: NounSlab,
+        operation: Operation,
+    ) -> Result<(NounSlab, Operation), NockAppError> {
+        let mut sync_slab = command_noun_slab.clone();
+
+        let sync_tag = make_tas(&mut sync_slab, "sync-run");
+        let tag_noun = sync_tag.as_noun();
+
+        sync_slab.modify(move |original_root| vec![tag_noun, original_root]);
+
+        Ok((sync_slab, operation))
 
     /// Prepares a wallet command for execution.
     ///
