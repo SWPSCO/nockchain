@@ -350,30 +350,58 @@ impl NockApp {
     /// Runs until the nockapp is done (returns exit 0 or an error)
     /// TODO: we should print most errors rather than exiting immediately
     #[instrument(skip(self))]
-    pub async fn run(&mut self) -> NockAppResult {
+    pub async fn run(&mut self, requires_sync: bool) -> NockAppResult {
         // Reset NockApp for next run
         // self.reset();
         // debug!("Reset NockApp for next run");
         loop {
+            if requires_sync {
+                tracing::warn!("1");
+            }
             let work_res = self.work().await;
+            if requires_sync {
+                tracing::warn!("2");
+            }
             match work_res {
                 Ok(nockapp_run) => match nockapp_run {
+                    if requires_sync {
+                        tracing::warn!("3");
+                    }
                     crate::nockapp::NockAppRun::Pending => {
                         continue;
                     }
-                    crate::nockapp::NockAppRun::Done => break Ok(()),
+                    if requires_sync {
+                        tracing::warn!("4");
+                    }
+                    crate::nockapp::NockAppRun::Done => {
+                        if requires_sync {
+                            tracing::warn!("5");
+                        }
+                        break Ok(());
                 },
                 Err(NockAppError::Exit(code)) => {
+                    if requires_sync {
+                        tracing::warn!("6");
+                    }
                     if code == 0 {
                         // zero is success, we're simply done.
+                        if requires_sync {
+                            tracing::warn!("7");
+                        }
                         debug!("nockapp exited successfully with code: {}", code);
                         break Ok(());
                     } else {
+                        if requires_sync {
+                            tracing::warn!("8");
+                        }
                         error!("nockapp exited with error code: {}", code);
                         break Err(NockAppError::Exit(code));
                     }
                 }
                 Err(e) => {
+                    if requires_sync {
+                        tracing::warn!("9");
+                    }
                     error!("Got error running nockapp: {:?}", e);
                     break Err(e);
                 }
