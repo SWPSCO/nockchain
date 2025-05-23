@@ -40,20 +40,13 @@ pub struct WalletCli {
 
 #[tokio::main]
 async fn main() -> Result<(), NockAppError> {
-    let peek_res = peek_wrapper().await?;
-    println!("peek_res: {:?}", peek_res);
-    Ok(())
-}
-
-
-async fn peek_wrapper() -> Result<Vec<NounSlab>, NockAppError> {
     let cli = WalletCli::parse();
     boot::init_default_tracing(&cli.boot.clone()); // Init tracing early
 
     let prover_hot_state = produce_prover_hot_state();
     let data_dir = wallet_data_dir().await?;
 
-    let kernel = boot::setup(
+    let kernel_app = boot::setup(
         KERNEL,
         Some(cli.boot.clone()),
         prover_hot_state.as_slice(),
@@ -63,7 +56,7 @@ async fn peek_wrapper() -> Result<Vec<NounSlab>, NockAppError> {
     .await
     .map_err(|e| CrownError::Unknown(format!("Kernel setup failed: {}", e)))?;
 
-    let mut wallet = Wallet::new(kernel);
+    let mut wallet_instance = Wallet::new(kernel_app);
 
     // Determine if this command requires chain synchronization
     let requires_sync = match &cli.command {
@@ -71,24 +64,25 @@ async fn peek_wrapper() -> Result<Vec<NounSlab>, NockAppError> {
         Commands::Keygen
         | Commands::DeriveChild { .. }
         | Commands::ImportKeys { .. }
+        | Commands::ExportKeys
         | Commands::SignTx { .. }
         | Commands::MakeTx { .. }
         | Commands::GenMasterPrivkey { .. }
         | Commands::GenMasterPubkey { .. }
+        | Commands::ExportMasterPubkey
         | Commands::ImportMasterPubkey { .. }
         | Commands::ListPubkeys
         | Commands::ShowSeedphrase
         | Commands::ShowMasterPubkey
         | Commands::ShowMasterPrivkey
         | Commands::SimpleSpend { .. }
-        // Peeks
+        // Lib specific Peek commands
         | Commands::PeekBalance
         | Commands::PeekSeedphrase
         | Commands::PeekMasterPubkey
         | Commands::PeekState
         | Commands::PeekReceiveAddress
-        | Commands::PeekPubkeys
-         => false,
+        | Commands::PeekPubkeys => false,
 
         // All other commands DO need sync
         _ => true,
@@ -105,30 +99,12 @@ async fn peek_wrapper() -> Result<Vec<NounSlab>, NockAppError> {
     // Generate the command noun and operation
     let poke = match &cli.command {
         // Peek Commands
-        Commands::PeekBalance => {
-            let (noun, _op) = Wallet::peek_balance()?;
-            return do_peek(noun, wallet.app).await
-        }
-        Commands::PeekSeedphrase => {
-            let (noun, _op) = Wallet::peek_seedphrase()?;
-            return do_peek(noun, wallet.app).await
-        }
-        Commands::PeekMasterPubkey => {
-            let (noun, _op) = Wallet::peek_master_pubkey()?;
-            return do_peek(noun, wallet.app).await
-        }
-        Commands::PeekState => {
-            let (noun, _op) = Wallet::peek_state()?;
-            return do_peek(noun, wallet.app).await
-        }
-        Commands::PeekReceiveAddress => {
-            let (noun, _op) = Wallet::peek_receive_address()?;
-            return do_peek(noun, wallet.app).await
-        }
-        Commands::PeekPubkeys => {
-            let (noun, _op) = Wallet::peek_pubkeys()?;
-            return do_peek(noun, wallet.app).await
-        }
+        Commands::PeekBalance => return do_peek(Wallet::peek_balance()?.0, wallet_instance.app).await,
+        Commands::PeekSeedphrase => return do_peek(Wallet::peek_seedphrase()?.0, wallet_instance.app).await,
+        Commands::PeekMasterPubkey => return do_peek(Wallet::peek_master_pubkey()?.0, wallet_instance.app).await,
+        Commands::PeekState => return do_peek(Wallet::peek_state()?.0, wallet_instance.app).await,
+        Commands::PeekReceiveAddress => return do_peek(Wallet::peek_receive_address()?.0, wallet_instance.app).await,
+        Commands::PeekPubkeys => return do_peek(Wallet::peek_pubkeys()?.0, wallet_instance.app).await,
         Commands::Keygen => {
             let mut entropy = [0u8; 32];
             let mut salt = [0u8; 16];
@@ -136,14 +112,8 @@ async fn peek_wrapper() -> Result<Vec<NounSlab>, NockAppError> {
             getrandom(&mut salt).map_err(|e| CrownError::Unknown(e.to_string()))?;
             Wallet::keygen(&entropy, &salt)
         }
-        /*
-        Commands::GetBalance => {
-            Wallet::get_balance()
-        }
-        */
         Commands::DeriveChild { key_type, index, label } => {
-            // Validate key_type is either "pub" or "priv"
-            let key_type = match key_type.as_str() {
+            let key_type_enum = match key_type.as_str() {
                 "pub" => KeyType::Pub,
                 "priv" => KeyType::Prv,
                 _ => {
@@ -153,10 +123,11 @@ async fn peek_wrapper() -> Result<Vec<NounSlab>, NockAppError> {
                     .into())
                 }
             };
-            Wallet::derive_child(key_type, *index, label.clone())
+            Wallet::derive_child(key_type_enum, *index, label.clone())
         }
-        Commands::SignTx { draft, index } => Wallet::sign_tx(draft, *index),
         Commands::ImportKeys { input } => Wallet::import_keys(input),
+        Commands::ExportKeys => Wallet::export_keys(),
+        Commands::SignTx { draft, index } => Wallet::sign_tx(draft, *index),
         Commands::GenMasterPrivkey { seedphrase } => Wallet::gen_master_privkey(seedphrase),
         Commands::GenMasterPubkey { master_privkey } => Wallet::gen_master_pubkey(master_privkey),
         Commands::Scan {
@@ -183,7 +154,10 @@ async fn peek_wrapper() -> Result<Vec<NounSlab>, NockAppError> {
         } => Wallet::simple_spend(names.clone(), recipients.clone(), gifts.clone(), *fee),
         Commands::MakeTx { draft } => Wallet::make_tx(draft),
         Commands::UpdateBalance => Wallet::update_balance(),
-        Commands::ImportMasterPubkey { key, knot } => Wallet::import_master_pubkey(key, knot),
+        Commands::ExportMasterPubkey => Wallet::export_master_pubkey(),
+        Commands::ImportMasterPubkey { key_path } => {
+            Wallet::import_master_pubkey(key_path)
+        }
         Commands::ListPubkeys => Wallet::list_pubkeys(),
         Commands::ShowSeedphrase => Wallet::show_seedphrase(),
         Commands::ShowMasterPubkey => Wallet::show_master_pubkey(),
@@ -191,15 +165,15 @@ async fn peek_wrapper() -> Result<Vec<NounSlab>, NockAppError> {
     }?;
 
     // If this command requires sync and we have a socket, wrap it with sync-run
-    let final_poke = if requires_sync && cli.nockchain_socket.is_some() {
+    let final_poke_op = if requires_sync && cli.nockchain_socket.is_some() {
         Wallet::wrap_with_sync_run(poke.0, poke.1)?
     } else {
         poke
     };
 
-    wallet
+    wallet_instance
         .app
-        .add_io_driver(one_punch_driver(final_poke.0, final_poke.1))
+        .add_io_driver(one_punch_driver(final_poke_op.0, final_poke_op.1))
         .await;
 
     {
@@ -207,7 +181,7 @@ async fn peek_wrapper() -> Result<Vec<NounSlab>, NockAppError> {
             match UnixStream::connect(&socket_path).await {
                 Ok(stream) => {
                     info!("Connected to nockchain NPC socket at {:?}", socket_path);
-                    wallet
+                    wallet_instance
                         .app
                         .add_io_driver(nockapp::npc_client_driver(stream))
                         .await;
@@ -226,18 +200,22 @@ async fn peek_wrapper() -> Result<Vec<NounSlab>, NockAppError> {
             }
         }
 
-        wallet.app.add_io_driver(file_driver()).await;
-        wallet.app.add_io_driver(markdown_driver()).await;
-        wallet.app.add_io_driver(exit_driver()).await;
+        wallet_instance.app.add_io_driver(file_driver()).await;
+        wallet_instance.app.add_io_driver(markdown_driver()).await;
+        wallet_instance.app.add_io_driver(exit_driver()).await;
 
-        wallet.app.run().await?;
-        Ok(vec![NounSlab::new()])
+        wallet_instance.app.run().await?;
+        Ok(())
     }
 }
 
-async fn do_peek(noun: NounSlab, mut wallet: NockApp) -> Result<Vec<NounSlab>, NockAppError> {
-    let res = wallet.peek(noun).await?;
-    Ok(vec![res])
+async fn do_peek(noun_slab: NounSlab, mut app: NockApp) -> Result<(), NockAppError> {
+    // Add essential drivers for peek operations if they don't run the full driver setup
+    app.add_io_driver(markdown_driver()).await; // For output
+    app.add_io_driver(exit_driver()).await;
+    let peek_result_slab = app.peek(noun_slab).await?;
+    info!("Peek result: {:?}", peek_result_slab); // Placeholder
+    Ok(())
 }
 
 

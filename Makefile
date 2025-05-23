@@ -88,6 +88,10 @@ run-nockchain:  # Run a nockchain node in follower mode with a mining pubkey
 	$(call show_env_vars)
 	mkdir -p miner-node && cd miner-node && rm -f nockchain.sock && RUST_BACKTRACE=1 cargo run --release --bin nockchain -- --npc-socket nockchain.sock --mining-pubkey $(MINING_PUBKEY) --mine
 
+.PHONY: build-wallet
+build-wallet: ensure-dirs update-hoonc assets/wal.jam
+	$(call show_env_vars)
+
 HOON_SRCS := $(find hoon -type file -name '*.hoon')
 
 ## Build dumb.jam with hoonc
