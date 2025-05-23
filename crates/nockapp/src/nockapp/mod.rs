@@ -350,7 +350,7 @@ impl NockApp {
     /// Runs until the nockapp is done (returns exit 0 or an error)
     /// TODO: we should print most errors rather than exiting immediately
     #[instrument(skip(self))]
-    pub async fn run(&mut self, requires_sync: bool) -> NockAppResult {
+    pub async fn run(&mut self) -> NockAppResult {
         // Reset NockApp for next run
         // self.reset();
         // debug!("Reset NockApp for next run");
