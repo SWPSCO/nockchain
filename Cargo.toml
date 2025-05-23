@@ -12,6 +12,7 @@ members = [
     "crates/nockvm/rust/nockvm_macros",
     "crates/nockvm/rust/nockvm",
     "crates/nockchain-wallet",
+    "crates/nockchain-wallet-lib",
     "crates/zkvm-jetpack",
 ]
 

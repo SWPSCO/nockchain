@@ -980,14 +980,41 @@
   %-  (debug "peek: {<state>}")
   ?+    path  ~
     ::
+      [%state ~]
+    ``state
+    ::
       [%balance ~]
     ``balance.state
     ::
       [%receive-address ~]
     ``receive-address.state
     ::
-      [%state ~]
-    ``state
+      [%seed-phrase ~]
+    =/  =meta  seed:get:v
+    =/  seedphrase=@t
+      ?:  ?=(%seed -.meta)
+        +.meta
+      %-  crip
+      ""
+    ``seedphrase
+    ::
+      [%master-pubkey ~]
+    =/  =meta  ~(master get:v %pub)
+    =/  master-pubkey=@t
+    %-  crip
+    ?:  ?=(%coil -.meta)
+      "{(en:base58:wrap p.key.meta)}"
+    ""
+    ``master-pubkey
+    ::
+      [%pubkeys ~]
+    =/  pubkeys  ~(coils get:v %pub)
+    =/  base58-keys=(list cord)
+      %+  turn  pubkeys
+      |=  =coil
+      =/  pubkey=schnorr-pubkey:transact  pub:(from-public:s10 [p.key cc]:coil)
+      (to-b58:schnorr-pubkey:transact pubkey)
+    ``(crip (join ' ' base58-keys))
   ==
 ::
 ++  poke
@@ -1240,7 +1267,7 @@
       (need last-block.state)
     =/  =path  (snoc /balance (to-b58:block-id:transact bid))
     =/  =effect  [%npc u.pid %peek path]
-    :-  ~[effect]
+    :-  ~[effect [%exit 0]]
     state(peek-requests (~(put by peek-requests.state) u.pid %balance))
   ::
   ++  do-update-block

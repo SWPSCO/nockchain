@@ -282,7 +282,7 @@ impl NockchainCli {
     }
 
     /// Helper function to create a BitcoinRPCConnection from CLI arguments
-    fn create_bitcoin_connection(&self) -> BitcoinRPCConnection {
+    pub fn create_bitcoin_connection(&self) -> BitcoinRPCConnection {
         let url = self.btc_node_url.clone();
         let height = GENESIS_HEIGHT;
         let auth = if let Some(username) = self.btc_username.clone() {
@@ -336,7 +336,7 @@ pub fn gen_keypair(keypair_path: &Path) -> Result<Keypair, Box<dyn Error>> {
     Ok(new_keypair)
 }
 
-fn load_keypair(keypair_path: &Path, force_new: bool) -> Result<Keypair, Box<dyn Error>> {
+pub fn load_keypair(keypair_path: &Path, force_new: bool) -> Result<Keypair, Box<dyn Error>> {
     if keypair_path.try_exists()? && !force_new {
         let keypair_bytes = std::fs::read(keypair_path)?;
         let keypair = libp2p::identity::Keypair::from_protobuf_encoding(&keypair_bytes[..])?;

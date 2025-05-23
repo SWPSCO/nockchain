@@ -2806,7 +2806,6 @@ dependencies = [
  "rw-stream-sink",
  "thiserror 2.0.12",
  "tracing",
- "unsigned-varint",
  "web-time",
 ]
 
@@ -3002,7 +3001,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "libp2p-swarm"
 version = "0.47.0"
 source = "git+https://github.com/libp2p/rust-libp2p.git?rev=da0017ee887a868e231ed78c7de892779c17800d#da0017ee887a868e231ed78c7de892779c17800d"
 dependencies = [

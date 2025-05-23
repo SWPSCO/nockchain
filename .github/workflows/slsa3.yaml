@@ -1,0 +1,259 @@
+name: Nockchain SLSA3 release
+
+on:
+  repository_dispatch:
+    types: [build-master]
+  workflow_dispatch:
+    inputs:
+      create_release:
+        description: "create github release when manually triggered"
+        required: false
+        default: true
+        type: boolean
+
+permissions: write-all
+env:
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  
+jobs:
+  vars:
+    runs-on: ubuntu-latest
+    outputs:
+      short_sha: ${{ steps.set.outputs.short_sha }}
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          ref: master
+      - name: set short git commit sha
+        id: set
+        run: |
+          calculatedSha=$(git rev-parse master | cut -c1-7)
+          echo "short_sha=$calculatedSha" >> $GITHUB_OUTPUT
+
+  build-linux-x64:
+    needs: vars
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          ref: master
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          profile: minimal
+          targets: x86_64-unknown-linux-gnu
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y build-essential musl-tools
+          mkdir -p hoon
+          mkdir -p assets
+          rustup default stable
+          rustup target add x86_64-unknown-linux-musl
+      - name: install choo
+        run: |
+          cargo install --target x86_64-unknown-linux-musl --locked --force --path crates/hoonc --bin hoonc
+      - name: build hoon assets
+        run: make build-hoon-all
+      - name: build nockchain
+        run: |
+          cargo install --target x86_64-unknown-linux-musl --locked --force --path crates/nockchain --bin nockchain
+      - name: build others
+        run: |
+          make build-trivial
+          make assets/dumb.jam
+          make assets/wal.jam
+          cargo install --target x86_64-unknown-linux-musl --locked --force --path crates/nockchain-bitcoin-sync --bin nockchain-bitcoin-sync
+      - name: build wallet
+        run: |
+          cargo install --target x86_64-unknown-linux-musl --locked --force --path crates/nockchain-wallet --bin nockchain-wallet
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-artifacts-x64
+          path: |
+            assets/*.jam
+            target/x86_64-unknown-linux-musl/release/nockchain
+            target/x86_64-unknown-linux-musl/release/nockchain-bitcoin-sync
+            target/x86_64-unknown-linux-musl/release/hoonc
+            target/x86_64-unknown-linux-musl/release/nockchain-wallet
+
+  # build-linux-arm64:
+  #   needs: vars
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v3
+  #       with:
+  #         ref: master
+  #     - uses: actions/checkout@v3
+  #     - uses: actions-rs/toolchain@v1
+  #       with:
+  #         toolchain: stable
+  #         profile: minimal
+  #         target: aarch64-unknown-linux-musl
+  #     - name: deps
+  #       run: sudo apt-get update && sudo apt-get install -y musl-tools
+  #     - name: install cross
+  #       run: cargo install cross
+  #     - name: install choo
+  #       run: make install-choo
+  #     - name: build hoon assets
+  #       run: make build-hoon-all
+  #     - name: build binaries
+  #       run: cross build --release
+  #     - uses: actions/upload-artifact@v4
+  #       with:
+  #         name: linux-arm64-artifacts
+  #         path: |
+  #           assets/*.jam
+  #           target/release/nockchain
+  #           target/release/nockchain-bitcoin-sync
+  #           target/release/hoonc
+  #           target/release/nockchain-wallet
+
+  build-macos:
+    needs: vars
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          ref: master
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          profile: minimal
+      - name: install choo
+        run: make install-hoonc
+      - name: build hoon assets
+        run: make build
+      - name: build nockchain
+        run: make install-nockchain
+      - name: build wallet
+        run: make install-nockchain-wallet
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac-artifacts
+          path: |
+            assets/*.jam
+            target/release/nockchain
+            target/release/nockchain-bitcoin-sync
+            target/release/hoonc
+            target/release/nockchain-wallet
+
+  package:
+    # needs: [build-linux-x64, build-macos, build-linux-arm64]
+    needs: [build-linux-x64, build-macos ]
+    runs-on: ubuntu-latest
+    outputs:
+      content_hashes: ${{ steps.content-hash.outputs.content_hashes }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-artifacts-x64
+          path: ./linux_x64
+      # - uses: actions/download-artifact@v4
+      #   with:
+      #     name: linux-arm4-artifacts
+      #     path: ./linux-arm64
+      - uses: actions/download-artifact@v4
+        with:
+          name: mac-artifacts
+          path: ./mac
+      - name: make zips
+        run: |
+          mkdir -p out/linux_x64 out/linux_arm64 out/macos_aarch64 out/jams
+          cp linux_x64/target/x86_64-unknown-linux-musl/release/nockchain linux_x64/target/x86_64-unknown-linux-musl/release/nockchain-bitcoin-sync linux_x64/target/x86_64-unknown-linux-musl/release/hoonc linux_x64/target/x86_64-unknown-linux-musl/release/nockchain-wallet out/linux_x64/
+          chmod +x out/linux_x64/*
+          # cp linux_arm64/target/release/nockchain linux_arm64/target/release/nockchain-bitcoin-sync linux_arm64/target/release/hoonc linux_arm64/target/release/nockchain-wallet out/linux_arm64/
+          # chmod +x out/linux_arm64/*
+          cp mac/target/release/nockchain mac/target/release/nockchain-bitcoin-sync mac/target/release/hoonc mac/target/release/nockchain-wallet out/macos_aarch64/
+          chmod +x out/macos_aarch64/*
+          cp linux_x64/assets/*.jam out/jams/
+          (cd out/linux_x64 && zip -j ../nockchain_linux_x64.zip *)
+          # (cd out/linux_arm64 && zip -j ../nockchain_linux_arm64.zip *)
+          (cd out/macos_aarch64 && zip -j ../nockchain_macos_aarch64.zip *)
+          (cd out/jams && zip -j ../nockchain_jams.zip *)
+      - name: compute content hashes
+        id: content-hash
+        run: |
+          mkdir -p tmp/linux tmp/macos tmp/jams
+          unzip -j out/nockchain_linux_x64.zip -d tmp/linux_x64
+          # unzip -j out/nockchain_linux_arm64.zip -d tmp/linux_arm64
+          unzip -j out/nockchain_macos_aarch64.zip -d tmp/macos
+          unzip -j out/nockchain_jams.zip -d tmp/jams
+          # files=$(ls tmp/linux_x64/* tmp/linux_arm64/* tmp/macos/* tmp/jams/*)
+          files=$(ls tmp/linux_x64/* tmp/macos/* tmp/jams/*)
+          echo "content_hashes=$(sha256sum $files | base64 -w0)" >> $GITHUB_OUTPUT
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packaged-zips
+          path: out/*.zip
+
+  provenance:
+    needs: package
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
+    permissions:
+      actions: read
+      id-token: write
+      contents: write
+    with:
+      base64-subjects: ${{ needs.package.outputs.content_hashes }}
+      upload-assets: false
+
+  release:
+    if: |
+      (github.event_name == 'repository_dispatch' && github.event.action == 'build-master') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.create_release == 'true')
+    needs: [vars, package, provenance]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: packaged-zips
+          path: ./out
+      - name: download provenance
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.provenance.outputs.provenance-name }}
+          path: ./prov
+      - name: Create readme
+        run: |
+          cat << EOF > ./README.md
+          ## Verification
+          
+          All artifacts in the zip files have [SLSA level 3](https://github.blog/security/supply-chain-security/slsa-3-compliance-with-github-actions/) provenance attestation; simply put, this means that you can prove nobody messed with the builds and introduced some funny business. But attestation doesn't mean anything if you don't actually verify it!
+          
+          ### How to verify
+          
+          - Get the slsa3-verifier for your platform: https://github.com/slsa-framework/slsa-verifier
+          - Download and unzip the release; download the `multiple.into.jsonl` file attached to the release
+          - Run it against an unzipped artifact: `slsa-verifier-linux-amd64 verify-artifact nockchain-wallet --provenance-path multiple.intoto.jsonl --source-uri=git+https://github.com/SWPSCO/nockchain`
+          - You should see output like this:
+          ```
+          Verified build using builder "https://github.com/slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@refs/tags/v2.1.0" at commit 1f8a1deb820b1e68c908ecf60ffcc1c86ae351f8
+          Verifying artifact nockchain-wallet: PASSED
+          
+          PASSED: SLSA verification passed
+          ```
+          
+          Note that the hash will correspond with a commit in the `release` branch, not the commit hash that was actually built (which is what the release is named after). This is because we have to sync master from upstream and build from a separate default branch.
+          
+          ## MacOS notes
+          
+          This only includes builds for aarch64 (Apple Silicon).
+          
+          ## Linux notes
+          
+          These binaries are statically linked musl builds for x64. They should run on any x64 linux machine.
+          EOF
+      - uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ needs.vars.outputs.short_sha }}
+          name: Release ${{ needs.vars.outputs.short_sha }}
+          draft: false
+          files: |
+            out/nockchain_linux_x64.zip
+            out/nockchain_macos_aarch64.zip
+            out/nockchain_jams.zip
+            prov/${{ needs.provenance.outputs.provenance-name }}
+            ./README.md
