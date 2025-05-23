@@ -597,6 +597,21 @@
       ^-  meta
       (~(got of keys.state) seed-path)
     ::
+    ++  labels
+      =/  label-meta=(list meta)
+        %+  murn  (gulf 0 255)
+        |=  index=@ud
+        =/  =trek
+          :(welp base-path /[key-type] /[ud/index] /label)
+        (~(get of keys.state) trek)
+      (turn label-meta |=(=meta `*`+.meta))
+    ::
+    :: ++  labeled-pubkeys
+    ::   %+  murn  (gulf 0 255)
+    ::   =/  =trek  
+    ::     :(welp base-path /[key-type] /[ud/index])
+
+    ::
     ++  by-label
       |=  label=@t
       %+  murn  keys
@@ -1009,6 +1024,18 @@
     ::
       [%pubkeys ~]
     =/  pubkeys  ~(coils get:v %pub)
+    ~&  %gap
+    ~&  %gap
+    ~&  %gap
+    ~&  %gap
+    ~&  %gap
+    ~&  -:!>(~(labels get:v %pub))
+    ~&  ~(labels get:v %pub)
+    ~&  %gap
+    ~&  %gap
+    ~&  %gap
+    ~&  %gap
+    ~&  %gap
     =/  base58-keys=(list cord)
       %+  turn  pubkeys
       |=  =coil

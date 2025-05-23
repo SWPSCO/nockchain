@@ -11,7 +11,9 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use getrandom::getrandom;
-use nockapp::{CrownError, NockAppError,};
+use nockapp::{CrownError, NockAppError};
+use nockapp::nockapp::NockApp;
+use nockapp::noun::slab::NounSlab;
 use tokio::net::UnixStream;
 use tracing::{error, info};
 use zkvm_jetpack::hot::produce_prover_hot_state;
@@ -21,6 +23,7 @@ mod error;
 use kernels::wallet::KERNEL;
 use nockapp::kernel::boot::{self, Cli as BootCli};
 use nockapp::{exit_driver, file_driver, markdown_driver, one_punch_driver};
+
 
 #[derive(Parser, Debug, Clone)]
 #[command(author, version, about, long_about = None)]
@@ -37,6 +40,13 @@ pub struct WalletCli {
 
 #[tokio::main]
 async fn main() -> Result<(), NockAppError> {
+    let peek_res = peek_wrapper().await?;
+    println!("peek_res: {:?}", peek_res);
+    Ok(())
+}
+
+
+async fn peek_wrapper() -> Result<Vec<NounSlab>, NockAppError> {
     let cli = WalletCli::parse();
     boot::init_default_tracing(&cli.boot.clone()); // Init tracing early
 
@@ -70,7 +80,15 @@ async fn main() -> Result<(), NockAppError> {
         | Commands::ShowSeedphrase
         | Commands::ShowMasterPubkey
         | Commands::ShowMasterPrivkey
-        | Commands::SimpleSpend { .. } => false,
+        | Commands::SimpleSpend { .. }
+        // Peeks
+        | Commands::PeekBalance
+        | Commands::PeekSeedphrase
+        | Commands::PeekMasterPubkey
+        | Commands::PeekState
+        | Commands::PeekReceiveAddress
+        | Commands::PeekPubkeys
+         => false,
 
         // All other commands DO need sync
         _ => true,
@@ -86,6 +104,31 @@ async fn main() -> Result<(), NockAppError> {
 
     // Generate the command noun and operation
     let poke = match &cli.command {
+        // Peek Commands
+        Commands::PeekBalance => {
+            let (noun, _op) = Wallet::peek_balance()?;
+            return do_peek(noun, wallet.app).await
+        }
+        Commands::PeekSeedphrase => {
+            let (noun, _op) = Wallet::peek_seedphrase()?;
+            return do_peek(noun, wallet.app).await
+        }
+        Commands::PeekMasterPubkey => {
+            let (noun, _op) = Wallet::peek_master_pubkey()?;
+            return do_peek(noun, wallet.app).await
+        }
+        Commands::PeekState => {
+            let (noun, _op) = Wallet::peek_state()?;
+            return do_peek(noun, wallet.app).await
+        }
+        Commands::PeekReceiveAddress => {
+            let (noun, _op) = Wallet::peek_receive_address()?;
+            return do_peek(noun, wallet.app).await
+        }
+        Commands::PeekPubkeys => {
+            let (noun, _op) = Wallet::peek_pubkeys()?;
+            return do_peek(noun, wallet.app).await
+        }
         Commands::Keygen => {
             let mut entropy = [0u8; 32];
             let mut salt = [0u8; 16];
@@ -98,7 +141,7 @@ async fn main() -> Result<(), NockAppError> {
             Wallet::get_balance()
         }
         */
-        Commands::DeriveChild { key_type, index } => {
+        Commands::DeriveChild { key_type, index, label } => {
             // Validate key_type is either "pub" or "priv"
             let key_type = match key_type.as_str() {
                 "pub" => KeyType::Pub,
@@ -110,7 +153,7 @@ async fn main() -> Result<(), NockAppError> {
                     .into())
                 }
             };
-            Wallet::derive_child(key_type, *index)
+            Wallet::derive_child(key_type, *index, label.clone())
         }
         Commands::SignTx { draft, index } => Wallet::sign_tx(draft, *index),
         Commands::ImportKeys { input } => Wallet::import_keys(input),
@@ -188,9 +231,15 @@ async fn main() -> Result<(), NockAppError> {
         wallet.app.add_io_driver(exit_driver()).await;
 
         wallet.app.run().await?;
-        Ok(())
+        Ok(vec![NounSlab::new()])
     }
 }
+
+async fn do_peek(noun: NounSlab, mut wallet: NockApp) -> Result<Vec<NounSlab>, NockAppError> {
+    let res = wallet.peek(noun).await?;
+    Ok(vec![res])
+}
+
 
 // TODO: all these tests need to also validate the results and not
 // just ensure that the wallet can be poked with the expected noun.
@@ -630,7 +679,6 @@ mod tests {
             !tx_result.is_empty(),
             "Expected non-empty transaction result"
         );
-
-        Ok(())
+        Ok(vec![NounSlab::new()])
     }
 }
