@@ -378,6 +378,7 @@ impl NockApp {
                             tracing::warn!("5");
                         }
                         break Ok(());
+                    }
                 },
                 Err(NockAppError::Exit(code)) => {
                     if requires_sync {
