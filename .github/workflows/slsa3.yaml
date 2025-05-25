@@ -141,9 +141,10 @@ jobs:
         run: make install-nockchain
       - name: build wallet
         run: make install-nockchain-wallet
-      - name: Setup code signing
+      - name: Import Certificate
         env:
           APPLE_P12: ${{ secrets.APPLE_P12 }}
+          APPLE_P12_PASSWORD: ${{ secrets.APPLE_P12_PASSWORD }}
         run: |
           echo $APPLE_P12 | base64 --decode > certificate.p12
           security create-keychain -p temp_password build.keychain
@@ -153,17 +154,17 @@ jobs:
           curl -o DeveloperIDG2CA.cer https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
           security import AppleWWDRCAG3.cer -k build.keychain -T /usr/bin/codesign
           security import DeveloperIDG2CA.cer -k build.keychain -T /usr/bin/codesign
-          security import certificate.p12 -k build.keychain -P "" -T /usr/bin/codesign
+          security import certificate.p12 -k build.keychain -P "$APPLE_P12_PASSWORD" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k temp_password build.keychain
           rm certificate.p12 AppleWWDRCAG3.cer DeveloperIDG2CA.cer
       - name: List available identities
         run: security find-identity -v -p codesigning
       - name: Sign binaries
         run: |
-          codesign --force --sign "Mac Developer" --timestamp --options runtime target/release/nockchain
-          codesign --force --sign "Mac Developer" --timestamp --options runtime target/release/nockchain-bitcoin-sync
-          codesign --force --sign "Mac Developer" --timestamp --options runtime target/release/hoonc
-          codesign --force --sign "Mac Developer" --timestamp --options runtime target/release/nockchain-wallet
+          codesign --force --sign "Developer ID Application: Southwestern Pool Supply CO INC (484J85QW9N)" --timestamp --options runtime target/release/nockchain
+          codesign --force --sign "Developer ID Application: Southwestern Pool Supply CO INC (484J85QW9N)" --timestamp --options runtime target/release/nockchain-bitcoin-sync
+          codesign --force --sign "Developer ID Application: Southwestern Pool Supply CO INC (484J85QW9N)" --timestamp --options runtime target/release/hoonc
+          codesign --force --sign "Developer ID Application: Southwestern Pool Supply CO INC (484J85QW9N)" --timestamp --options runtime target/release/nockchain-wallet
       - name: Verify signatures
         run: |
           codesign --verify --verbose target/release/nockchain
