@@ -123,9 +123,9 @@ jobs:
           done
       - name: notarize + staple
         env:
-          AC_KEY_ID: ${{ secrets.AC_API_KEY_ID     }}
-          AC_ISSUER_ID: ${{ secrets.AC_API_ISSUER_ID  }}
-          AC_KEY_PATH: ${{ secrets.AC_API_KEY_PATH   }}
+          AC_API_KEY_ID: ${{ secrets.AC_API_KEY_ID     }}
+          AC_API_ISSUER_ID: ${{ secrets.AC_API_ISSUER_ID  }}
+          AC_API_KEY_PATH: ${{ secrets.AC_API_KEY_PATH   }}
           TEAM_ID: 484J85QW9N
         run: |
           echo "$AC_KEY_PATH" | base64 --decode > key.p8
