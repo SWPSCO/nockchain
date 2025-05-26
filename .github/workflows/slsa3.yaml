@@ -131,11 +131,12 @@ jobs:
           echo "$AC_API_KEY_PATH" | base64 --decode > key.p8
           for b in nockchain nockchain-bitcoin-sync hoonc nockchain-wallet; do
             xcrun notarytool submit target/release/$b \
-                --key key.p8 \
-                --key-id "$AC_API_KEY_ID" \
-                --issuer "$AC_API_ISSUER_ID" \
-                --team-id "$TEAM_ID" \
-                --wait --staple
+                 --key key.p8 \
+                 --key-id "$AC_API_KEY_ID" \
+                 --issuer "$AC_API_ISSUER_ID" \
+                 --team-id "$TEAM_ID" \
+                 --wait
+            xcrun notarytool staple target/release/$b
           done
           rm key.p8
       - name: verify
