@@ -128,7 +128,7 @@ jobs:
           AC_API_KEY_PATH: ${{ secrets.AC_API_KEY_PATH   }}
           TEAM_ID: 484J85QW9N
         run: |
-          echo "$AC_KEY_PATH" | base64 --decode > key.p8
+          echo "$AC_API_KEY_PATH" | base64 --decode > key.p8
           for b in nockchain nockchain-bitcoin-sync hoonc nockchain-wallet; do
             xcrun notarytool submit target/release/$b \
                 --key key.p8 \
