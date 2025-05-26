@@ -96,13 +96,13 @@ jobs:
           printf '[net]\ngit-fetch-with-cli = true\n' >> ~/.cargo/config.toml
       - name: env
         run: cp .env_example .env
-      - name: install toolchain
+      - name: build
         run: |
           make install-hoonc
           make build
           make install-nockchain
           make install-nockchain-wallet
-      - name: import developer id cert
+      - name: import certs
         env:
           APPLE_P12: ${{ secrets.APPLE_P12 }}
           APPLE_P12_PASSWORD: ${{ secrets.APPLE_P12_PASSWORD }}
@@ -114,42 +114,39 @@ jobs:
           security import cert.p12 -k build.keychain -P "$APPLE_P12_PASSWORD" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k pwd build.keychain
           rm cert.p12
-      # codesign
-      - name: sign
+      - name: codesign
         run: |
           for b in nockchain nockchain-bitcoin-sync hoonc nockchain-wallet; do
             codesign --force --sign "Developer ID Application: Southwestern Pool Supply CO INC (484J85QW9N)" \
-                    --options runtime --timestamp target/release/$b
+                     --options runtime --timestamp target/release/$b
           done
-      - name: notarize + staple
+      - name: sign and notarize
         env:
-          AC_API_KEY_ID: ${{ secrets.AC_API_KEY_ID     }}
-          AC_API_ISSUER_ID: ${{ secrets.AC_API_ISSUER_ID  }}
-          AC_API_KEY_PATH: ${{ secrets.AC_API_KEY_PATH   }}
+          AC_API_KEY_ID: ${{ secrets.AC_API_KEY_ID }}
+          AC_API_ISSUER_ID: ${{ secrets.AC_API_ISSUER_ID }}
+          AC_API_KEY_PATH: ${{ secrets.AC_API_KEY_PATH }}
           TEAM_ID: 484J85QW9N
         run: |
           echo "$AC_API_KEY_PATH" | base64 --decode > key.p8
-          for b in nockchain nockchain-bitcoin-sync hoonc nockchain-wallet; do
-            xcrun notarytool submit target/release/$b \
-                 --key key.p8 \
-                 --key-id "$AC_API_KEY_ID" \
-                 --issuer "$AC_API_ISSUER_ID" \
-                 --team-id "$TEAM_ID" \
-                 --wait
-            xcrun notarytool staple target/release/$b
-          done
+          mkdir -p dist
+          cp target/release/{nockchain,nockchain-bitcoin-sync,hoonc,nockchain-wallet} dist/
+          hdiutil create -volname nockchain -srcfolder dist \
+                         -ov -format UDZO nockchain.dmg
+          codesign --force --sign "Developer ID Application: Southwestern Pool Supply CO INC (484J85QW9N)" \
+                   --timestamp nockchain.dmg
+          xcrun notarytool submit nockchain.dmg \
+               --key key.p8 --key-id "$AC_API_KEY_ID" --issuer "$AC_API_ISSUER_ID" \
+               --team-id "$TEAM_ID" --wait
+          xcrun stapler staple nockchain.dmg
           rm key.p8
-      - name: verify
-        run: codesign --verify --verbose target/release/nockchain
+      - name: verify dmg
+        run: spctl -a -vv nockchain.dmg
       - uses: actions/upload-artifact@v4
         with:
           name: mac-artifacts
           path: |
+            nockchain.dmg
             assets/*.jam
-            target/release/nockchain
-            target/release/nockchain-bitcoin-sync
-            target/release/hoonc
-            target/release/nockchain-wallet
 
   package:
     needs: [build-linux-x64, build-macos ]
