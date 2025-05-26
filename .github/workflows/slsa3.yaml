@@ -130,12 +130,12 @@ jobs:
         run: |
           echo "$AC_KEY_PATH" | base64 --decode > key.p8
           for b in nockchain nockchain-bitcoin-sync hoonc nockchain-wallet; do
-            zip -r $b.zip target/release/$b
-            xcrun notarytool submit $b.zip \
-              --key key.p8 --key-id "$AC_KEY_ID" --issuer "$AC_ISSUER_ID" \
-              --team-id "$TEAM_ID" --wait
-            xcrun stapler staple target/release/$b
-            rm $b.zip
+            xcrun notarytool submit target/release/$b \
+                --key key.p8 \
+                --key-id "$AC_API_KEY_ID" \
+                --issuer "$AC_API_ISSUER_ID" \
+                --team-id "$TEAM_ID" \
+                --wait --staple
           done
           rm key.p8
       - name: verify
