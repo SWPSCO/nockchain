@@ -141,7 +141,7 @@ jobs:
           xcrun stapler staple dist/nockchain.dmg
           rm key.p8
       - name: verify dmg
-        run: spctl -a -vv dist/nockchain.dmg
+        run: spctl -a -vv --type open dist/nockchain.dmg
       - uses: actions/upload-artifact@v4
         with:
           name: mac-dmg
