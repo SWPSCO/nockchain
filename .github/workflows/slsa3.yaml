@@ -138,7 +138,7 @@ jobs:
           done
           iconutil -c icns icon.iconset -o dist/.VolumeIcon.icns
           rm -r icon.iconset
-          SetFile -c icnC .VolumeIcon.icns
+          SetFile -c icnC dist/.VolumeIcon.icns
           SetFile -a C dist
           hdiutil create -volname nockchain -srcfolder dist \
             -ov -format UDZO dist/nockchain.dmg
