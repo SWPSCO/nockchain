@@ -166,7 +166,8 @@ jobs:
               --key key.p8 --key-id "$AC_API_KEY_ID" --issuer "$AC_API_ISSUER_ID" \
               --team-id "$TEAM_ID" --wait
             xcrun stapler staple $b.app
-            rsync -a --no-xattrs $b.app dist/
+            ditto "$b.app" "dist/$b.app"
+            xattr -rc "dist/$b.app"
             hdiutil create -volname $b -srcfolder dist \
               -ov -format UDZO dist/$b.dmg
             codesign --force --timestamp --sign "Developer ID Application: Southwestern Pool Supply CO INC (484J85QW9N)" \
