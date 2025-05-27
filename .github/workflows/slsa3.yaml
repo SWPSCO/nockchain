@@ -219,7 +219,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: packaged-zips
+          name: packaged-artifacts
           path: ./out
       - name: download provenance
         uses: actions/download-artifact@v4
