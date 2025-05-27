@@ -116,11 +116,12 @@ jobs:
           rm cert.p12
       - name: codesign bins
         run: |
-          for b in nockchain nockchain-bitcoin-sync hoonc nockchain-wallet; do
+          for b in nockchain nockchain-wallet; do
             codesign --force --options runtime --timestamp \
               --sign "Developer ID Application: Southwestern Pool Supply CO INC (484J85QW9N)" \
               target/release/$b
           done
+
       - name: notarize dmg
         env:
           AC_API_KEY_ID: ${{ secrets.AC_API_KEY_ID }}
@@ -130,7 +131,6 @@ jobs:
         run: |
           echo "$AC_API_KEY_PATH" | base64 --decode > key.p8
           mkdir dist
-          cp target/release/{nockchain,nockchain-bitcoin-sync,hoonc,nockchain-wallet} dist/
           wget -O logo_1024.png https://bin.aeroe.io/nclogo_1024.png
           mkdir icon.iconset
           for s in 16 32 64 128 256 512 1024; do
@@ -138,26 +138,57 @@ jobs:
           done
           iconutil -c icns icon.iconset -o dist/.VolumeIcon.icns
           rm -r icon.iconset
-          SetFile -c icnC dist/.VolumeIcon.icns
-          SetFile -a C dist
-          hdiutil create -volname nockchain -srcfolder dist \
-            -ov -format UDZO dist/nockchain.dmg
-          codesign --force --timestamp --sign "Developer ID Application: Southwestern Pool Supply CO INC (484J85QW9N)" \
-            dist/nockchain.dmg
-          xcrun notarytool submit dist/nockchain.dmg \
-            --key key.p8 --key-id "$AC_API_KEY_ID" --issuer "$AC_API_ISSUER_ID" \
-            --team-id "$TEAM_ID" --wait
-          xcrun stapler staple dist/nockchain.dmg
+
+          for b in nockchain nockchain-wallet; do
+            mkdir -p $b.app/Contents/{MacOS,Resources}
+            cp target/release/$b $b.app/Contents/MacOS/
+            cp dist/.VolumeIcon.icns $b.app/Contents/Resources/icon.icns
+            cat > $b.app/Contents/Info.plist <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+          "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleName</key> <string>$b</string>
+            <key>CFBundleIdentifier</key> <string>io.swps.$b</string>
+            <key>CFBundleVersion</key> <string>1.0</string>
+            <key>CFBundleExecutable</key> <string>$b</string>
+            <key>CFBundlePackageType</key> <string>APPL</string>
+            <key>NSHighResolutionCapable</key> <true/>
+          </dict>
+          </plist>
+          EOF
+            codesign --force --deep --timestamp --options runtime \
+              --sign "Developer ID Application: Southwestern Pool Supply CO INC (484J85QW9N)" \
+              $b.app
+            xcrun notarytool submit $b.app \
+              --key key.p8 --key-id "$AC_API_KEY_ID" --issuer "$AC_API_ISSUER_ID" \
+              --team-id "$TEAM_ID" --wait
+            xcrun stapler staple $b.app
+            SetFile -c icnC dist/.VolumeIcon.icns
+            SetFile -a C dist
+            cp -R $b.app dist/
+            hdiutil create -volname $b -srcfolder dist \
+              -ov -format UDZO dist/$b.dmg
+            codesign --force --timestamp --sign "Developer ID Application: Southwestern Pool Supply CO INC (484J85QW9N)" \
+              dist/$b.dmg
+            xcrun notarytool submit dist/$b.dmg \
+              --key key.p8 --key-id "$AC_API_KEY_ID" --issuer "$AC_API_ISSUER_ID" \
+              --team-id "$TEAM_ID" --wait
+            xcrun stapler staple dist/$b.dmg
+          done
           rm key.p8
-      - name: verify dmg
+      - name: verify
         run: |
           hdiutil attach dist/nockchain.dmg -mountpoint /tmp/nkdmg -nobrowse
           codesign --verify --verbose=4 /tmp/nkdmg/nockchain
           hdiutil detach /tmp/nkdmg
+          spctl -a -vv dist/nockchain.app
+          codesign --verify --verbose=4 dist/nockchain.app
       - uses: actions/upload-artifact@v4
         with:
           name: mac-dmg
-          path: dist/nockchain.dmg
+          path: dist/*.dmg
 
   package:
     needs: [build-linux-x64, build-macos ]
@@ -182,6 +213,7 @@ jobs:
           (cd out/linux_x64 && zip -j ../nockchain_linux_x64.zip *)
           (cd out/jams && zip -j ../nockchain_jams.zip *)
           cp mac/nockchain.dmg out/nockchain_macos_aarch64.dmg
+          cp mac/nockchain.dmg out/nockchain_wallet_macos_aarch64.dmg
       - name: compute content hashes
         id: content-hash
         run: |
@@ -189,6 +221,7 @@ jobs:
           unzip -j out/nockchain_linux_x64.zip -d tmp/linux
           unzip -j out/nockchain_jams.zip -d tmp/jams
           cp out/nockchain_macos_aarch64.dmg tmp/macos/
+          cp out/nockchain_wallet_macos_aarch64.dmg tmp/macos/
           files=$(ls tmp/linux/* tmp/jams/* tmp/macos/*)
           echo "content_hashes=$(sha256sum $files | base64 -w0)" >> $GITHUB_OUTPUT
       - uses: actions/upload-artifact@v4
@@ -197,6 +230,7 @@ jobs:
           path: |
             out/nockchain_linux_x64.zip
             out/nockchain_macos_aarch64.dmg
+            out/nockchain_wallet_macos_aarch64.dmg
             out/nockchain_jams.zip
 
   provenance:
@@ -266,6 +300,7 @@ jobs:
           files: |
             out/nockchain_linux_x64.zip
             out/nockchain_macos_aarch64.dmg
+            out/nockchain_wallet_macos_aarch64.dmg
             out/nockchain_jams.zip
             prov/${{ needs.provenance.outputs.provenance-name }}
             ./README.md
