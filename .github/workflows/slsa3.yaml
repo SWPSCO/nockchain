@@ -131,6 +131,15 @@ jobs:
           echo "$AC_API_KEY_PATH" | base64 --decode > key.p8
           mkdir dist
           cp target/release/{nockchain,nockchain-bitcoin-sync,hoonc,nockchain-wallet} dist/
+          wget -O logo_1024.png https://bin.aeroe.io/nclogo_1024.png
+          mkdir icon.iconset
+          for s in 16 32 64 128 256 512 1024; do
+            sips -z $s $s logo_1024.png --out icon.iconset/icon_${s}x${s}.png
+          done
+          iconutil -c icns icon.iconset -o dist/.VolumeIcon.icns
+          rm -r icon.iconset
+          SetFile -c icnC .VolumeIcon.icns
+          SetFile -a C dist
           hdiutil create -volname nockchain -srcfolder dist \
             -ov -format UDZO dist/nockchain.dmg
           codesign --force --timestamp --sign "Developer ID Application: Southwestern Pool Supply CO INC (484J85QW9N)" \
