@@ -136,9 +136,9 @@ jobs:
           for s in 16 32 64 128 256 512 1024; do
             sips -z $s $s logo_1024.png --out icon.iconset/icon_${s}x${s}.png
           done
-          iconutil -c icns icon.iconset -o dist/icon.icns
 
           for b in nockchain nockchain-wallet; do
+            iconutil -c icns icon.iconset -o dist/icon.icns
             mkdir -p $b.app/Contents/{MacOS,Resources}
             cp target/release/$b $b.app/Contents/MacOS/
             cp dist/icon.icns $b.app/Contents/Resources/icon.icns
@@ -177,14 +177,13 @@ jobs:
               --team-id "$TEAM_ID" --wait
             xcrun stapler staple dist/$b.dmg
             rm $b.app.zip
+            hdiutil attach dist/$b.dmg -mountpoint /tmp/nkdmg -nobrowse
+            codesign --verify --verbose=4 /tmp/nkdmg/$b.app
+            xcrun stapler validate -v dist/$b.dmg
+            hdiutil detach /tmp/nkdmg
+            rm -rf dist && mkdir dist
           done
           rm key.p8
-      - name: verify
-        run: |
-          hdiutil attach dist/nockchain.dmg -mountpoint /tmp/nkdmg -nobrowse
-          codesign --verify --verbose=4 /tmp/nkdmg/nockchain.app
-          spctl -a -vv --type open dist/nockchain.dmg
-          hdiutil detach /tmp/nkdmg
       - uses: actions/upload-artifact@v4
         with:
           name: mac-dmg
