@@ -161,7 +161,8 @@ jobs:
             codesign --force --deep --timestamp --options runtime \
               --sign "Developer ID Application: Southwestern Pool Supply CO INC (484J85QW9N)" \
               $b.app
-            xcrun notarytool submit $b.app \
+            ditto -c -k --sequesterRsrc --keepParent $b.app $b.app.zip
+            xcrun notarytool submit $b.app.zip \
               --key key.p8 --key-id "$AC_API_KEY_ID" --issuer "$AC_API_ISSUER_ID" \
               --team-id "$TEAM_ID" --wait
             xcrun stapler staple $b.app
@@ -176,6 +177,7 @@ jobs:
               --key key.p8 --key-id "$AC_API_KEY_ID" --issuer "$AC_API_ISSUER_ID" \
               --team-id "$TEAM_ID" --wait
             xcrun stapler staple dist/$b.dmg
+            rm $b.app.zip
           done
           rm key.p8
       - name: verify
