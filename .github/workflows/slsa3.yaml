@@ -150,7 +150,13 @@ jobs:
           xcrun stapler staple dist/nockchain.dmg
           rm key.p8
       - name: verify dmg
-        run: spctl -a -vv --type open dist/nockchain.dmg
+        run: |
+          hdiutil attach dist/nockchain.dmg -mountpoint /tmp/nkdmg -nobrowse
+          spctl -a -vv /tmp/nkdmg/nockchain
+          spctl -a -vv /tmp/nkdmg/nockchain-wallet
+          spctl -a -vv /tmp/nkdmg/nockchain-bitcoin-sync
+          spctl -a -vv /tmp/nkdmg/hoonc
+          hdiutil detach /tmp/nkdmg
       - uses: actions/upload-artifact@v4
         with:
           name: mac-dmg
