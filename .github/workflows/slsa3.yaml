@@ -136,13 +136,12 @@ jobs:
           for s in 16 32 64 128 256 512 1024; do
             sips -z $s $s logo_1024.png --out icon.iconset/icon_${s}x${s}.png
           done
-          iconutil -c icns icon.iconset -o dist/.VolumeIcon.icns
-          rm -r icon.iconset
+          iconutil -c icns icon.iconset -o dist/icon.icns
 
           for b in nockchain nockchain-wallet; do
             mkdir -p $b.app/Contents/{MacOS,Resources}
             cp target/release/$b $b.app/Contents/MacOS/
-            cp dist/.VolumeIcon.icns $b.app/Contents/Resources/icon.icns
+            cp dist/icon.icns $b.app/Contents/Resources/icon.icns
             cat > $b.app/Contents/Info.plist <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -161,14 +160,13 @@ jobs:
             codesign --force --deep --timestamp --options runtime \
               --sign "Developer ID Application: Southwestern Pool Supply CO INC (484J85QW9N)" \
               $b.app
-            ditto -c -k --sequesterRsrc --keepParent $b.app $b.app.zip
+            xattr -rc $b.app
+            ditto -c -k --keepParent $b.app $b.app.zip
             xcrun notarytool submit $b.app.zip \
               --key key.p8 --key-id "$AC_API_KEY_ID" --issuer "$AC_API_ISSUER_ID" \
               --team-id "$TEAM_ID" --wait
             xcrun stapler staple $b.app
-            SetFile -c icnC dist/.VolumeIcon.icns
-            SetFile -a C dist
-            cp -R $b.app dist/
+            rsync -a --no-xattrs $b.app dist/
             hdiutil create -volname $b -srcfolder dist \
               -ov -format UDZO dist/$b.dmg
             codesign --force --timestamp --sign "Developer ID Application: Southwestern Pool Supply CO INC (484J85QW9N)" \
@@ -183,10 +181,9 @@ jobs:
       - name: verify
         run: |
           hdiutil attach dist/nockchain.dmg -mountpoint /tmp/nkdmg -nobrowse
-          codesign --verify --verbose=4 /tmp/nkdmg/nockchain
+          codesign --verify --verbose=4 /tmp/nkdmg/nockchain.app
+          spctl -a -vv --type open dist/nockchain.dmg
           hdiutil detach /tmp/nkdmg
-          spctl -a -vv dist/nockchain.app
-          codesign --verify --verbose=4 dist/nockchain.app
       - uses: actions/upload-artifact@v4
         with:
           name: mac-dmg
