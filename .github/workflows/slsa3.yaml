@@ -152,10 +152,7 @@ jobs:
       - name: verify dmg
         run: |
           hdiutil attach dist/nockchain.dmg -mountpoint /tmp/nkdmg -nobrowse
-          spctl -a -vv /tmp/nkdmg/nockchain
-          spctl -a -vv /tmp/nkdmg/nockchain-wallet
-          spctl -a -vv /tmp/nkdmg/nockchain-bitcoin-sync
-          spctl -a -vv /tmp/nkdmg/hoonc
+          codesign --verify --verbose=4 /tmp/nkdmg/nockchain
           hdiutil detach /tmp/nkdmg
       - uses: actions/upload-artifact@v4
         with:
