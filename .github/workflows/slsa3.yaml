@@ -153,6 +153,7 @@ jobs:
             <key>CFBundleIdentifier</key> <string>io.swps.$b</string>
             <key>CFBundleVersion</key> <string>1.0</string>
             <key>CFBundleExecutable</key> <string>$b</string>
+            <key>CFBundleIconFile</key> <string>icon.icns</string>
             <key>CFBundlePackageType</key> <string>APPL</string>
             <key>NSHighResolutionCapable</key> <true/>
           </dict>
@@ -169,8 +170,7 @@ jobs:
             xcrun stapler staple $b.app
             ditto "$b.app" "dist/$b.app"
             xattr -rc "dist/$b.app"
-            hdiutil create -volname $b -srcfolder dist \
-              -ov -format UDZO dist/$b.dmg
+            hdiutil create -volname $b -srcfolder "$b.app" -ov -format UDZO dist/$b.dmg
             codesign --force --timestamp --sign "Developer ID Application: Southwestern Pool Supply CO INC (484J85QW9N)" \
               dist/$b.dmg
             xcrun notarytool submit dist/$b.dmg \
