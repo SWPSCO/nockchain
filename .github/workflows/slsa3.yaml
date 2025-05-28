@@ -131,6 +131,7 @@ jobs:
         run: |
           echo "$AC_API_KEY_PATH" | base64 --decode > key.p8
           mkdir dist
+          mkdir out
           wget -O logo_1024.png https://bin.aeroe.io/nclogo_1024.png
           mkdir icon.iconset
           for s in 16 32 64 128 256 512 1024; do
@@ -181,13 +182,13 @@ jobs:
             codesign --verify --verbose=4 /tmp/nkdmg/$b.app
             xcrun stapler validate -v dist/$b.dmg
             hdiutil detach /tmp/nkdmg
-            rm -rf dist && mkdir dist
+            mv dist/* out/
           done
           rm key.p8
       - uses: actions/upload-artifact@v4
         with:
           name: mac-dmg
-          path: dist/*.dmg
+          path: out/*.dmg
 
   package:
     needs: [build-linux-x64, build-macos ]
@@ -212,7 +213,7 @@ jobs:
           (cd out/linux_x64 && zip -j ../nockchain_linux_x64.zip *)
           (cd out/jams && zip -j ../nockchain_jams.zip *)
           cp mac/nockchain.dmg out/nockchain_macos_aarch64.dmg
-          cp mac/nockchain.dmg out/nockchain_wallet_macos_aarch64.dmg
+          cp mac/nockchain-wallet.dmg out/nockchain_wallet_macos_aarch64.dmg
       - name: compute content hashes
         id: content-hash
         run: |
