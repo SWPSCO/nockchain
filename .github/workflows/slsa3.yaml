@@ -122,73 +122,60 @@ jobs:
               target/release/$b
           done
 
-      - name: notarize dmg
+      - name: build & notarize installer pkgs
         env:
-          AC_API_KEY_ID: ${{ secrets.AC_API_KEY_ID }}
-          AC_API_ISSUER_ID: ${{ secrets.AC_API_ISSUER_ID }}
-          AC_API_KEY_PATH: ${{ secrets.AC_API_KEY_PATH }}
-          TEAM_ID: 484J85QW9N
+          AC_API_KEY_ID:     ${{ secrets.AC_API_KEY_ID }}
+          AC_API_ISSUER_ID:  ${{ secrets.AC_API_ISSUER_ID }}
+          AC_API_KEY_PATH:   ${{ secrets.AC_API_KEY_PATH }}
+          TEAM_ID:           484J85QW9N
         run: |
           echo "$AC_API_KEY_PATH" | base64 --decode > key.p8
-          mkdir dist
-          mkdir out
-          wget -O logo_1024.png https://bin.aeroe.io/nclogo_1024.png
+          wget -qO logo_1024.png https://bin.aeroe.io/nclogo_1024.png
           mkdir icon.iconset
           for s in 16 32 64 128 256 512 1024; do
             sips -z $s $s logo_1024.png --out icon.iconset/icon_${s}x${s}.png
           done
-
+          iconutil -c icns icon.iconset -o icon.icns
+          rm -rf icon.iconset logo_1024.png
+          mkdir -p dist pkgroot
           for b in nockchain nockchain-wallet; do
-            iconutil -c icns icon.iconset -o dist/icon.icns
-            mkdir -p $b.app/Contents/{MacOS,Resources}
-            cp target/release/$b $b.app/Contents/MacOS/
-            cp dist/icon.icns $b.app/Contents/Resources/icon.icns
-            cat > $b.app/Contents/Info.plist <<EOF
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-          "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>CFBundleName</key> <string>$b</string>
-            <key>CFBundleIdentifier</key> <string>io.swps.$b</string>
-            <key>CFBundleVersion</key> <string>1.0</string>
-            <key>CFBundleExecutable</key> <string>$b</string>
-            <key>CFBundleIconFile</key> <string>icon.icns</string>
-            <key>CFBundlePackageType</key> <string>APPL</string>
-            <key>NSHighResolutionCapable</key> <true/>
-          </dict>
-          </plist>
+            rm -rf pkgroot && mkdir -p pkgroot/usr/local/bin \
+              "pkgroot/Applications/$b Installer.app/Contents/{MacOS,Resources}"
+            cp target/release/$b pkgroot/usr/local/bin/
+            cp icon.icns "pkgroot/Applications/$b Installer.app/Contents/Resources/"
+            cat > "pkgroot/Applications/$b Installer.app/Contents/MacOS/install" <<EOF
+          #!/usr/bin/env bash
+          osascript -e 'tell application "Terminal" to do script "$b --help"'
           EOF
-            codesign --force --deep --timestamp --options runtime \
-              --sign "Developer ID Application: Southwestern Pool Supply CO INC (484J85QW9N)" \
-              $b.app
-            xattr -rc $b.app
-            ditto -c -k --keepParent $b.app $b.app.zip
-            xcrun notarytool submit $b.app.zip \
-              --key key.p8 --key-id "$AC_API_KEY_ID" --issuer "$AC_API_ISSUER_ID" \
-              --team-id "$TEAM_ID" --wait
-            xcrun stapler staple $b.app
-            ditto "$b.app" "dist/$b.app"
-            xattr -rc "dist/$b.app"
-            hdiutil create -volname $b -srcfolder "$b.app" -ov -format UDZO dist/$b.dmg
-            codesign --force --timestamp --sign "Developer ID Application: Southwestern Pool Supply CO INC (484J85QW9N)" \
-              dist/$b.dmg
-            xcrun notarytool submit dist/$b.dmg \
-              --key key.p8 --key-id "$AC_API_KEY_ID" --issuer "$AC_API_ISSUER_ID" \
-              --team-id "$TEAM_ID" --wait
-            xcrun stapler staple dist/$b.dmg
-            rm $b.app.zip
-            hdiutil attach dist/$b.dmg -mountpoint /tmp/nkdmg -nobrowse
-            codesign --verify --verbose=4 /tmp/nkdmg/$b.app
-            xcrun stapler validate -v dist/$b.dmg
-            hdiutil detach /tmp/nkdmg
-            mv dist/* out/
+            chmod +x "pkgroot/Applications/$b Installer.app/Contents/MacOS/install"
+            # Info.plist
+            cat > "pkgroot/Applications/$b Installer.app/Contents/Info.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>CFBundleName</key><string>$b Installer</string>
+            <key>CFBundleExecutable</key><string>install</string>
+            <key>CFBundleIconFile</key><string>icon.icns</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+          </dict></plist>
+          EOF
+            pkgbuild --root pkgroot \
+                     --identifier io.swps.$b.pkg \
+                     --version ${{ needs.vars.outputs.short_sha }} \
+                     --install-location / \
+                     "$b"-unsigned.pkg
+            productsign --sign "Developer ID Installer: Southwestern Pool Supply CO INC (484J85QW9N)" \
+                        "$b"-unsigned.pkg "dist/$b.pkg"
+            xcrun notarytool submit "dist/$b.pkg" \
+                 --key key.p8 --key-id "$AC_API_KEY_ID" \
+                 --issuer "$AC_API_ISSUER_ID" --team-id "$TEAM_ID" --wait
+            xcrun stapler staple "dist/$b.pkg"
           done
-          rm key.p8
+          rm key.p8 pkgroot icon.icns
       - uses: actions/upload-artifact@v4
         with:
-          name: mac-dmg
-          path: out/*.dmg
+          name: mac-installer
+          path: dist/*.pkg
 
   package:
     needs: [build-linux-x64, build-macos ]
@@ -202,7 +189,7 @@ jobs:
           path: ./linux_x64
       - uses: actions/download-artifact@v4
         with:
-          name: mac-dmg
+          name: mac-installer
           path: ./mac
       - name: make zips
         run: |
@@ -212,16 +199,16 @@ jobs:
           cp linux_x64/assets/*.jam out/jams/
           (cd out/linux_x64 && zip -j ../nockchain_linux_x64.zip *)
           (cd out/jams && zip -j ../nockchain_jams.zip *)
-          cp mac/nockchain.dmg out/nockchain_macos_aarch64.dmg
-          cp mac/nockchain-wallet.dmg out/nockchain_wallet_macos_aarch64.dmg
+          cp mac/nockchain.pkg out/nockchain_macos_aarch64.pkg
+          cp mac/nockchain-wallet.pkg out/nockchain_wallet_macos_aarch64.pkg
       - name: compute content hashes
         id: content-hash
         run: |
           mkdir -p tmp/linux tmp/jams tmp/macos
           unzip -j out/nockchain_linux_x64.zip -d tmp/linux
           unzip -j out/nockchain_jams.zip -d tmp/jams
-          cp out/nockchain_macos_aarch64.dmg tmp/macos/
-          cp out/nockchain_wallet_macos_aarch64.dmg tmp/macos/
+          cp out/nockchain_macos_aarch64.pkg tmp/macos/
+          cp out/nockchain_wallet_macos_aarch64.pkg tmp/macos/
           files=$(ls tmp/linux/* tmp/jams/* tmp/macos/*)
           echo "content_hashes=$(sha256sum $files | base64 -w0)" >> $GITHUB_OUTPUT
       - uses: actions/upload-artifact@v4
@@ -229,8 +216,8 @@ jobs:
           name: packaged-artifacts
           path: |
             out/nockchain_linux_x64.zip
-            out/nockchain_macos_aarch64.dmg
-            out/nockchain_wallet_macos_aarch64.dmg
+            out/nockchain_macos_aarch64.pkg
+            out/nockchain_wallet_macos_aarch64.pkg
             out/nockchain_jams.zip
 
   provenance:
@@ -299,8 +286,8 @@ jobs:
           draft: false
           files: |
             out/nockchain_linux_x64.zip
-            out/nockchain_macos_aarch64.dmg
-            out/nockchain_wallet_macos_aarch64.dmg
+            out/nockchain_macos_aarch64.pkg
+            out/nockchain_wallet_macos_aarch64.pkg
             out/nockchain_jams.zip
             prov/${{ needs.provenance.outputs.provenance-name }}
             ./README.md
