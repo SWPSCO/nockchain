@@ -139,8 +139,11 @@ jobs:
           rm -rf icon.iconset logo_1024.png
           mkdir -p dist pkgroot
           for b in nockchain nockchain-wallet; do
-            rm -rf pkgroot && mkdir -p pkgroot/usr/local/bin \
-              "pkgroot/Applications/$b Installer.app/Contents/{MacOS,Resources}"
+            rm -rf pkgroot
+            mkdir -p \
+              pkgroot/usr/local/bin \
+              "pkgroot/Applications/$b Installer.app/Contents/MacOS" \
+              "pkgroot/Applications/$b Installer.app/Contents/Resources"
             cp target/release/$b pkgroot/usr/local/bin/
             cp icon.icns "pkgroot/Applications/$b Installer.app/Contents/Resources/"
             cat > "pkgroot/Applications/$b Installer.app/Contents/MacOS/install" <<EOF
