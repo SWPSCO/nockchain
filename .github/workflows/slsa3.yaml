@@ -106,6 +106,8 @@ jobs:
         env:
           APPLE_P12: ${{ secrets.APPLE_P12 }}
           APPLE_P12_PASSWORD: ${{ secrets.APPLE_P12_PASSWORD }}
+          APPLE_INSTALLER_P12: ${{ secrets.APPLE_INSTALLER_P12 }} 
+          APPLE_INSTALLER_P12_PASSWORD: ${{ secrets.APPLE_INSTALLER_P12_PASSWORD }} 
         run: |
           echo "$APPLE_P12" | base64 --decode > cert.p12
           security create-keychain -p pwd build.keychain
@@ -114,6 +116,14 @@ jobs:
           security import cert.p12 -k build.keychain -P "$APPLE_P12_PASSWORD" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k pwd build.keychain
           rm cert.p12
+          echo "$INSTALLER_P12" | base64 --decode > installer.p12
+          security import installer.p12 -k build.keychain \
+            -P "$INSTALLER_P12_PASSWORD" \
+            -T /usr/bin/productsign
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k pwd build.keychain
+          rm installer.p12
       - name: codesign bins
         run: |
           for b in nockchain nockchain-wallet; do
