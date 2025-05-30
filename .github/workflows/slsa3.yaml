@@ -116,9 +116,9 @@ jobs:
           security import cert.p12 -k build.keychain -P "$APPLE_P12_PASSWORD" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k pwd build.keychain
           rm cert.p12
-          echo "$INSTALLER_P12" | base64 --decode > installer.p12
+          echo "$APPLE_INSTALLER_P12" | base64 --decode > installer.p12
           security import installer.p12 -k build.keychain \
-            -P "$INSTALLER_P12_PASSWORD" \
+            -P "$APPLE_INSTALLER_P12_PASSWORD" \
             -T /usr/bin/productsign
           security set-key-partition-list \
             -S apple-tool:,apple:,codesign: \
