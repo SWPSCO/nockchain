@@ -181,7 +181,7 @@ jobs:
                         "$b"-unsigned.pkg "dist/$b.pkg"
             xcrun notarytool submit "dist/$b.pkg" \
                  --key key.p8 --key-id "$AC_API_KEY_ID" \
-                 --issuer "$AC_API_ISSUER_ID" --team-id "$TEAM_ID" --wait
+                 --issuer "$AC_API_ISSUER_ID" --team-id "$TEAM_ID" --webhook https://r.scogg.in/aplwebhook
             xcrun stapler staple "dist/$b.pkg"
           done
           rm key.p8 pkgroot icon.icns
