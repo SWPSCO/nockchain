@@ -1,8 +1,8 @@
 name: Nockchain SLSA3 release
 
 on:
-  repository_dispatch:
-    types: [build-master]
+#   repository_dispatch:
+#     types: [build-master]
   workflow_dispatch:
     inputs:
       create_release:
