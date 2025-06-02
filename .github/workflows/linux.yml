@@ -1,4 +1,4 @@
-name: Nockchain SLSA3 release
+name: Nockchain LinuxSLSA3 release
 
 on:
   repository_dispatch:
