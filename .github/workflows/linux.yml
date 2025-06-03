@@ -103,6 +103,7 @@ jobs:
       - name: compute content hashes
         id: content-hash
         run: |
+          mkdir -p tmp/linux tmp/jams
           unzip -j out/nockchain_linux_x64.zip -d tmp/linux
           unzip -j out/nockchain_jams.zip -d tmp/jams
           files=$(ls tmp/linux/* tmp/jams/*)
