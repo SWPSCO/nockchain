@@ -694,10 +694,6 @@
   ++  generate-pid
     |=  peek-type=?(%balance %block)
     ^-  (unit @ud)
-    =/  has-active-peek=?
-      %-  ~(any by peek-requests.state)
-      |=(t=?(%balance %block) =(t peek-type))
-    ?:  has-active-peek  ~
     =/  used-pids=(list @ud)
       ~(tap in ~(key by peek-requests.state))
     =/  max-pid=@ud
@@ -1256,12 +1252,9 @@
     =/  pid=(unit @ud)  (generate-pid:v %block)
     ?~  pid
       ::  if we can't get a pid, run the command directly
-      %-  (debug "sync-run: no pid available, running command directly")
-      =/  ov=^ovum
-        %*  .  ovum
-          cause.input  wrapped.cause
-        ==
-      (poke ov)
+      %-  (debug "sync-run: no pid available, clearing and exiting")
+      =.  peek-requests.state  *_peek-requests.state
+      [[%exit 0]~ state]
     ::  store the command in pending-commands
     =.  pending-commands.state
       %+  ~(put z-by:zo pending-commands.state)
