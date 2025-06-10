@@ -152,15 +152,15 @@ jobs:
           ### How to verify
           
           - Get the slsa3-verifier for your platform: https://github.com/slsa-framework/slsa-verifier
-          - Download and unzip the release; download the `multiple.into.jsonl` file attached to the release
-          - Run it against an unzipped artifact: `slsa-verifier-linux-amd64 verify-artifact nockchain-wallet --provenance-path multiple.intoto.jsonl --source-uri=git+https://github.com/SWPSCO/nockchain`
+          - Download and unzip the release; download the \`multiple.into.jsonl\` file attached to the release
+          - Run it against an unzipped artifact: \`slsa-verifier-linux-amd64 verify-artifact nockchain-wallet --provenance-path multiple.intoto.jsonl --source-uri=git+https://github.com/SWPSCO/nockchain\`
           - You should see output like this:
-          ```
+          \`\`\`
           Verified build using builder "https://github.com/slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@refs/tags/v2.1.0" at commit 1f8a1deb820b1e68c908ecf60ffcc1c86ae351f8
           Verifying artifact nockchain-wallet: PASSED
           
           PASSED: SLSA verification passed
-          ```
+          \`\`\`
           
           Note that the hash will correspond with a commit in the `release` branch, not the commit hash that was actually built (which is what the release is named after). This is because we have to sync master from upstream and build from a separate default branch.
           
