@@ -193,7 +193,7 @@ jobs:
                  --issuer "$AC_API_ISSUER_ID" --team-id "$TEAM_ID" --wait
             xcrun stapler staple "dist/$b.pkg"
           done
-          rm key.p8 pkgroot icon.icns
+          rm -rf key.p8 pkgroot icon.icns
       - uses: actions/upload-artifact@v4
         with:
           name: mac-installer
