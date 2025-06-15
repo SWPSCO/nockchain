@@ -44,8 +44,6 @@ jobs:
           targets: x86_64-unknown-linux-gnu
       - name: Configure Git fetch with CLI
         run: |
-          mkdir -p ~/.cargo
-          echo '[net]' >> ~/.cargo/config.toml
           echo 'git-fetch-with-cli = true' >> ~/.cargo/config.toml
       - name: Install build dependencies
         run: |
