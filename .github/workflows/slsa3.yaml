@@ -100,25 +100,66 @@ jobs:
           APPLE_P12: ${{ secrets.APPLE_P12 }}
           APPLE_P12_PASSWORD: ${{ secrets.APPLE_P12_PASSWORD }}
           APPLE_INSTALLER_P12: ${{ secrets.APPLE_INSTALLER_P12 }} 
-          APPLE_INSTALLER_P12_PASSWORD: ${{ secrets.APPLE_INSTALLER_P12_PASSWORD }} 
+          APPLE_INSTALLER_P12_PASSWORD: ${{ secrets.APPLE_INSTALLER_P12_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         run: |
           echo "$APPLE_P12" | base64 --decode > cert.p12
-          security create-keychain -p pwd build.keychain
-          security default-keychain -s build.keychain
-          security unlock-keychain -p pwd build.keychain
-          security import cert.p12 -k build.keychain -P "$APPLE_P12_PASSWORD" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k pwd build.keychain
+          
+          # Use unique keychain name for self-hosted runners
+          KEYCHAIN_NAME="build-${{ github.run_id }}.keychain"
+          
+          # Clean up any existing keychain
+          security delete-keychain "$KEYCHAIN_NAME" 2>/dev/null || true
+          
+          # Create and configure keychain
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_NAME"
+          security list-keychains -d user -s "$KEYCHAIN_NAME" $(security list-keychains -d user | sed s/\"//g)
+          security set-keychain-settings -t 3600 -l "$KEYCHAIN_NAME"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_NAME"
+          
+          # Import certificate with proper permissions
+          security import cert.p12 -k "$KEYCHAIN_NAME" -P "$APPLE_P12_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign:,security: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_NAME"
+          
+          # Set as default for this session
+          security default-keychain -s "$KEYCHAIN_NAME"
+          
+          # Verify the identity is available
+          security find-identity -v -p codesigning "$KEYCHAIN_NAME"
+          
           rm cert.p12
+          
+          # Import installer certificate
           echo "$APPLE_INSTALLER_P12" | base64 --decode > installer.p12
-          security import installer.p12 -k build.keychain \
+          security import installer.p12 -k "$KEYCHAIN_NAME" \
             -P "$APPLE_INSTALLER_P12_PASSWORD" \
-            -T /usr/bin/productsign
+            -T /usr/bin/productsign -T /usr/bin/security
           security set-key-partition-list \
-            -S apple-tool:,apple:,codesign: \
-            -s -k pwd build.keychain
+            -S apple-tool:,apple:,codesign:,security: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_NAME"
           rm installer.p12
-      - name: codesign bins
+          
+          # Set environment variable for subsequent steps
+          echo "KEYCHAIN_NAME=$KEYCHAIN_NAME" >> $GITHUB_ENV
+
+      - name: debug keychain and signing
+        env:
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         run: |
+          echo "=== Keychain Debug ==="
+          echo "KEYCHAIN_NAME: $KEYCHAIN_NAME"
+          security list-keychains
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_NAME"
+          security find-identity -v "$KEYCHAIN_NAME"
+          echo "=== Codesign identities ==="
+          security find-identity -v -p codesigning
+      - name: codesign bins
+        env:
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          # Ensure keychain is unlocked before signing
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_NAME"
+          
           cat > "Entitlements.plist" <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -138,9 +179,9 @@ jobs:
           for b in nockchain nockchain-wallet; do
             codesign --force --options runtime --entitlements ./Entitlements.plist --timestamp \
               --sign "Developer ID Application: Southwestern Pool Supply CO INC (484J85QW9N)" \
+              --keychain "$KEYCHAIN_NAME" \
               target/release/$b
           done
-
       - name: build & notarize installer pkgs
         env:
           AC_API_KEY_ID:     ${{ secrets.AC_API_KEY_ID }}
