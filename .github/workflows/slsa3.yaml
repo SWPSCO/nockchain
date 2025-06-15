@@ -63,12 +63,6 @@ jobs:
       - name: build nockchain
         run: |
           cargo install --target x86_64-unknown-linux-musl --locked --force --path crates/nockchain --bin nockchain
-      - name: build others
-        run: |
-          make build-trivial
-          make assets/dumb.jam
-          make assets/wal.jam
-          cargo install --target x86_64-unknown-linux-musl --locked --force --path crates/nockchain-bitcoin-sync --bin nockchain-bitcoin-sync
       - name: build wallet
         run: |
           cargo install --target x86_64-unknown-linux-musl --locked --force --path crates/nockchain-wallet --bin nockchain-wallet
@@ -78,7 +72,6 @@ jobs:
           path: |
             assets/*.jam
             target/x86_64-unknown-linux-musl/release/nockchain
-            target/x86_64-unknown-linux-musl/release/nockchain-bitcoin-sync
             target/x86_64-unknown-linux-musl/release/hoonc
             target/x86_64-unknown-linux-musl/release/nockchain-wallet
 
@@ -197,7 +190,7 @@ jobs:
                         "$b"-unsigned.pkg "dist/$b.pkg"
             xcrun notarytool submit "dist/$b.pkg" \
                  --key key.p8 --key-id "$AC_API_KEY_ID" \
-                 --issuer "$AC_API_ISSUER_ID" --team-id "$TEAM_ID" --webhook https://r.scogg.in/aplwebhook
+                 --issuer "$AC_API_ISSUER_ID" --team-id "$TEAM_ID" --wait
             xcrun stapler staple "dist/$b.pkg"
           done
           rm key.p8 pkgroot icon.icns
@@ -223,7 +216,7 @@ jobs:
       - name: make zips
         run: |
           mkdir -p out/linux_x64 out/jams
-          cp linux_x64/target/x86_64-unknown-linux-musl/release/{nockchain,nockchain-bitcoin-sync,hoonc,nockchain-wallet} out/linux_x64/
+          cp linux_x64/target/x86_64-unknown-linux-musl/release/{nockchain,hoonc,nockchain-wallet} out/linux_x64/
           chmod +x out/linux_x64/*
           cp linux_x64/assets/*.jam out/jams/
           (cd out/linux_x64 && zip -j ../nockchain_linux_x64.zip *)
