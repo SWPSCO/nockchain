@@ -84,7 +84,7 @@ jobs:
       - name: cargo net tweak
         run: |
           mkdir -p ~/.cargo
-          printf '[net]\ngit-fetch-with-cli = true\n' >> ~/.cargo/config.toml
+          printf 'git-fetch-with-cli = true\n' >> ~/.cargo/config.toml
       - name: env
         run: cp .env_example .env
       - name: build
