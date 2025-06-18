@@ -436,7 +436,9 @@
           ==
         ~>  %slog.[0 %leaf^log-message]
         :_  k
-        (missing-parent-effects last-id oldest u.peer-id)
+        =/  eld-depth  (dec ids-lent)
+        =/  new-oldest (sub oldest eld-depth) :: height of last-id
+        (missing-parent-effects last-id new-oldest u.peer-id)
       =/  print-var
         %-  trip
         %^  cat  3
