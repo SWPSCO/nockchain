@@ -182,49 +182,74 @@ impl JamPaths {
     pub fn new(dir: &Path) -> Self {
         let path_0 = dir.join("0.chkjam");
         let path_1 = dir.join("1.chkjam");
+        debug!("JamPaths created: path_0={}, path_1={}", path_0.display(), path_1.display());
         Self(path_0, path_1)
     }
 
     pub fn checkpoint_exists(&self) -> bool {
-        self.0.exists() || self.1.exists()
+        let exists_0 = self.0.exists();
+        let exists_1 = self.1.exists();
+        debug!("Checkpoint existence check: {} exists={}, {} exists={}", 
+               self.0.display(), exists_0, self.1.display(), exists_1);
+        exists_0 || exists_1
     }
 
-    // TODO return checkpoint and which buffer is being loaded so we can set the buffer toggle
     pub fn load_checkpoint<'a>(
         &'a self,
         stack: &'a mut NockStack,
     ) -> Result<Checkpoint, CheckpointError<'a>> {
-        let (chk_0, chk_1) = [&self.0, &self.1].map(Self::decode_jam).into();
+        debug!("Starting checkpoint load from paths: {} and {}", self.0.display(), self.1.display());
+        
+        debug!("Attempting to decode checkpoint 0: {}", self.0.display());
+        let chk_0 = Self::decode_jam(&self.0);
+        if let Err(ref e) = chk_0 {
+            debug!("Failed to decode checkpoint 0: {}", e);
+        } else {
+            debug!("Successfully decoded checkpoint 0");
+        }
+
+        debug!("Attempting to decode checkpoint 1: {}", self.1.display());
+        let chk_1 = Self::decode_jam(&self.1);
+        if let Err(ref e) = chk_1 {
+            debug!("Failed to decode checkpoint 1: {}", e);
+        } else {
+            debug!("Successfully decoded checkpoint 1");
+        }
 
         match (chk_0, chk_1) {
             (Ok(a), Ok(b)) => {
+                debug!("Both checkpoints loaded successfully");
                 let chosen = if a.event_num > b.event_num {
                     debug!(
-                        "Loading checkpoint at: {}, checksum: {}",
-                        self.0.display(),
-                        a.checksum
+                        "Choosing checkpoint 0 (event_num: {} > {}): {}, checksum: {}",
+                        a.event_num, b.event_num, self.0.display(), a.checksum
                     );
                     a
                 } else {
                     debug!(
-                        "Loading checkpoint at: {}, checksum: {}",
-                        self.1.display(),
-                        b.checksum
+                        "Choosing checkpoint 1 (event_num: {} >= {}): {}, checksum: {}",
+                        b.event_num, a.event_num, self.1.display(), b.checksum
                     );
                     b
                 };
+                debug!("Loading chosen checkpoint into memory");
                 Checkpoint::load(stack, chosen)
             }
-            (Ok(c), Err(e)) | (Err(e), Ok(c)) => {
-                warn!("{e}");
-                debug!("Loading checkpoint, checksum: {}", c.checksum);
+            (Ok(c), Err(e)) => {
+                warn!("Checkpoint 1 failed, using checkpoint 0: {}", e);
+                debug!("Loading checkpoint 0, checksum: {}", c.checksum);
+                Checkpoint::load(stack, c)
+            }
+            (Err(e), Ok(c)) => {
+                warn!("Checkpoint 0 failed, using checkpoint 1: {}", e);
+                debug!("Loading checkpoint 1, checksum: {}", c.checksum);
                 Checkpoint::load(stack, c)
             }
             (Err(e1), Err(e2)) => {
-                error!("{e1}");
-                error!("{e2}");
-                // TODO: Why is this a panic?
-                // panic!("Error loading both checkpoints");
+                error!("Both checkpoints failed to load!");
+                error!("Checkpoint 0 error: {}", e1);
+                error!("Checkpoint 1 error: {}", e2);
+                debug!("Returning BothCheckpointsFailed error");
                 Err(CheckpointError::BothCheckpointsFailed(
                     Box::new(e1),
                     Box::new(e2),
@@ -234,15 +259,47 @@ impl JamPaths {
     }
 
     pub fn decode_jam(jam_path: &PathBuf) -> Result<JammedCheckpoint, CheckpointError> {
-        let jam: Vec<u8> = std::fs::read(jam_path.as_path())?;
+        debug!("decode_jam: Attempting to read file: {}", jam_path.display());
+        
+        if !jam_path.exists() {
+            debug!("decode_jam: File does not exist: {}", jam_path.display());
+            return Err(CheckpointError::IOError(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("Checkpoint file not found: {}", jam_path.display())
+            )));
+        }
 
+        debug!("decode_jam: File exists, attempting to read");
+        let jam: Vec<u8> = match std::fs::read(jam_path.as_path()) {
+            Ok(data) => {
+                debug!("decode_jam: Successfully read {} bytes from {}", data.len(), jam_path.display());
+                data
+            }
+            Err(e) => {
+                error!("decode_jam: Failed to read file {}: {}", jam_path.display(), e);
+                return Err(CheckpointError::IOError(e));
+            }
+        };
+
+        debug!("decode_jam: Attempting to decode bincode data");
         let config = bincode::config::standard();
-        let (checkpoint, _) =
-            bincode::decode_from_slice::<JammedCheckpoint, Configuration>(&jam, config)?;
+        let (checkpoint, _) = match bincode::decode_from_slice::<JammedCheckpoint, Configuration>(&jam, config) {
+            Ok(result) => {
+                debug!("decode_jam: Successfully decoded bincode data");
+                result
+            }
+            Err(e) => {
+                error!("decode_jam: Failed to decode bincode data: {}", e);
+                return Err(CheckpointError::DecodeError(e));
+            }
+        };
 
+        debug!("decode_jam: Validating checkpoint");
         if checkpoint.validate() {
+            debug!("decode_jam: Checkpoint validation successful");
             Ok(checkpoint)
         } else {
+            error!("decode_jam: Checkpoint validation failed for {}", jam_path.display());
             Err(CheckpointError::InvalidChecksum(jam_path))
         }
     }
