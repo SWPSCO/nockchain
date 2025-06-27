@@ -156,7 +156,10 @@
   ==
 ::
 +$  cause
-  $%  [%keygen entropy=byts salt=byts]
+  $%  
+      [%update-state ~]
+      [%nothing ~]
+      [%keygen entropy=byts salt=byts]
       [%derive-child key-type=?(%pub %prv) i=@ label=(unit @t)]
       [%import-keys keys=(list (pair trek meta))]
       [%export-keys ~]
@@ -170,7 +173,15 @@
           gifts=(list coins:transact)                  ::  number of coins to spend
           fee=coins:transact                           ::  fee
       ==
+      $:  %aeroe-spend
+          names=(list [first=@t last=@t])              ::  base58-encoded name hashes
+          recipients=(list [m=@ pks=(list @t)])        ::  base58-encoded locks
+          gifts=(list coins:transact)                  ::  number of coins to spend
+          fee=coins:transact                           ::  fee
+          file-path=@t                                 ::  location to write the draft
+      ==
       [%sign-tx dat=draft index=(unit @ud) entropy=@]
+      [%sign-aeroe-tx dat=draft index=(unit @ud) file-path=@t entropy=@]
       [%list-pubkeys ~]
       [%list-notes ~]
       [%show-seedphrase ~]
@@ -602,6 +613,15 @@
       ?>  ?=(%coil -.meta)
       meta
     ::
+    ++  labels
+      =/  label-meta=(list meta)
+        %+  murn  (gulf 0 255)
+        |=  index=@ud
+        =/  =trek
+          :(welp base-path /[key-type] /[ud/index] /label)
+        (~(get of keys.state) trek)
+      (turn label-meta |=(=meta `*`+.meta))
+    ::
     ++  by-index
       |=  index=@ud
       ^-  coil
@@ -1025,17 +1045,82 @@
 ++  peek
   |=  =path
   ^-  (unit (unit *))
-  %-  (debug "peek: {<state>}")
-  ?+    path  ~
+  =/  =(pole)  path
+  ?+    pole  ~
     ::
-      [%balance ~]
-    ``balance.state
+      [%state ~]
+    ``state
+    ::
+      [%balance pk=@ ~]
+    =/  target-pubkey=schnorr-pubkey:transact
+      (from-b58:schnorr-pubkey:transact pk.pole)
+    =/  matching-notes=(list nnote:transact)
+      %+  skim  ~(val z-by:zo balance.state)
+      |=  =nnote:transact
+      (~(has z-in:zo pubkeys.lock.nnote) target-pubkey)
+    =/  list-coins=(list coins:transact)
+      %+  turn
+        matching-notes
+      |=  =nnote:transact
+      assets.nnote
+    ``(roll list-coins add)
     ::
       [%receive-address ~]
     ``receive-address.state
     ::
-      [%state ~]
-    ``state
+      [%seedphrase ~]
+    =/  =meta  seed:get:v
+    =/  seedphrase=@t
+      ?:  ?=(%seed -.meta)
+        +.meta
+      %-  crip
+      ""
+    ``seedphrase
+    ::
+      [%master-pubkey ~]
+    =/  =meta  ~(master get:v %pub)
+    =/  master-pubkey=@t
+    %-  crip
+    ?:  ?=(%coil -.meta)
+      "{(en:base58:wrap p.key.meta)}"
+    ""
+    ``master-pubkey
+    ::
+      [%pubkeys ~]
+    =/  pubkeys  ~(coils get:v %pub)
+    ~&  -:!>(~(labels get:v %pub))
+    ~&  ~(labels get:v %pub)
+    =/  base58-keys=(list cord)
+      %+  turn  pubkeys
+      |=  =coil
+      =/  pubkey=schnorr-pubkey:transact  pub:(from-public:s10 [p.key cc]:coil)
+      (to-b58:schnorr-pubkey:transact pubkey)
+    ``(crip (join ' ' base58-keys))
+    ::
+      [%notes pk=@ ~]
+    =/  target-pubkey=schnorr-pubkey:transact
+      (from-b58:schnorr-pubkey:transact pk.pole)
+    =/  matching-notes=(list =nnote:transact)
+      %+  skim  ~(val z-by:zo balance.state)
+      |=  =nnote:transact
+      (~(has z-in:zo pubkeys.lock.nnote) target-pubkey)
+
+    =/  note-objects=(list tape)
+      %+  turn
+        matching-notes
+      ::  construct note
+      |=  note=nnote:transact
+      ^-  tape
+      =+  name=(to-b58:nname:transact name.note)
+      =/  first=tape
+        :(weld (trip '"first":"') (trip first.name) (trip '",'))
+      =/  last=tape
+        :(weld (trip '"last":"') (trip last.name) (trip '",'))
+      =/  assets=tape
+        :(weld (trip '"assets":') "\"{<assets.note>}\"")
+      :(weld "\{" first last assets "}")
+    ``(crip :(weld "[" `tape`(zing (join "," note-objects)) "]"))
+  ::
   ==
 ::
 ++  poke
@@ -1062,15 +1147,19 @@
     =^  pending-effs  state  handle-pending-commands
     [(weld effs pending-effs) state]
   ?-  -.cause
+      %nothing               (do-nothing cause)
+      %update-state          (do-update-state cause)
       %npc-bind              (handle-npc cause)
       %show                  (show state path.cause)
       %keygen                (do-keygen cause)
       %derive-child          (do-derive-child cause)
       %sign-tx               (do-sign-tx cause)
+      %sign-aeroe-tx         (do-sign-aeroe-tx cause)
       %scan                  (do-scan cause)
       %list-notes            (do-list-notes cause)
       %list-notes-by-pubkey  (do-list-notes-by-pubkey cause)
       %simple-spend          (do-simple-spend cause)
+      %aeroe-spend           (do-aeroe-spend cause)
       %update-balance        (do-update-balance cause)
       %update-block          (do-update-block cause)
       %import-keys           (do-import-keys cause)
@@ -1098,6 +1187,24 @@
     ~&  >  "%file %write: {<cause>}"
     [[%exit 0]~ state]
   ==
+  ::
+  ++  do-nothing 
+    |=  =cause
+    ^-  [(list effect) ^state]
+    ?>  ?=(%nothing -.cause)
+    [[%exit 0]~ state]
+  ::
+  ++  do-update-state
+    |=  =cause
+    ^-  [(list effect) ^state]
+    ?>  ?=(%update-state -.cause)
+    =/  pid=(unit @ud)  (generate-pid:v %block)
+    ?~  pid  [[%exit 0]~ state]
+    =.  peek-requests.state  (~(put by peek-requests.state) u.pid %block)
+    =.  pending-commands.state
+      (~(put z-by:zo pending-commands.state) u.pid [%balance [%nothing ~]])
+    :_  state
+    [%npc u.pid [%peek /heavy]]~
   ::
   ++  handle-npc
     |=  =npc-cause
@@ -1768,6 +1875,112 @@
     :-  ~[effect [%exit 0]]
     state
   ::
+  ::  this is just simple-spend but with an addition of passing in the draft path
+  ++  do-aeroe-spend
+    |=  =cause
+    ?>  ?=(%aeroe-spend -.cause)
+    %-  (debug "aeroe-spend: {<names.cause>}")
+    ::  for now, each input corresponds to a single name and recipient. all
+    ::  assets associated with the name are transferred to the recipient.
+    ::
+    ::  thus there is one recipient per name, and one seed per recipient.
+    ::
+    =/  names=(list nname:transact)
+      %+  turn  names.cause
+      |=  [first=@t last=@t]
+      (from-b58:nname:transact [first last])
+    =/  recipients=(list lock:transact)
+      %+  turn  recipients.cause
+      |=  [m=@ pks=(list @t)]
+      %+  m-of-n:new:lock:transact  m
+      %-  ~(gas z-in:zo *(z-set:zo schnorr-pubkey:transact))
+      %+  turn  pks
+      |=  pk=@t
+      (from-b58:schnorr-pubkey:transact pk)
+    ::
+    =/  gifts=(list coins:transact)  gifts.cause
+    ::
+    ?.  ?&  =((lent names) (lent recipients))
+            =((lent names) (lent gifts))
+        ==
+      ~|("different number of names/recipients/gifts" !!)
+    =|  ledger=(list [name=nname:transact recipient=lock:transact gifts=coins:transact])
+    =.  ledger
+      |-
+      ?~  names  ledger
+      ::  since we assert they are equal in length above, this is just to get
+      ::  the i face
+      ?~  gifts  ledger
+      ?~  recipients  ledger
+      %=  $
+        ledger      [[i.names i.recipients i.gifts] ledger]
+        names       t.names
+        gifts       t.gifts
+        recipients  t.recipients
+      ==
+    ::
+    ::  the fee is subtracted from the first note that permits doing so without overspending
+    =/  fee=coins:transact  fee.cause
+    ::  use the first private key to construct the subsequent inputs
+    =/  sender=coil
+      =/  private-keys=(list coil)  ~(coils get:v %prv)
+      ?~  private-keys
+        ~|("No private keys available for signing" !!)
+      (head private-keys)
+    =/  sender-key=schnorr-seckey:transact
+      (from-atom:schnorr-seckey:transact p.key.sender)
+    ::  for each name, create an input from the corresponding note in sender's
+    ::  balance at the current block. the fee will be subtracted entirely from
+    ::  the first note that has sufficient assets for both the fee and the gift.
+    ::  the refund is sent to receive-address.state
+    =/  [ins=(list input:transact) spent-fee=?]
+      %^  spin  ledger  `?`%.n
+      |=  $:  $:  name=nname:transact
+                  recipient=lock:transact
+                  gift=coins:transact
+              ==
+            spent-fee=?
+          ==
+      =/  note=nnote:transact  (get-note:v name)
+      ?:  (gth gift assets.note)
+        ~|  "gift {<gift>} larger than assets {<assets.note>} for recipient {<recipient>}"
+        !!
+      ?:  ?&  !spent-fee
+              (lte (add gift fee) assets.note)
+          ==
+        ::  we can subtract the fee from this note
+        :_  %.y
+        %-  with-choice:with-refund:simple-from-note:new:input:transact
+       [recipient gift fee note sender-key assert-receive-address:v]
+      ::  we cannot subtract the fee from this note, or we already have from a previous one
+      :_  %.n
+      %-  with-choice:with-refund:simple-from-note:new:input:transact
+      [recipient gift 0 note sender-key assert-receive-address:v]
+    ::
+    ?.  spent-fee
+      ~|("no note suitable to subtract fee from, aborting operation" !!)
+    =/  ins-draft=inputs:transact  (multi:new:inputs:transact ins)
+    ?:  ?=(~ last-block.state)
+      ~|("last-block unknown!" !!)
+    ::  name is the b58-encoded name of the first input
+    =/  draft-name=@t
+      %-  head
+      %+  turn  ~(tap z-by:zo (names:inputs:transact ins-draft))
+      |=  =nname:transact
+      =<  last
+      (to-b58:nname:transact nname)
+    ::  jam inputs and save as draft
+    =/  =draft
+      %*  .  *draft
+        p  ins-draft
+        name  draft-name
+      ==
+    =/  draft-jam  (jam draft)
+    %-  (debug "saving draft to {<file-path.cause>}")
+    =/  =effect  [%file %write file-path.cause draft-jam]
+    :-  ~[effect [%exit 0]]
+    state
+  ::
   ++  do-keygen
     |=  =cause
     ?>  ?=(%keygen -.cause)
@@ -1852,6 +2065,40 @@
     =/  =effect  [%file %write path draft-jam]
     :-  ~[effect [%exit 0]]
     state
+  ++  do-sign-aeroe-tx
+    |=  =cause
+    ?>  ?=(%sign-aeroe-tx -.cause)
+    %-  (debug "sign-tx: {<dat.cause>}")
+    ::  get private key at specified index, or first derived key if no index
+    =/  private-keys=(list coil)  ~(coils get:v %prv)
+    ?~  private-keys
+      ~|("No private keys available for signing" !!)
+    =/  sender=coil
+      ?~  index.cause  i.private-keys
+      =/  key-at-index=meta  (~(by-index get:v %prv) u.index.cause)
+      ?>  ?=(%coil -.key-at-index)
+      key-at-index
+    =/  sender-key=schnorr-seckey:transact
+      (from-atom:schnorr-seckey:transact p.key.sender)
+    =/  signed-inputs=inputs:transact
+      %-  ~(run z-by:zo p.dat.cause)
+      |=  =input:transact
+      %-  (debug "signing input: {<input>}")
+      =.  spend.input
+        %+  sign:spend:transact
+          spend.input
+        sender-key
+      input
+    =/  signed-draft=draft
+      %=  dat.cause
+        p  signed-inputs
+      ==
+    =/  draft-jam  (jam signed-draft)
+    %-  (debug "saving input draft to {<file-path.cause>}")
+    =/  =effect  [%file %write file-path.cause draft-jam]
+    :-  ~[effect [%exit 0]]
+    state
+  ::
   ::
   ++  do-advanced-spend-seed
     |=  cause=advanced-spend-seed

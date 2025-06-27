@@ -150,6 +150,7 @@
     ::
         [%transactions ~]
       ^-  (unit (unit (z-mip block-id:t tx-id:t tx:t)))
+      ~&  txs.c.k
       ``txs.c.k
     ::
         [%raw-transactions ~]
@@ -210,6 +211,7 @@
     ::
         [%desk-hash ~]
       ^-  (unit (unit (unit @uvI)))
+      ~&  desk-hash.a.k
       ``desk-hash.a.k
     ::
         [%mining-pubkeys ~]
@@ -242,7 +244,19 @@
       :-  pubkeys.m.k
       ?~  heaviest-block
         ~
-      `(to-page-summary:page:t (to-page:local-page:t u.heaviest-block))
+      =+  res=(to-page-summary:page:t (to-page:local-page:t u.heaviest-block))
+      ~&  res
+      `res
+    ::
+        [%height ~]
+      ^-  (unit (unit page-number:t))
+      ?~  heaviest-block.c.k
+        [~ ~]
+      =/  heaviest-block  (~(get z-by blocks.c.k) u.heaviest-block.c.k)
+      ?~  heaviest-block
+        [~ ~]
+      =+  summary=(to-page-summary:page:t (to-page:local-page:t u.heaviest-block))
+      ``height.summary
     ==
   ::
   ++  poke
