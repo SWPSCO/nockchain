@@ -1,8 +1,9 @@
+use std::ptr::{copy_nonoverlapping, null_mut};
+
 use crate::hamt::Hamt;
 use crate::mem::{self, NockStack, Preserve};
 use crate::noun::{self, Atom, DirectAtom, IndirectAtom, Noun, NounAllocator, Slots, D, T};
 use crate::unifying_equality::unifying_equality;
-use std::ptr::{copy_nonoverlapping, null_mut};
 
 pub enum Error {
     NoParent,

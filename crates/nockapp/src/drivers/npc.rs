@@ -1,12 +1,6 @@
-use crate::nockapp::driver::{make_driver, IODriverFn, PokeResult, TaskJoinSet};
-use crate::nockapp::wire::{Wire, WireRepr};
-use crate::nockapp::NockAppError;
-use crate::noun::slab::NounSlab;
-use crate::Bytes;
-use bytes::buf::BufMut;
-
 use std::sync::Arc;
 
+use bytes::buf::BufMut;
 use nockvm::noun::{D, T};
 use nockvm_macros::tas;
 use tokio::io::{split, AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
@@ -16,6 +10,12 @@ use tokio::sync::Mutex;
 use tokio::task::JoinSet;
 use tokio::time::{sleep, timeout, Duration};
 use tracing::{debug, error};
+
+use crate::nockapp::driver::{make_driver, IODriverFn, PokeResult, TaskJoinSet};
+use crate::nockapp::wire::{Wire, WireRepr};
+use crate::nockapp::NockAppError;
+use crate::noun::slab::NounSlab;
+use crate::Bytes;
 
 /// Timeout constants for npc driver operations
 const OVERALL_WRITE_TIMEOUT_SECS: u64 = 300; // 5 minutes
@@ -378,19 +378,20 @@ async fn write_message(
 
 #[cfg(test)]
 mod tests {
-    use crate::metrics::NockAppMetrics;
-    use crate::nockapp::driver::{IOAction, NockAppHandle};
-    use crate::NockAppExit;
-
-    use super::*;
     use std::io::{Read, Write};
     use std::os::unix::net::UnixStream as StdUnixStream;
     use std::time::Duration;
+
     use tempfile::tempdir;
     use tokio::net::UnixStream;
     use tokio::sync::{broadcast, mpsc};
     use tokio::time::timeout;
     use tracing_test::traced_test;
+
+    use super::*;
+    use crate::metrics::NockAppMetrics;
+    use crate::nockapp::driver::{IOAction, NockAppHandle};
+    use crate::NockAppExit;
 
     async fn setup_socket_pair() -> (UnixStream, StdUnixStream) {
         let dir = tempdir().unwrap_or_else(|err| {

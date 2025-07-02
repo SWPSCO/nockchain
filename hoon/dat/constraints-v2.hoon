@@ -1,16 +1,16 @@
 /=  z  /common/zeke
-/=  nock-common  /common/nock-common
+/=  nock-common  /common/v2/nock-common
 =<  preprocess-data
 |%
 ::  +preprocess-data: precompute all data necessary to run the prover/verifier
 ++  preprocess-data
-  ^-  preprocess-0:z
+  ^-  preprocess-2:z
   |^
   ~&  %computing-preprocess-data
   =/  cd  compute-table-to-constraint-degree
   =/  constraints  compute-constraints
   =/  count-map  count-constraints
-  :*  %0
+  :*  %2
       cd
       constraints
       count-map

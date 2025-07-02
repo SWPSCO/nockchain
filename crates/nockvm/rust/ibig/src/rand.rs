@@ -1,14 +1,14 @@
 //! Random distributions.
 
+use rand::distributions::uniform::{SampleBorrow, SampleUniform, UniformSampler};
+use rand::Rng;
+
 use crate::arch::word::Word;
 use crate::buffer::Buffer;
 use crate::ibig::IBig;
 use crate::ops::UnsignedAbs;
 use crate::ubig::Repr::*;
 use crate::ubig::UBig;
-
-use rand::distributions::uniform::{SampleBorrow, SampleUniform, UniformSampler};
-use rand::Rng;
 
 impl SampleUniform for UBig {
     type Sampler = UniformUBig;

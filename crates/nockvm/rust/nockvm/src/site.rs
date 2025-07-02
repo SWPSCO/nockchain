@@ -2,19 +2,20 @@
 use bitvec::order::Lsb0;
 use bitvec::slice::BitSlice;
 
-use crate::interpreter::{interpret, Context};
+use crate::interpreter::{interpret, Context, Mote};
 use crate::jets::util::slot;
 use crate::jets::{Jet, JetErr};
 use crate::noun::{Noun, D, T};
+use crate::unifying_equality::unifying_equality;
 
 /// Return Err if the computation crashed or should punt to Nock
 pub(crate) type Result = std::result::Result<Noun, JetErr>;
 
 pub(crate) struct Site {
-    pub(crate) battery: Noun,    // battery
-    pub(crate) context: Noun,    // context
-    pub(crate) jet: Option<Jet>, // jet driver
-    pub(crate) path: Noun,       // label
+    pub(crate) battery: Noun,            // battery
+    pub(crate) context: Noun,            // context
+    pub(crate) jet: Option<(Jet, bool)>, // jet driver
+    pub(crate) path: Noun,               // label
 }
 
 impl Site {
@@ -37,10 +38,10 @@ impl Site {
             )
         });
 
-        let warm_result = ctx
+        let mut warm_result = ctx
             .warm
             .find_jet(&mut ctx.stack, core, &mut battery)
-            .filter(|(_jet, mut path)| {
+            .filter(|(_jet, mut path, _test)| {
                 // check that 7 is a prefix of the parent battery axis,
                 // to ensure that the sample (axis 6) is not part of the jet match.
                 //
@@ -66,11 +67,12 @@ impl Site {
                 }
                 ret
             });
+        let warm_result_opt = warm_result.next();
         Site {
             battery,
             context,
-            jet: warm_result.map(|(jet, _)| jet),
-            path: warm_result.map(|(_, path)| path).unwrap_or(D(0)),
+            jet: warm_result_opt.map(|(jet, _, test)| (jet, test)),
+            path: warm_result_opt.map(|(_, path, _)| path).unwrap_or(D(0)),
         }
     }
 }
@@ -78,16 +80,24 @@ impl Site {
 /// Slam a cached call site.
 pub(crate) fn site_slam(ctx: &mut Context, site: &Site, sample: Noun) -> Result {
     let subject = T(&mut ctx.stack, &[site.battery, sample, site.context]);
-    if site.jet.is_some() {
-        let jet = site.jet.unwrap_or_else(|| {
-            panic!(
-                "Panicked at {}:{} (git sha: {:?})",
-                file!(),
-                line!(),
-                option_env!("GIT_SHA")
-            )
-        });
-        jet(ctx, subject)
+    // TODO run test if necessary
+    if let Some((jet, test)) = site.jet {
+        let jet_res = jet(ctx, subject);
+        match jet_res {
+            Ok(mut jet_res) => {
+                if test {
+                    let mut test_res = interpret(ctx, subject, site.battery)?;
+                    if unsafe { !unifying_equality(&mut ctx.stack, &mut test_res, &mut jet_res) } {
+                        return Err(JetErr::Fail(crate::interpreter::Error::NonDeterministic(
+                            Mote::Jest,
+                            D(0),
+                        )));
+                    }
+                }
+                Ok(jet_res)
+            }
+            Err(err) => Err(err),
+        }
     } else {
         Ok(interpret(ctx, subject, site.battery)?)
     }

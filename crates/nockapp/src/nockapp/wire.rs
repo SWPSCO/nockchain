@@ -138,9 +138,8 @@ mod test {
     use nockvm_macros::tas;
     use tracing::debug;
 
-    use crate::noun::slab::NounSlab;
-
     use super::*;
+    use crate::noun::slab::NounSlab;
 
     enum NpcWire {
         Poke(u64),

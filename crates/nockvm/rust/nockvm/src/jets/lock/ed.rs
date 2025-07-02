@@ -1,10 +1,11 @@
+use nockvm_crypto::ed25519::{ac_ed_puck, ac_ed_shar, ac_ed_sign, ac_ed_veri};
+
 use crate::interpreter::Context;
 use crate::jets::bits::util::met;
 use crate::jets::util::{slot, BAIL_EXIT};
 use crate::jets::{JetErr, Result};
 use crate::mem::NockStack;
 use crate::noun::{IndirectAtom, Noun, NO, YES};
-use nockvm_crypto::ed25519::{ac_ed_puck, ac_ed_shar, ac_ed_sign, ac_ed_veri};
 
 crate::gdb!();
 
@@ -119,10 +120,11 @@ pub fn jet_veri(_context: &mut Context, subject: Noun) -> Result {
 
 #[cfg(test)]
 mod tests {
+    use ibig::ubig;
+
     use super::*;
     use crate::jets::util::test::{assert_jet, assert_jet_err, init_context, A};
     use crate::noun::{D, T};
-    use ibig::ubig;
 
     //  XX: Should use the test vectors from Section 7.1 of RFC 8032:
     //      https://tools.ietf.org/html/rfc8032#section-7.1

@@ -1,7 +1,7 @@
-use crate::noun::slab::NounSlab;
-use futures::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+
+use futures::future::Future;
 use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
 use tokio::task::JoinSet;
 use tracing::instrument;
@@ -10,6 +10,7 @@ use super::error::NockAppError;
 use super::metrics::NockAppMetrics;
 use super::wire::WireRepr;
 use super::NockAppExit;
+use crate::noun::slab::NounSlab;
 
 pub type IODriverFuture = Pin<Box<dyn Future<Output = Result<(), NockAppError>> + Send>>;
 pub type IODriverFn = Box<dyn FnOnce(NockAppHandle) -> IODriverFuture>;

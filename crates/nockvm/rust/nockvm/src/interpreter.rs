@@ -1,3 +1,15 @@
+use std::ops::{DerefMut, Neg};
+use std::pin::Pin;
+use std::result;
+use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::Arc;
+use std::time::Instant;
+
+use bitvec::prelude::{BitSlice, Lsb0};
+use either::*;
+use nockvm_macros::tas;
+use tracing::trace;
+
 use crate::hamt::Hamt;
 use crate::jets::cold::Cold;
 use crate::jets::hot::Hot;
@@ -9,16 +21,6 @@ use crate::noun::{Atom, Cell, IndirectAtom, Noun, Slots, D, T};
 use crate::trace::{write_nock_trace, TraceInfo, TraceStack};
 use crate::unifying_equality::unifying_equality;
 use crate::{assert_acyclic, assert_no_forwarding_pointers, assert_no_junior_pointers, flog, noun};
-use bitvec::prelude::{BitSlice, Lsb0};
-use either::*;
-use nockvm_macros::tas;
-use std::ops::{DerefMut, Neg};
-use std::pin::Pin;
-use std::result;
-use std::sync::atomic::{AtomicIsize, Ordering};
-use std::sync::Arc;
-use std::time::Instant;
-use tracing::trace;
 
 crate::gdb!();
 
@@ -296,6 +298,7 @@ pub struct Context {
     pub scry_stack: Noun,
     pub trace_info: Option<TraceInfo>,
     pub running_status: Arc<AtomicIsize>,
+    pub test_jets: Hamt<()>,
 }
 
 #[derive(Debug, Clone)]
@@ -381,6 +384,7 @@ pub enum Mote {
     Fail = tas!(b"fail") as isize,
     Intr = tas!(b"intr") as isize,
     Meme = tas!(b"meme") as isize,
+    Jest = tas!(b"jest") as isize,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -428,6 +432,7 @@ pub type Result = result::Result<Noun, Error>;
 const BAIL_EXIT: Result = Err(Error::Deterministic(Mote::Exit, D(0)));
 const BAIL_FAIL: Result = Err(Error::NonDeterministic(Mote::Fail, D(0)));
 const BAIL_INTR: Result = Err(Error::NonDeterministic(Mote::Intr, D(0)));
+pub(crate) const BAIL_JEST: Result = Err(Error::NonDeterministic(Mote::Jest, D(0)));
 
 #[allow(unused_variables)]
 #[inline(always)]
@@ -741,12 +746,23 @@ pub fn interpret(context: &mut Context, mut subject: Noun, formula: Noun) -> Res
                         Todo9::ComputeResult => {
                             if let Ok(mut formula) = res.slot_atom(kale.axis) {
                                 if !cfg!(feature = "sham_hints") {
-                                    if let Some((jet, _path)) = context
+                                    if let Some((jet, _path, test)) = context
                                         .warm
                                         .find_jet(&mut context.stack, &mut res, &mut formula)
+                                        .next()
                                     {
                                         match jet(context, res) {
-                                            Ok(jet_res) => {
+                                            Ok(mut jet_res) => {
+                                                if test {
+                                                    let mut test_res =
+                                                        interpret(context, res, formula)?;
+                                                    if !unifying_equality(
+                                                        &mut context.stack, &mut test_res,
+                                                        &mut jet_res,
+                                                    ) {
+                                                        break BAIL_JEST;
+                                                    }
+                                                }
                                                 res = jet_res;
                                                 context.stack.pop::<NockWork>();
                                                 continue;
@@ -1430,13 +1446,14 @@ unsafe fn write_trace(context: &mut Context) {
 }
 
 mod hint {
+    use nockvm_macros::tas;
+
     use super::*;
     use crate::jets;
     use crate::jets::cold;
     use crate::jets::nock::util::{mook, LEAF};
     use crate::noun::{tape, Atom, Cell, Noun, D, T};
     use crate::unifying_equality::unifying_equality;
-    use nockvm_macros::tas;
 
     pub(super) fn is_tail(tag: Atom) -> bool {
         //  XX: handle IndirectAtom tags
@@ -1700,7 +1717,9 @@ mod hint {
                         };
 
                         match cold_res {
-                            Ok(true) => context.warm = Warm::init(stack, cold, hot),
+                            Ok(true) => {
+                                context.warm = Warm::init(stack, cold, hot, &context.test_jets)
+                            }
                             Err(cold::Error::NoParent) => {
                                 flog!(context, "serf: cold: register: could not match parent battery at given axis: {:?} {:?}", chum, parent_formula_ax);
                             }
@@ -1729,8 +1748,9 @@ mod hint {
 }
 
 mod debug {
-    use crate::noun::Noun;
     use either::Either::*;
+
+    use crate::noun::Noun;
 
     #[allow(dead_code)]
     pub(super) fn assert_normalized(noun: Noun, path: Noun) {

@@ -32,13 +32,15 @@ pub fn jet_mor(context: &mut Context, subject: Noun) -> jets::Result {
 }
 
 pub mod util {
+    use std::cmp::Ordering;
+
+    use either::{Left, Right};
+
     use crate::jets::math::util::lth;
     use crate::jets::util::slot;
     use crate::mem::NockStack;
     use crate::mug::mug;
     use crate::noun::{Noun, NO, YES};
-    use either::{Left, Right};
-    use std::cmp::Ordering;
 
     pub fn dor(stack: &mut NockStack, a: Noun, b: Noun) -> Noun {
         if unsafe { a.raw_equals(&b) } {
@@ -115,10 +117,11 @@ pub mod util {
 
 #[cfg(test)]
 mod tests {
+    use ibig::ubig;
+
     use super::*;
     use crate::jets::util::test::{assert_jet, init_context, A};
     use crate::noun::{D, NO, T, YES};
-    use ibig::ubig;
 
     #[test]
     fn test_dor() {

@@ -1,11 +1,12 @@
-use crate::nockapp::driver::*;
-use crate::nockapp::wire::Wire;
-use crate::nockapp::NockAppError;
-use crate::noun::slab::NounSlab;
 use either::Either::{self, Left, Right};
 use nockvm::noun::D;
 use nockvm_macros::tas;
 use tracing::{debug, error};
+
+use crate::nockapp::driver::*;
+use crate::nockapp::wire::Wire;
+use crate::nockapp::NockAppError;
+use crate::noun::slab::NounSlab;
 
 pub enum OnePunchWire {
     Poke,

@@ -1,8 +1,9 @@
+use either::Either::*;
+use murmur3::murmur3_32_of_slice;
+
 use crate::mem::*;
 use crate::noun::{Allocated, Atom, DirectAtom, Noun};
 use crate::{assert_acyclic, assert_no_forwarding_pointers, assert_no_junior_pointers};
-use either::Either::*;
-use murmur3::murmur3_32_of_slice;
 
 crate::gdb!();
 

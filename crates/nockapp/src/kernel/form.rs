@@ -1,8 +1,11 @@
 #![allow(dead_code)]
-use crate::metrics::NockAppMetrics;
+use std::any::Any;
+use std::fs::File;
+use std::future::Future;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::Instant;
 
-use crate::noun::slab::NounSlab;
-use crate::save::SaveableCheckpoint;
 use blake3::{Hash, Hasher};
 use byteorder::{LittleEndian, WriteBytesExt};
 use nockvm::hamt::Hamt;
@@ -15,24 +18,19 @@ use nockvm::mug::met3_usize;
 use nockvm::noun::{Atom, Cell, DirectAtom, IndirectAtom, Noun, Slots, D, T};
 use nockvm::trace::{path_to_cord, write_serf_trace_safe, TraceInfo};
 use nockvm_macros::tas;
-
-use std::any::Any;
-use std::fs::File;
-use std::future::Future;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
-use std::time::Instant;
+use tokio::sync::{mpsc, oneshot};
+use tokio::time::Duration;
 use tracing::{debug, warn};
 
+use crate::metrics::NockAppMetrics;
 use crate::nockapp::wire::{wire_to_noun, WireRepr};
+use crate::noun::slab::NounSlab;
 use crate::noun::slam;
+use crate::save::SaveableCheckpoint;
 use crate::utils::{
     create_context, current_da, NOCK_STACK_SIZE, NOCK_STACK_SIZE_BIG, NOCK_STACK_SIZE_HUGE,
 };
 use crate::{AtomExt, CrownError, NounExt, Result, ToBytesExt};
-
-use tokio::sync::{mpsc, oneshot};
-use tokio::time::Duration;
 
 pub(crate) const STATE_AXIS: u64 = 6;
 const LOAD_AXIS: u64 = 4;
@@ -105,6 +103,7 @@ impl<C: SerfCheckpoint + Send + 'static> SerfThread<C> {
         checkpoint: Option<C>,
         constant_hot_state: Vec<HotEntry>,
         nock_stack_size: usize,
+        test_jets: Vec<NounSlab>,
         trace: bool,
     ) -> Result<Self> {
         let (action_sender, action_receiver) = mpsc::channel(1);
@@ -117,7 +116,9 @@ impl<C: SerfCheckpoint + Send + 'static> SerfThread<C> {
             .stack_size(SERF_THREAD_STACK_SIZE)
             .spawn(move || {
                 let stack = NockStack::new(nock_stack_size, 0);
-                let serf = Serf::new(stack, checkpoint, &kernel_bytes, &constant_hot_state, trace);
+                let serf = Serf::new(
+                    stack, checkpoint, &kernel_bytes, &constant_hot_state, test_jets, trace,
+                );
                 event_number_sender
                     .send(serf.event_num.clone())
                     .expect("Could not send event number out of serf thread");
@@ -526,12 +527,13 @@ impl<C: SerfCheckpoint + 'static> Kernel<C> {
         kernel: &[u8],
         checkpoint: Option<C>,
         hot_state: &[HotEntry],
+        test_jets: Vec<NounSlab>,
         trace: bool,
     ) -> Result<Self> {
         let kernel_vec = Vec::from(kernel);
         let hot_state_vec = Vec::from(hot_state);
         let serf = SerfThread::new(
-            kernel_vec, checkpoint, hot_state_vec, NOCK_STACK_SIZE, trace,
+            kernel_vec, checkpoint, hot_state_vec, NOCK_STACK_SIZE, test_jets, trace,
         )
         .await?;
         Ok(Self { serf })
@@ -541,12 +543,13 @@ impl<C: SerfCheckpoint + 'static> Kernel<C> {
         kernel: &[u8],
         checkpoint: Option<C>,
         hot_state: &[HotEntry],
+        test_jets: Vec<NounSlab>,
         trace: bool,
     ) -> Result<Self> {
         let kernel_vec = Vec::from(kernel);
         let hot_state_vec = Vec::from(hot_state);
         let serf = SerfThread::new(
-            kernel_vec, checkpoint, hot_state_vec, NOCK_STACK_SIZE_BIG, trace,
+            kernel_vec, checkpoint, hot_state_vec, NOCK_STACK_SIZE_BIG, test_jets, trace,
         )
         .await?;
         Ok(Self { serf })
@@ -556,12 +559,13 @@ impl<C: SerfCheckpoint + 'static> Kernel<C> {
         kernel: &[u8],
         checkpoint: Option<C>,
         hot_state: &[HotEntry],
+        test_jets: Vec<NounSlab>,
         trace: bool,
     ) -> Result<Self> {
         let kernel_vec = Vec::from(kernel);
         let hot_state_vec = Vec::from(hot_state);
         let serf = SerfThread::new(
-            kernel_vec, checkpoint, hot_state_vec, NOCK_STACK_SIZE_HUGE, trace,
+            kernel_vec, checkpoint, hot_state_vec, NOCK_STACK_SIZE_HUGE, test_jets, trace,
         )
         .await?;
         Ok(Self { serf })
@@ -578,8 +582,13 @@ impl<C: SerfCheckpoint + 'static> Kernel<C> {
     /// # Returns
     ///
     /// A new `Kernel` instance.
-    pub async fn load(kernel: &[u8], checkpoint: Option<C>, trace: bool) -> Result<Self> {
-        Self::load_with_hot_state(kernel, checkpoint, &Vec::new(), trace).await
+    pub async fn load(
+        kernel: &[u8],
+        checkpoint: Option<C>,
+        test_jets: Vec<NounSlab>,
+        trace: bool,
+    ) -> Result<Self> {
+        Self::load_with_hot_state(kernel, checkpoint, &Vec::new(), test_jets, trace).await
     }
 
     /// Produces a checkpoint of the kernel state.
@@ -660,6 +669,7 @@ impl Serf {
         checkpoint: Option<C>,
         kernel_bytes: &[u8],
         constant_hot_state: &[HotEntry],
+        test_jets: Vec<NounSlab>,
         trace: bool,
     ) -> Self {
         let hot_state = [URBIT_HOT_STATE, constant_hot_state].concat();
@@ -706,7 +716,7 @@ impl Serf {
             None
         };
 
-        let mut context = create_context(stack, &hot_state, cold, trace_info);
+        let mut context = create_context(stack, &hot_state, cold, trace_info, test_jets);
         let cancel_token = context.cancel_token();
 
         let mut arvo = {
@@ -1121,6 +1131,7 @@ impl Serf {
     pub unsafe fn preserve_event_update_leftovers(&mut self) {
         let stack = &mut self.context.stack;
         stack.preserve(&mut self.context.warm);
+        stack.preserve(&mut self.context.test_jets);
         stack.preserve(&mut self.context.hot);
         stack.preserve(&mut self.context.cache);
         stack.preserve(&mut self.context.cold);
@@ -1176,9 +1187,10 @@ fn slot(noun: Noun, axis: u64) -> Result<Noun> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::fs;
     use std::path::Path;
+
+    use super::*;
 
     async fn setup_kernel(jam: &str) -> Kernel<SaveableCheckpoint> {
         let jam_path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1187,7 +1199,7 @@ mod tests {
             .join(jam);
         let jam_bytes =
             fs::read(jam_path).unwrap_or_else(|_| panic!("Failed to read {} file", jam));
-        Kernel::load(&jam_bytes, None, false)
+        Kernel::load(&jam_bytes, None, vec![], false)
             .await
             .expect("Could not load kernel")
     }

@@ -1,3 +1,13 @@
+use std::fs::{create_dir_all, File};
+use std::io::{Error, Write};
+use std::path::PathBuf;
+use std::result::Result;
+use std::time::Instant;
+
+use either::Either::*;
+use json::object;
+use nockvm_macros::tas;
+
 use crate::flog;
 use crate::interpreter::Context;
 use crate::jets::bits::util::rap;
@@ -5,14 +15,6 @@ use crate::jets::form::util::scow;
 use crate::mem::NockStack;
 use crate::mug::met3_usize;
 use crate::noun::{Atom, DirectAtom, IndirectAtom, Noun};
-use either::Either::*;
-use json::object;
-use nockvm_macros::tas;
-use std::fs::{create_dir_all, File};
-use std::io::{Error, Write};
-use std::path::PathBuf;
-use std::result::Result;
-use std::time::Instant;
 
 crate::gdb!();
 

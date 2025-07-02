@@ -1,8 +1,9 @@
+use either::Either::*;
+use libc::{c_void, memcmp};
+
 use crate::mem::{NockStack, ALLOC, FRAME, STACK};
 use crate::noun::Noun;
 use crate::{assert_acyclic, assert_no_forwarding_pointers, assert_no_junior_pointers};
-use either::Either::*;
-use libc::{c_void, memcmp};
 
 #[cfg(feature = "check_junior")]
 #[macro_export]

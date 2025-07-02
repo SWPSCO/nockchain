@@ -1,12 +1,10 @@
-use tracing::info;
-
 use nockapp::noun::slab::NounSlab;
 use nockapp::test::setup_nockapp;
 use nockapp::wire::{SystemWire, Wire};
 use nockapp::NockApp;
-
 use nockvm::noun::{Noun, Slots, D};
 use nockvm_macros::tas;
+use tracing::info;
 
 #[tracing::instrument(skip(nockapp))]
 fn run_once(nockapp: &mut NockApp, i: u64) {

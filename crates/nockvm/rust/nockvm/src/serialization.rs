@@ -1,10 +1,11 @@
+use bitvec::prelude::{BitSlice, Lsb0};
+use either::Either::{Left, Right};
+
 use crate::hamt::MutHamt;
 use crate::interpreter::Error::{self, *};
 use crate::interpreter::Mote::*;
 use crate::mem::NockStack;
 use crate::noun::{Atom, Cell, DirectAtom, IndirectAtom, Noun, D};
-use bitvec::prelude::{BitSlice, Lsb0};
-use either::Either::{Left, Right};
 
 crate::gdb!();
 

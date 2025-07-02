@@ -1,8 +1,9 @@
 pub mod convert;
 
+use std::collections::HashSet;
+
 use ibig::UBig;
 use slotmap::{new_key_type, SlotMap};
-use std::collections::HashSet;
 // use std::fmt;
 
 /// The maximum value of a “direct” atom (63 bits).

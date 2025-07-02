@@ -1,15 +1,17 @@
 // TODO: fix stack push in PC
-use crate::noun::{Atom, Cell, CellMemory, IndirectAtom, Noun, NounAllocator};
-use crate::{assert_acyclic, assert_no_forwarding_pointers, assert_no_junior_pointers};
-use either::Either::{self, Left, Right};
-use ibig::Stack;
-use memmap2::MmapMut;
 use std::alloc::Layout;
 use std::ops::{Deref, DerefMut};
 use std::panic::panic_any;
 use std::ptr::copy_nonoverlapping;
 use std::{mem, ptr};
+
+use either::Either::{self, Left, Right};
+use ibig::Stack;
+use memmap2::MmapMut;
 use thiserror::Error;
+
+use crate::noun::{Atom, Cell, CellMemory, IndirectAtom, Noun, NounAllocator};
+use crate::{assert_acyclic, assert_no_forwarding_pointers, assert_no_junior_pointers};
 
 crate::gdb!();
 
@@ -2011,6 +2013,12 @@ pub trait Preserve {
     /// Ensure an object will not be invalidated by popping the NockStack
     unsafe fn preserve(&mut self, stack: &mut NockStack);
     unsafe fn assert_in_stack(&self, stack: &NockStack);
+}
+
+impl Preserve for () {
+    unsafe fn preserve(&mut self, _stack: &mut NockStack) {}
+
+    unsafe fn assert_in_stack(&self, _stack: &NockStack) {}
 }
 
 impl Preserve for IndirectAtom {

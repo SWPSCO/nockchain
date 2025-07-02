@@ -1,5 +1,11 @@
 //! Format in a non-power-of-two radix.
 
+use alloc::vec::Vec;
+use core::fmt::{self, Formatter};
+use core::mem;
+
+use static_assertions::const_assert;
+
 use crate::arch::word::Word;
 use crate::div;
 use crate::fmt::digit_writer::DigitWriter;
@@ -8,10 +14,6 @@ use crate::ops::DivRem;
 use crate::radix::{self, Digit};
 use crate::ubig::Repr::*;
 use crate::ubig::UBig;
-use alloc::vec::Vec;
-use core::fmt::{self, Formatter};
-use core::mem;
-use static_assertions::const_assert;
 
 /// Format in chunks of CHUNK_LEN * digits_per_word.
 const CHUNK_LEN: usize = 16;

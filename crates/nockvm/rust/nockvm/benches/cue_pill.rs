@@ -1,10 +1,11 @@
-use nockvm::mem::NockStack;
-use nockvm::noun::{DirectAtom, IndirectAtom};
-use nockvm::serialization::{cue, jam};
 use std::fs::{File, OpenOptions};
 use std::ptr::{copy_nonoverlapping, write_bytes};
 use std::time::SystemTime;
 use std::{env, io, mem};
+
+use nockvm::mem::NockStack;
+use nockvm::noun::{DirectAtom, IndirectAtom};
+use nockvm::serialization::{cue, jam};
 
 fn main() -> io::Result<()> {
     let filename = env::args().nth(1).expect("Must provide input filename");

@@ -1,5 +1,10 @@
 //! Multiplication operators.
 
+use core::mem;
+use core::ops::{Mul, MulAssign};
+
+use static_assertions::const_assert;
+
 use crate::arch::word::Word;
 use crate::buffer::Buffer;
 use crate::ibig::IBig;
@@ -9,9 +14,6 @@ use crate::sign::Sign::{self, *};
 use crate::ubig::Repr::*;
 use crate::ubig::UBig;
 use crate::{helper_macros, mul};
-use core::mem;
-use core::ops::{Mul, MulAssign};
-use static_assertions::const_assert;
 
 impl Mul<UBig> for UBig {
     type Output = UBig;

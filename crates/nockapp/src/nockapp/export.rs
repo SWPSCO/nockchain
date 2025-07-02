@@ -1,9 +1,10 @@
-use crate::kernel::form::LoadState;
-use crate::noun::slab::NounSlab;
-use crate::{JammedNoun, NockAppError};
 use bincode::{config, decode_from_slice, encode_to_vec, Decode, Encode};
 use blake3::Hash;
 use nockvm_macros::tas;
+
+use crate::kernel::form::LoadState;
+use crate::noun::slab::NounSlab;
+use crate::{JammedNoun, NockAppError};
 
 const EXPORTED_STATE_MAGIC_BYTES: u64 = tas!(b"EXPJAM");
 const EXPORTED_STATE_VERSION: u32 = 0;

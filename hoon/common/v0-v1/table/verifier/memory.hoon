@@ -1,4 +1,4 @@
-/=  common  /common/table/memory
+/=  common  /common/v0-v1/table/memory
 /=  *  /common/zeke
 =,  mp-to-mega
 |%

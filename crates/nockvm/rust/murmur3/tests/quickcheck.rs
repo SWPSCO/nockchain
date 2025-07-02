@@ -15,14 +15,8 @@ mod test {
 
     use std::io::Cursor;
 
-    use murmur3::{murmur3_32, murmur3_32_of_slice};
-    use murmur3_sys::MurmurHash3_x86_32;
-
-    use murmur3::murmur3_x86_128;
-    use murmur3_sys::MurmurHash3_x86_128;
-
-    use murmur3::murmur3_x64_128;
-    use murmur3_sys::MurmurHash3_x64_128;
+    use murmur3::{murmur3_32, murmur3_32_of_slice, murmur3_x64_128, murmur3_x86_128};
+    use murmur3_sys::{MurmurHash3_x64_128, MurmurHash3_x86_128, MurmurHash3_x86_32};
 
     quickcheck! {
         #[cfg_attr(miri, ignore)]

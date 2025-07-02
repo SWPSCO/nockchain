@@ -1,8 +1,8 @@
-/=  common  /common/table/compute
-/=  verifier-compute  /common/table/verifier/compute
+/=  common  /common/v2/table/compute
+/=  verifier-compute  /common/v2/table/verifier/compute
 /=  *  /common/zeke
 ::
-~%  %compute-table  ..ride  ~
+~%  %compute-table-v2  ..ride  ~
 |%
 ++  num-randomizers  1
 ++  header

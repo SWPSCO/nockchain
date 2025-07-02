@@ -1,8 +1,9 @@
+use std::fmt::Arguments;
+use std::io::{Result, Write};
+
 use crate::interpreter::Context;
 use crate::mem::NockStack;
 use crate::noun::{Atom, IndirectAtom};
-use std::fmt::Arguments;
-use std::io::{Result, Write};
 
 struct NockWriter<'s, 'b> {
     stack: &'s mut NockStack,

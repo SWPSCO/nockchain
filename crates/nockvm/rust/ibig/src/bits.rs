@@ -1,5 +1,8 @@
 //! Bitwise operators.
 
+use core::mem;
+use core::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Not};
+
 use crate::arch::word::Word;
 use crate::buffer::Buffer;
 use crate::ibig::IBig;
@@ -9,8 +12,6 @@ use crate::sign::Sign::*;
 use crate::ubig::Repr::*;
 use crate::ubig::UBig;
 use crate::{helper_macros, math};
-use core::mem;
-use core::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Not};
 
 impl UBig {
     /// Returns true if the `n`-th bit is set.

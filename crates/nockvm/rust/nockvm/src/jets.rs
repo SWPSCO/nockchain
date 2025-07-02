@@ -15,6 +15,10 @@ pub mod serial;
 pub mod sort;
 pub mod tree;
 
+use cold::FromNounError;
+use nockvm_macros::tas;
+use util::BAIL_EXIT;
+
 use crate::flog;
 use crate::interpreter::{Context, Error, Mote};
 use crate::jets::bits::*;
@@ -32,14 +36,10 @@ use crate::jets::nock::*;
 use crate::jets::parse::*;
 use crate::jets::serial::*;
 use crate::jets::sort::*;
-
 use crate::jets::tree::*;
 use crate::jets::warm::Warm;
 use crate::mem::{NockStack, Preserve};
 use crate::noun::{self, Noun, Slots};
-use cold::FromNounError;
-use nockvm_macros::tas;
-use util::BAIL_EXIT;
 
 crate::gdb!();
 
@@ -192,11 +192,13 @@ pub fn get_jet_test_mode(_jet_name: Noun) -> bool {
 }
 
 pub mod util {
+    use std::result;
+
+    use bitvec::prelude::{BitSlice, Lsb0};
+
     use super::*;
     use crate::interpreter::interpret;
     use crate::noun::{Noun, D, T};
-    use bitvec::prelude::{BitSlice, Lsb0};
-    use std::result;
 
     pub const BAIL_EXIT: JetErr = JetErr::Fail(Error::Deterministic(Mote::Exit, D(0)));
     pub const BAIL_FAIL: JetErr = JetErr::Fail(Error::NonDeterministic(Mote::Fail, D(0)));
@@ -313,13 +315,14 @@ pub mod util {
         use std::sync::atomic::AtomicIsize;
         use std::sync::Arc;
 
+        use ibig::UBig;
+
         use super::*;
         use crate::hamt::Hamt;
         use crate::interpreter::{NockCancelToken, Slogger};
         use crate::mem::NockStack;
         use crate::noun::{Atom, Noun, D, T};
         use crate::unifying_equality::unifying_equality;
-        use ibig::UBig;
 
         struct TestSlogger {}
 
@@ -341,6 +344,7 @@ pub mod util {
             let cache = Hamt::<Noun>::new(&mut stack);
             let slogger = std::boxed::Box::pin(TestSlogger {});
             let cancel = Arc::new(AtomicIsize::new(NockCancelToken::RUNNING_IDLE));
+            let test_jets = Hamt::<()>::new(&mut stack);
 
             Context {
                 stack,
@@ -352,6 +356,7 @@ pub mod util {
                 scry_stack: D(0),
                 trace_info: None,
                 running_status: cancel,
+                test_jets,
             }
         }
 

@@ -1,12 +1,14 @@
-use crate::{CrownError, Result};
+use std::io::{stderr, Write};
+
 use either::Either::*;
 use nockvm::interpreter::Slogger;
 use nockvm::jets::list::util::lent;
 use nockvm::mem::NockStack;
 use nockvm::noun::{Atom, DirectAtom, IndirectAtom, Noun, Slots};
 use nockvm_macros::tas;
-use std::io::{stderr, Write};
 use tracing::{debug, error, info, trace, warn};
+
+use crate::{CrownError, Result};
 
 pub struct CrownSlogger;
 

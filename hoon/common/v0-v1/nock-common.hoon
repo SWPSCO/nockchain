@@ -1,6 +1,6 @@
 :: nock-common: common arms between nock-prover and nock-verifier
-/=  compute-table  /common/table/verifier/compute
-/=  memory-table   /common/table/verifier/memory
+/=  compute-table  /common/v0-v1/table/verifier/compute
+/=  memory-table   /common/v0-v1/table/verifier/memory
 /=  *  /common/zeke
 |%
 ::  all values in this table must generally be in the order of the tables
@@ -152,26 +152,4 @@
       :-  name:static:common:memory-table
       funcs:engine:memory-table
   ==
-::
-++  remove-unused-constraints
-  |=  [pre=preprocess-0 table-names=(list term) override=(unit (list term))]
-  ^-  preprocess-0
-  ::
-  =?  cd.pre  !=(~ override)
-    %-  ~(gas by *table-to-constraint-degree)
-    %+  iturn  table-names
-    |=  [j=@ name=term]
-    ^-  [@ constraint-degrees]
-    =/  idx  (i name all-table-names)
-    [j (~(got by cd.pre) idx)]
-  ::
-  =?  constraint-map.pre  !=(~ override)
-    %-  ~(gas by *(map @ constraints))
-    %+  iturn  table-names
-    |=  [j=@ name=term]
-    ^-  [@ constraints]
-    =/  idx  (i name all-table-names)
-    [j (~(got by constraint-map.pre) idx)]
-  ::
-  pre
 --

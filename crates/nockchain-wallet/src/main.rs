@@ -113,9 +113,12 @@ pub enum Commands {
 
     /// Generate a master public key from a master private key
     GenMasterPubkey {
-        /// Master private key to generate master public key
+        /// Master private key (base58-encoded)
         #[arg(short, long)]
         master_privkey: String,
+        /// Chain code (base58-encoded)
+        #[arg(short, long)]
+        chain_code: String,
     },
 
     /// Perform a simple scan of the blockchain
@@ -404,17 +407,19 @@ impl Wallet {
         )
     }
 
-    /// Generates a master public key from a master private key.
+    /// Generates a master public key from a master private key and chain code.
     ///
     /// # Arguments
     ///
-    /// * `master_privkey` - The master private key to generate the public key from.
-    fn gen_master_pubkey(master_privkey: &str) -> CommandNoun<NounSlab> {
+    /// * `master_privkey` - The master private key (base58-encoded)
+    /// * `chain_code` - The chain code (base58-encoded)
+    fn gen_master_pubkey(master_privkey: &str, chain_code: &str) -> CommandNoun<NounSlab> {
         let mut slab = NounSlab::new();
-        let master_privkey_noun = make_tas(&mut slab, master_privkey).as_noun();
+        let key_noun = make_tas(&mut slab, master_privkey).as_noun();
+        let chain_code_noun = make_tas(&mut slab, chain_code).as_noun();
         Self::wallet(
             "gen-master-pubkey",
-            &[master_privkey_noun],
+            &[key_noun, chain_code_noun],
             Operation::Poke,
             &mut slab,
         )
@@ -826,7 +831,10 @@ async fn main() -> Result<(), NockAppError> {
         Commands::ImportKeys { input } => Wallet::import_keys(input),
         Commands::ExportKeys => Wallet::export_keys(),
         Commands::GenMasterPrivkey { seedphrase } => Wallet::gen_master_privkey(seedphrase),
-        Commands::GenMasterPubkey { master_privkey } => Wallet::gen_master_pubkey(master_privkey),
+        Commands::GenMasterPubkey {
+            master_privkey,
+            chain_code,
+        } => Wallet::gen_master_pubkey(master_privkey, chain_code),
         Commands::Scan {
             master_pubkey,
             search_depth,
@@ -920,7 +928,7 @@ mod tests {
 
     use nockapp::kernel::boot::{self, Cli as BootCli};
     use nockapp::wire::SystemWire;
-    use nockapp::{exit_driver, Bytes};
+    use nockapp::{exit_driver, AtomExt, Bytes};
     use tokio::sync::mpsc;
 
     use super::*;
@@ -1104,19 +1112,90 @@ mod tests {
     #[cfg_attr(miri, ignore)]
     async fn test_gen_master_pubkey() -> Result<(), NockAppError> {
         init_tracing();
-        let cli = BootCli::parse_from(&[""]);
-        let nockapp = boot::setup(KERNEL, Some(cli.clone()), &[], "wallet", None)
-            .await
-            .map_err(|e| CrownError::Unknown(e.to_string()))?;
+        // Start with a fresh wallet (--new flag)
+        let cli = BootCli::parse_from(&["--new"]);
+        let prover_hot_state = produce_prover_hot_state();
+        let nockapp = boot::setup(
+            KERNEL,
+            Some(cli.clone()),
+            prover_hot_state.as_slice(),
+            "wallet",
+            None,
+        )
+        .await
+        .map_err(|e| CrownError::Unknown(e.to_string()))?;
         let mut wallet = Wallet::new(nockapp);
-        let master_privkey = "privkey123";
-        let (noun, op) = Wallet::gen_master_pubkey(master_privkey)?;
+
+        let master_privkey = "5crSXzcevKKieL7VTZW2hy3guFgT6sserEXm3pWHZAnQ";
+        let chain_code = "yr3PWpcne3t6ByqtHSmybAJkGqyHB41WNifc5qwNfWA";
+
+        // Generate master public key from the private key and chain code
+        let (noun, op) = Wallet::gen_master_pubkey(master_privkey, chain_code)?;
         let wire = WalletWire::Command(Commands::GenMasterPubkey {
             master_privkey: master_privkey.to_string(),
+            chain_code: chain_code.to_string(),
         })
         .to_wire();
         let pubkey_result = wallet.app.poke(wire, noun.clone()).await?;
         println!("pubkey_result: {:?}", pubkey_result);
+
+        assert!(
+            pubkey_result.len() == 2,
+            "Expected pubkey result to be a list of 2 noun slabs - markdown and exit"
+        );
+        let exit_cause = unsafe { pubkey_result[1].root() };
+        let code = exit_cause.as_cell()?.tail();
+        assert!(unsafe { code.raw_equals(&D(0)) }, "Expected exit code 0");
+
+        // Now show the master private key to verify it matches our input
+        let (show_noun, show_op) = Wallet::show_master_privkey()?;
+        let show_wire = WalletWire::Command(Commands::ShowMasterPrivkey).to_wire();
+        let show_result = wallet.app.poke(show_wire, show_noun).await?;
+        println!("show_master_privkey result: {:?}", show_result);
+
+        // Verify the show command succeeded
+        assert!(
+            show_result.len() == 2,
+            "Expected show result to be a list of 2 noun slabs - markdown and exit"
+        );
+        let show_exit_cause = unsafe { show_result[1].root() };
+        let show_code = show_exit_cause.as_cell()?.tail();
+        assert!(
+            unsafe { show_code.raw_equals(&D(0)) },
+            "Expected show exit code 0"
+        );
+
+        // Parse the markdown output to extract the private key
+        let markdown_slab = &show_result[0];
+        let markdown_root = unsafe { markdown_slab.root() };
+        let markdown_cell = markdown_root.as_cell()?;
+        let markdown_content_atom = markdown_cell.tail().as_atom()?;
+
+        let markdown_text =
+            String::from_utf8_lossy(&markdown_content_atom.to_bytes_until_nul()?).to_string();
+
+        println!("Markdown content: {}", markdown_text);
+
+        // Extract the private key from the markdown - it should be on a line by itself
+        let extracted_privkey = markdown_text
+            .lines()
+            .find(|line| line.trim() == master_privkey)
+            .ok_or_else(|| {
+                CrownError::Unknown("Private key not found in markdown output".to_string())
+            })?
+            .trim();
+
+        // Verify the extracted private key matches our input
+        assert_eq!(
+            extracted_privkey, master_privkey,
+            "Extracted private key '{}' does not match input private key '{}'",
+            extracted_privkey, master_privkey
+        );
+
+        println!("✓ Verification successful: Private key in output matches input");
+        println!("  Input:     {}", master_privkey);
+        println!("  Retrieved: {}", extracted_privkey);
+
         Ok(())
     }
 

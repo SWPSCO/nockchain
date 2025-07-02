@@ -1,11 +1,13 @@
-use crate::mem::{word_size_of, NockStack};
+use std::slice::{from_raw_parts, from_raw_parts_mut};
+use std::{error, fmt, ptr};
+
 use bitvec::prelude::{BitSlice, Lsb0};
 use either::{Either, Left, Right};
 use ibig::{Stack, UBig};
 use intmap::IntMap;
 use nockvm_macros::tas;
-use std::slice::{from_raw_parts, from_raw_parts_mut};
-use std::{error, fmt, ptr};
+
+use crate::mem::{word_size_of, NockStack};
 
 crate::gdb!();
 

@@ -77,11 +77,12 @@ pub fn jet_peg(context: &mut Context, subject: Noun) -> Result {
 
 #[cfg(test)]
 mod tests {
+    use ibig::ubig;
+
     use super::*;
     use crate::jets::util::test::*;
     use crate::mem::NockStack;
     use crate::noun::{Noun, D, DIRECT_MAX};
-    use ibig::ubig;
 
     fn atom_0(_stack: &mut NockStack) -> Noun {
         D(0x0)

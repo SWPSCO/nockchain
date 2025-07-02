@@ -1,13 +1,9 @@
-use crate::export::ExportedState;
-use crate::kernel::form::Kernel;
-use crate::noun::slab::Jammer;
-use crate::save::SaveableCheckpoint;
-use crate::utils::error::{CrownError, ExternalError};
-use crate::{default_data_dir, NockApp};
+use std::path::PathBuf;
+
 use chrono;
 use clap::{arg, command, ColorChoice, Parser, ValueEnum};
 use nockvm::jets::hot::HotEntry;
-use std::path::PathBuf;
+use nockvm::noun::Atom;
 use tokio::fs;
 use tracing::{debug, info, Level};
 use tracing_subscriber::fmt::format::Writer;
@@ -16,6 +12,13 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{fmt, EnvFilter};
+
+use crate::export::ExportedState;
+use crate::kernel::form::Kernel;
+use crate::noun::slab::{Jammer, NounSlab};
+use crate::save::SaveableCheckpoint;
+use crate::utils::error::{CrownError, ExternalError};
+use crate::{default_data_dir, AtomExt, NockApp};
 
 const DEFAULT_SAVE_INTERVAL: u64 = 120000;
 const DEFAULT_LOG_FILTER: &str = "info,slogger=trace";
@@ -250,6 +253,8 @@ pub async fn setup_<J: Jammer + Send + 'static>(
     name: &str,
     data_dir: Option<PathBuf>,
 ) -> Result<SetupResult<J>, Box<dyn std::error::Error>> {
+    let nock_test_jets_env = std::env::var("NOCK_TEST_JETS").unwrap_or_default();
+    let test_jets = parse_test_jets(nock_test_jets_env.as_str());
     let data_dir = if let Some(data_path) = data_dir.clone() {
         data_path.join(name)
     } else {
@@ -280,13 +285,16 @@ pub async fn setup_<J: Jammer + Send + 'static>(
     let kernel_f = async |checkpoint| {
         let kernel: Kernel<SaveableCheckpoint> = match cli.stack_size {
             NockStackSize::Normal => {
-                Kernel::load_with_hot_state(jam, checkpoint, hot_state, cli.trace).await?
+                Kernel::load_with_hot_state(jam, checkpoint, hot_state, test_jets, cli.trace)
+                    .await?
             }
             NockStackSize::Big => {
-                Kernel::load_with_hot_state_big(jam, checkpoint, hot_state, cli.trace).await?
+                Kernel::load_with_hot_state_big(jam, checkpoint, hot_state, test_jets, cli.trace)
+                    .await?
             }
             NockStackSize::Huge => {
-                Kernel::load_with_hot_state_huge(jam, checkpoint, hot_state, cli.trace).await?
+                Kernel::load_with_hot_state_huge(jam, checkpoint, hot_state, test_jets, cli.trace)
+                    .await?
             }
         };
         let res: Result<Kernel<SaveableCheckpoint>, CrownError<ExternalError>> = Ok(kernel);
@@ -333,4 +341,42 @@ async fn import_kernel_state<C>(
     kernel.import(kernel_state).await?;
     info!("Successfully imported kernel state from: {:?}", import_path);
     Ok(())
+}
+
+pub fn parse_test_jets(jets: &str) -> Vec<NounSlab> {
+    let mut test_jets = Vec::new();
+    for jet in jets.split(',') {
+        if jet == "" {
+            continue;
+        }
+        let mut slab = NounSlab::new();
+        let mut path = nockvm::noun::D(0);
+        for el in jet.split('/') {
+            let ver_split: Vec<&str> = el.split('.').collect();
+            if ver_split.len() == 2 {
+                let sym_atom = Atom::from_value(&mut slab, ver_split[0])
+                    .expect("Could not construct symbol atom")
+                    .as_noun();
+                let ver_atom = Atom::from_value(
+                    &mut slab,
+                    u64::from_str_radix(ver_split[1], 10)
+                        .expect("Could not parse cold path version"),
+                )
+                .expect("Could not construct version atom")
+                .as_noun();
+                let path_el = nockvm::noun::T(&mut slab, &[sym_atom, ver_atom]);
+                path = nockvm::noun::T(&mut slab, &[path_el, path]);
+            } else if el == "" {
+                continue;
+            } else {
+                let el_atom = Atom::from_value(&mut slab, el)
+                    .expect("Could not construct element atom")
+                    .as_noun();
+                path = nockvm::noun::T(&mut slab, &[el_atom, path]);
+            }
+        }
+        slab.set_root(path);
+        test_jets.push(slab);
+    }
+    test_jets
 }

@@ -1,5 +1,8 @@
 //! Addition and subtraction operators.
 
+use core::mem;
+use core::ops::{Add, AddAssign, Sub, SubAssign};
+
 use crate::arch::word::Word;
 use crate::buffer::Buffer;
 use crate::ibig::IBig;
@@ -9,8 +12,6 @@ use crate::sign::Sign::*;
 use crate::ubig::Repr::*;
 use crate::ubig::UBig;
 use crate::{add, helper_macros};
-use core::mem;
-use core::ops::{Add, AddAssign, Sub, SubAssign};
 
 impl Add<UBig> for UBig {
     type Output = UBig;

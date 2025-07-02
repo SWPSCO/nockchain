@@ -72,6 +72,11 @@ pub fn jet_mute(context: &mut Context, subject: Noun) -> Result {
 }
 
 pub mod util {
+    use std::result;
+
+    use either::{Left, Right};
+    use nockvm_macros::tas;
+
     use crate::hamt::Hamt;
     use crate::interpreter::{interpret, Context, Error, Mote};
     use crate::jets;
@@ -79,9 +84,6 @@ pub mod util {
     use crate::jets::form::util::scow;
     use crate::mem::NockStack;
     use crate::noun::{tape, Cell, Noun, D, T};
-    use either::{Left, Right};
-    use nockvm_macros::tas;
-    use std::result;
 
     pub const LEAF: Noun = D(tas!(b"leaf"));
     pub const ROSE: Noun = D(tas!(b"rose"));

@@ -1,8 +1,10 @@
-use crate::jets::*;
-use crate::noun::{Atom, DirectAtom, IndirectAtom, Noun, D, T};
+use std::ptr::{copy_nonoverlapping, null_mut};
+
 use either::Either::{self, Left, Right};
 use nockvm_macros::tas;
-use std::ptr::{copy_nonoverlapping, null_mut};
+
+use crate::jets::*;
+use crate::noun::{Atom, DirectAtom, IndirectAtom, Noun, D, T};
 
 /** Root for Hoon %k.138
  */

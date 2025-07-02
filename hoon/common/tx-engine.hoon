@@ -537,7 +537,7 @@
   ::    in). we pass in raw-txs instead of txs because this is utilized when building
   ::    candidate blocks, and so the txs will not be available in the $consensus-state.
   ++  compute-size
-    |=  [pag=form raw-txs=(z-map tx-id raw-tx)]
+    |=  [pag=form got-raw-tx=$-(tx-id raw-tx)]
     ^-  size
     ;:  add
         ::  max size of digest in bits, we need to check against upper bound because
@@ -553,7 +553,7 @@
           ~(tap z-in tx-ids.pag)
         |=  [id=tx-id sum-sizes=size]
         %+  add  sum-sizes
-        (compute-size:raw-tx (~(got z-by raw-txs) id))
+        (compute-size:raw-tx (got-raw-tx id))
     ==
   ::
   ++  to-local-page

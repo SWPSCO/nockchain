@@ -1,9 +1,10 @@
+use nockvm_crypto::sha::{ac_sha1, ac_shal, ac_shas, ac_shay};
+
 use crate::interpreter::Context;
 use crate::jets::bits::util::met;
 use crate::jets::util::{slot, BAIL_FAIL};
 use crate::jets::Result;
 use crate::noun::{IndirectAtom, Noun};
-use nockvm_crypto::sha::{ac_sha1, ac_shal, ac_shas, ac_shay};
 
 crate::gdb!();
 
@@ -151,10 +152,11 @@ pub fn jet_sha1(context: &mut Context, subject: Noun) -> Result {
 
 #[cfg(test)]
 mod tests {
+    use ibig::ubig;
+
     use super::*;
     use crate::jets::util::test::{assert_jet, assert_jet_err, assert_jet_ubig, init_context, A};
     use crate::noun::{D, DIRECT_MAX, T};
-    use ibig::ubig;
 
     #[test]
     #[cfg_attr(miri, ignore)]

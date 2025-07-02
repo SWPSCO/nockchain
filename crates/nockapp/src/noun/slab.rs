@@ -1,4 +1,8 @@
-use crate::noun::NounExt;
+use std::alloc::Layout;
+use std::fmt::Debug;
+use std::mem::size_of;
+use std::ptr::copy_nonoverlapping;
+
 use bitvec::prelude::{BitSlice, BitVec, Lsb0};
 use bitvec::view::BitView;
 use bitvec::{bits, bitvec};
@@ -9,11 +13,9 @@ use nockvm::mem::NockStack;
 use nockvm::mug::{calc_atom_mug_u32, calc_cell_mug_u32, get_mug, set_mug};
 use nockvm::noun::{Atom, Cell, CellMemory, DirectAtom, IndirectAtom, Noun, NounAllocator, D};
 use nockvm::serialization::{met0_u64_to_usize, met0_usize};
-use std::alloc::Layout;
-use std::fmt::Debug;
-use std::mem::size_of;
-use std::ptr::copy_nonoverlapping;
 use thiserror::Error;
+
+use crate::noun::NounExt;
 
 const CELL_MEM_WORD_SIZE: usize = (size_of::<CellMemory>() + 7) >> 3;
 
@@ -830,11 +832,12 @@ impl Jammer for NockJammer {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::AtomExt;
     use bitvec::prelude::*;
     use nockvm::noun::{D, T};
     use nockvm_macros::tas;
+
+    use super::*;
+    use crate::AtomExt;
 
     #[test]
     #[cfg_attr(miri, ignore)]
@@ -949,10 +952,11 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)]
     fn test_cue_from_file() {
-        use bytes::Bytes;
         use std::fs::File;
         use std::io::Read;
         use std::path::Path;
+
+        use bytes::Bytes;
 
         // Path to the test file
         // For Bazel builds, we use the test-jams directory from the environment

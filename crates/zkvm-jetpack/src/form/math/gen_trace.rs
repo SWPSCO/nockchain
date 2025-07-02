@@ -5,7 +5,7 @@ use nockvm::noun::{Noun, D};
 
 use crate::form::fext::*;
 use crate::form::{Belt, Felt};
-use crate::jets::tip5_jets::vec_to_hoon_list;
+use crate::utils::vec_to_hoon_list;
 
 #[derive(Copy, Clone)]
 pub struct TreeData {

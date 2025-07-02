@@ -1,6 +1,5 @@
 /=  *  /common/zeke
 /=  stark-verifier  /common/stark/verifier
-/=  common  /common/nock-common
 /#  softed-constraints
 ::
 |%
@@ -16,7 +15,6 @@
       +<+<
     %_  in
       stark-config        sc
-      all-verifier-funcs  all-verifier-funcs:common
     ==
   ==
 ::

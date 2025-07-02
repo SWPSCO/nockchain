@@ -1,5 +1,8 @@
 //! Bit shift operators.
 
+use core::mem;
+use core::ops::{Shl, ShlAssign, Shr, ShrAssign};
+
 use crate::arch::word::Word;
 use crate::buffer::Buffer;
 use crate::ibig::IBig;
@@ -8,8 +11,6 @@ use crate::shift;
 use crate::sign::Sign::*;
 use crate::ubig::Repr::*;
 use crate::ubig::UBig;
-use core::mem;
-use core::ops::{Shl, ShlAssign, Shr, ShrAssign};
 
 macro_rules! impl_shifts {
     ($t:ty) => {

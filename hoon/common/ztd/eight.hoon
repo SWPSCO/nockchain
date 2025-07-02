@@ -29,27 +29,29 @@
       extra=@
   ==
 ::
-::  $preprocess-0: preprocess with a version tag attached
-+$  preprocess-0
-  $:  %0
-      cd=table-to-constraint-degree       :: maximum degree of constraints for each table
+:: preprocessed constraint data
++$  preprocess-data
+  $:  cd=table-to-constraint-degree       :: maximum degree of constraints for each table
       constraint-map=(map @ constraints)  :: map from table number -> constraints
       count-map=(map @ constraint-counts) :: map from table number -> constraint-counts
+  ==
+::
+::  versioned constraints
+::  version %0 and %1 use the same constraints
++$  preprocess-0-1  [%0 p=preprocess-data]
++$  preprocess-2    [%2 p=preprocess-data]
++$  preprocess 
+  $:  pre-0-1=preprocess-0-1    :: version %0 and %1 constraints
+      pre-2=preprocess-2        :: version %2 constraints
   ==
 ::
 ::  $stark-config: prover+verifier parameters unrelated to a particular computation
 +$  stark-config
   $:  conf=[log-expand-factor=_6 security-level=_50]
-      prep=preprocess-0
+      prep=preprocess
   ==
-::TODO this type could potentially be improved
-+$  stark-input
-  $:  table-names=(list term)
-      all-verifier-funcs=(list verifier-funcs)  ::  all verifier-funcs, whether theyre used or not
-      table-base-widths=(list @)
-      table-full-widths=(list @)
-      =stark-config
-  ==
+::
++$  stark-input  =stark-config
 ::
 +|  %cores
 ++  quot

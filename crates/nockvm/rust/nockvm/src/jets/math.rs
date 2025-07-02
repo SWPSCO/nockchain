@@ -1,3 +1,7 @@
+use either::{Left, Right};
+use ibig::ops::DivRem;
+use ibig::UBig;
+
 /** Math jets
  *
  * We use ibig for math operations.  This is a pure rust library, and it is very convenient to use.
@@ -16,9 +20,6 @@ use crate::interpreter::Context;
 use crate::jets::util::*;
 use crate::jets::Result;
 use crate::noun::{Atom, DirectAtom, IndirectAtom, Noun, D, DIRECT_MAX, T};
-use either::{Left, Right};
-use ibig::ops::DivRem;
-use ibig::UBig;
 
 crate::gdb!();
 
@@ -249,9 +250,10 @@ pub fn jet_sub(context: &mut Context, subject: Noun) -> Result {
 }
 
 pub mod util {
+    use ibig::UBig;
+
     use crate::mem::NockStack;
     use crate::noun::{Atom, Error, Noun, Result, NO, YES};
-    use ibig::UBig;
 
     /// Addition
     pub fn add(stack: &mut NockStack, a: Atom, b: Atom) -> Atom {
@@ -382,11 +384,12 @@ pub mod util {
 
 #[cfg(test)]
 mod tests {
+    use ibig::ubig;
+
     use super::*;
     use crate::jets::util::test::*;
     use crate::mem::NockStack;
     use crate::noun::{Noun, D, NO, T, YES};
-    use ibig::ubig;
 
     fn atoms(s: &mut NockStack) -> (Noun, Noun, Noun, Noun, Noun) {
         (atom_0(s), atom_24(s), atom_63(s), atom_96(s), atom_128(s))

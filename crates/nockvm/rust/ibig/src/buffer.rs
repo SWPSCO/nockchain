@@ -1,14 +1,14 @@
 //! Word buffer.
 
-use crate::arch::word::Word;
-use crate::memory;
-use crate::memory::Stack;
-use crate::ubig::UBig;
-
 use alloc::vec::Vec;
 use core::iter;
 use core::mem::ManuallyDrop;
 use core::ops::{Deref, DerefMut};
+
+use crate::arch::word::Word;
+use crate::memory;
+use crate::memory::Stack;
+use crate::ubig::UBig;
 
 /// Buffer for Words.
 ///

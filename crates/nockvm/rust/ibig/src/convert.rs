@@ -1,5 +1,8 @@
 //! Conversions between types.
 
+use alloc::vec::Vec;
+use core::convert::{TryFrom, TryInto};
+
 use crate::arch::word::Word;
 use crate::buffer::Buffer;
 use crate::error::OutOfBoundsError;
@@ -9,8 +12,6 @@ use crate::primitive::{self, PrimitiveSigned, PrimitiveUnsigned, WORD_BITS, WORD
 use crate::sign::Sign::*;
 use crate::ubig::Repr::*;
 use crate::ubig::UBig;
-use alloc::vec::Vec;
-use core::convert::{TryFrom, TryInto};
 
 impl Default for UBig {
     /// Default value: 0.

@@ -19,16 +19,15 @@ pub mod noun;
 pub mod observability;
 pub mod utils;
 
+use std::path::PathBuf;
+
 pub use bytes::*;
+pub use drivers::*;
 pub use nockapp::*;
 pub use nockvm::noun::Noun;
 pub use noun::{AtomExt, JammedNoun, NounExt};
 pub use utils::bytes::{ToBytes, ToBytesExt};
 pub use utils::error::{CrownError, Result};
-
-pub use drivers::*;
-
-use std::path::PathBuf;
 
 /// Returns the default directory where kernel data is stored.
 ///

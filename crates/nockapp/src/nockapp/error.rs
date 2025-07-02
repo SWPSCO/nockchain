@@ -1,11 +1,11 @@
-use crate::nockapp::save::CheckpointError;
-use crate::noun::slab::CueError;
-use crate::CrownError;
 use thiserror::Error;
 use tokio::sync::mpsc::error::{SendError, TrySendError};
 use tracing::error;
 
 use super::driver::IOAction;
+use crate::nockapp::save::CheckpointError;
+use crate::noun::slab::CueError;
+use crate::CrownError;
 
 /// Error type for NockApps
 #[derive(Debug, Error)]

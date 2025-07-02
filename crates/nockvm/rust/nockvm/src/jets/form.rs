@@ -14,12 +14,13 @@ pub fn jet_scow(context: &mut Context, subject: Noun) -> Result {
 }
 
 pub mod util {
+    use nockvm_macros::tas;
+    use num_traits::identities::Zero;
+
     use crate::jets;
     use crate::jets::JetErr;
     use crate::mem::NockStack;
     use crate::noun::{Atom, Cell, DirectAtom, D, T};
-    use nockvm_macros::tas;
-    use num_traits::identities::Zero;
 
     pub fn scow(
         stack: &mut NockStack,
@@ -78,12 +79,13 @@ pub mod util {
 
 #[cfg(test)]
 mod tests {
+    use ibig::ubig;
+    use nockvm_macros::tas;
+
     use super::*;
     use crate::jets::util::test::{assert_jet, assert_jet_err, init_context, A};
     use crate::jets::JetErr;
     use crate::noun::{Noun, D, T};
-    use ibig::ubig;
-    use nockvm_macros::tas;
 
     // Rust can't handle implicit conversions from u8 to u64
     #[allow(non_snake_case)]

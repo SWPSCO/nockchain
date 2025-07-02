@@ -1,6 +1,7 @@
+use tracing::{debug, error};
+
 use crate::nockapp::driver::{make_driver, IODriverFn};
 use crate::NounExt;
-use tracing::{debug, error};
 
 /// Creates an IO driver function for handling exit signals.
 ///

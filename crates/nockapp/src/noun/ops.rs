@@ -1,11 +1,12 @@
 use std::sync::Arc;
 
-use crate::metrics::NockAppMetrics;
-use crate::utils::Result;
-use crate::CrownError;
 use nockvm::interpreter::{interpret, Context};
 use nockvm::noun::{Noun, D, T};
 use tracing::{span, Level};
+
+use crate::metrics::NockAppMetrics;
+use crate::utils::Result;
+use crate::CrownError;
 
 /// Slams (applies) a gate at a specific axis of the supplied kernel.
 ///

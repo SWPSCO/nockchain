@@ -1,11 +1,12 @@
+use nockvm::noun::{IndirectAtom, Noun, D, NO, T, YES};
+use nockvm_macros::tas;
+use tracing::{debug, error};
+
 use crate::nockapp::driver::{make_driver, IODriverFn};
 use crate::nockapp::wire::{Wire, WireRepr};
 use crate::noun::slab::NounSlab;
 use crate::noun::FromAtom;
 use crate::AtomExt;
-use nockvm::noun::{IndirectAtom, Noun, D, NO, T, YES};
-use nockvm_macros::tas;
-use tracing::{debug, error};
 
 pub enum FileWire {
     Read,

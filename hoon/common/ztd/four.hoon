@@ -24,9 +24,15 @@
 ::
 +$  proof-objects  (list proof-data)
 ::
-+$  proof-version  ?(%0 %1)
++$  proof-version  ?(%2 %1 %0)
 +$  proof
-  $%  $:  version=%1
+  $%  $:  version=%2
+          objects=proof-objects
+          hashes=(list noun-digest:tip5)
+          read-index=@
+      ==
+    ::
+      $:  version=%1
           objects=proof-objects
           hashes=(list noun-digest:tip5)
           read-index=@

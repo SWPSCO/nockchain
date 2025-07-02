@@ -1,10 +1,11 @@
+use nockvm_macros::tas;
+
 /** ++ut jets (compiler backend and pretty-printer)
  */
 use crate::interpreter::{interpret, Context};
 use crate::jets::util::*;
 use crate::jets::Result;
 use crate::noun::{Noun, D, NO, NONE, T, YES};
-use nockvm_macros::tas;
 
 crate::gdb!();
 

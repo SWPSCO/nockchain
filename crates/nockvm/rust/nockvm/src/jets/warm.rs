@@ -1,10 +1,11 @@
+use std::ptr::{copy_nonoverlapping, null_mut};
+
 use crate::hamt::Hamt;
 use crate::jets::cold::{Batteries, Cold};
 use crate::jets::hot::Hot;
 use crate::jets::Jet;
 use crate::mem::{NockStack, Preserve};
 use crate::noun::{Noun, Slots};
-use std::ptr::{copy_nonoverlapping, null_mut};
 
 /// key = formula
 #[derive(Copy, Clone)]
@@ -28,6 +29,7 @@ struct WarmEntryMem {
     batteries: Batteries,
     jet: Jet,
     path: Noun, // useful for profiling/debugging
+    test: bool, // Whether to *also* run the hoon for this jet
     next: WarmEntry,
 }
 
@@ -71,15 +73,43 @@ impl Preserve for WarmEntry {
 }
 
 impl Iterator for WarmEntry {
-    type Item = (Noun, Batteries, Jet);
+    type Item = (Noun, Batteries, Jet, bool);
     fn next(&mut self) -> Option<Self::Item> {
         if self.0.is_null() {
             return None;
         }
         unsafe {
-            let res = ((*(self.0)).path, (*(self.0)).batteries, (*(self.0)).jet);
+            let res = (
+                (*(self.0)).path,
+                (*(self.0)).batteries,
+                (*(self.0)).jet,
+                (*(self.0)).test,
+            );
             *self = (*(self.0)).next;
             Some(res)
+        }
+    }
+}
+
+pub enum JetLookupResult {
+    Run { jet: Jet, path: Noun },
+    Test { jet: Jet, path: Noun },
+    NoJet,
+}
+
+impl Default for JetLookupResult {
+    fn default() -> Self {
+        JetLookupResult::NoJet
+    }
+}
+
+impl Iterator for JetLookupResult {
+    type Item = (Jet, Noun, bool);
+    fn next(&mut self) -> Option<Self::Item> {
+        match std::mem::take(self) {
+            JetLookupResult::Run { jet, path } => Some((jet, path, false)),
+            JetLookupResult::Test { jet, path } => Some((jet, path, true)),
+            JetLookupResult::NoJet => None,
         }
     }
 }
@@ -97,6 +127,7 @@ impl Warm {
         path: Noun,
         batteries: Batteries,
         jet: Jet,
+        test: bool,
     ) {
         let current_warm_entry = self.0.lookup(stack, formula).unwrap_or(WARM_ENTRY_NIL);
         unsafe {
@@ -105,15 +136,17 @@ impl Warm {
                 batteries,
                 jet,
                 path,
+                test,
                 next: current_warm_entry,
             };
             self.0 = self.0.insert(stack, formula, WarmEntry(warm_entry_mem_ptr));
         }
     }
 
-    pub fn init(stack: &mut NockStack, cold: &mut Cold, hot: &Hot) -> Self {
+    pub fn init(stack: &mut NockStack, cold: &mut Cold, hot: &Hot, test_jets: &Hamt<()>) -> Self {
         let mut warm = Self::new(stack);
         for (mut path, axis, jet) in *hot {
+            let test_path = test_jets.lookup(stack, &mut path).is_some();
             let batteries_list = cold.find(stack, &mut path);
             for batteries in batteries_list {
                 let mut batteries_tmp = batteries;
@@ -121,7 +154,7 @@ impl Warm {
                     .next()
                     .expect("IMPOSSIBLE: empty battery entry in cold state");
                 if let Ok(mut formula) = unsafe { (*battery).slot_atom(axis) } {
-                    warm.insert(stack, &mut formula, path, batteries, jet);
+                    warm.insert(stack, &mut formula, path, batteries, jet, test_path);
                 } else {
                     //  XX: need NockStack allocated string interpolation
                     // eprintln!("Bad axis {} into formula {:?}", axis, battery);
@@ -140,13 +173,19 @@ impl Warm {
         stack: &mut NockStack,
         s: &mut Noun,
         f: &mut Noun,
-    ) -> Option<(Jet, Noun)> {
-        let warm_it = self.0.lookup(stack, f)?;
-        for (path, batteries, jet) in warm_it {
+    ) -> JetLookupResult {
+        let Some(warm_it) = self.0.lookup(stack, f) else {
+            return JetLookupResult::NoJet;
+        };
+        for (path, batteries, jet, test) in warm_it {
             if batteries.matches(stack, *s) {
-                return Some((jet, path));
+                if test {
+                    return JetLookupResult::Test { jet, path };
+                } else {
+                    return JetLookupResult::Run { jet, path };
+                }
             }
         }
-        None
+        JetLookupResult::NoJet
     }
 }

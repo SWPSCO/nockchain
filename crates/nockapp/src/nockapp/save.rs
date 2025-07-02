@@ -1,19 +1,21 @@
-use crate::metrics::NockAppMetrics;
-use crate::noun::slab::{Jammer, NockJammer, NounSlab};
-use crate::JammedNoun;
+use std::future::Future;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Instant;
+
 use bincode::config::Configuration;
 use bincode::{config, encode_to_vec, Decode, Encode};
 use blake3::{Hash, Hasher};
 use bytes::Bytes;
 use nockvm_macros::tas;
-use std::future::Future;
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Instant;
 use thiserror::Error;
 use tokio::fs::create_dir_all;
 use tokio::sync::oneshot;
 use tracing::{debug, error, trace, warn};
+
+use crate::metrics::NockAppMetrics;
+use crate::noun::slab::{Jammer, NockJammer, NounSlab};
+use crate::JammedNoun;
 
 const JAM_MAGIC_BYTES: u64 = tas!(b"CHKJAM");
 const SNAPSHOT_VERSION_0: u32 = 0;

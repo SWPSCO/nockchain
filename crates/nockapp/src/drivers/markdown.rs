@@ -1,10 +1,10 @@
-use crate::nockapp::driver::{make_driver, IODriverFn};
-use crate::AtomExt;
 use nockvm::noun::D;
 use nockvm_macros::tas;
-
 use termimad::MadSkin;
 use tracing::error;
+
+use crate::nockapp::driver::{make_driver, IODriverFn};
+use crate::AtomExt;
 
 pub fn markdown() -> IODriverFn {
     make_driver(|handle| async move {

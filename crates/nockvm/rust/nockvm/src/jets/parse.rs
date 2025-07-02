@@ -1,3 +1,5 @@
+use either::{Left, Right};
+
 /** Parsing jets
  */
 use crate::interpreter::Context;
@@ -6,7 +8,6 @@ use crate::jets::math::util::{gte_b, lte_b, lth_b};
 use crate::jets::util::{kick, slam, slot, BAIL_FAIL};
 use crate::jets::Result;
 use crate::noun::{Cell, Noun, D, T};
-use either::{Left, Right};
 
 crate::gdb!();
 
@@ -598,10 +599,11 @@ pub fn jet_stir(context: &mut Context, subject: Noun) -> Result {
 }
 
 pub mod util {
+    use std::cmp::Ordering;
+
     use crate::interpreter::{inc, Context};
     use crate::jets::Result;
     use crate::noun::{Noun, D, T};
-    use std::cmp::Ordering;
 
     pub fn last(zyc: Noun, naz: Noun) -> Result {
         let zyl = zyc.as_cell()?;
@@ -662,11 +664,12 @@ pub mod util {
 
 #[cfg(test)]
 mod tests {
+    use ibig::ubig;
+
     use super::*;
     use crate::jets::util::test::*;
     use crate::noun::{D, T};
     use crate::serialization::cue;
-    use ibig::ubig;
 
     //  XX: need unit tests for:
     //      +last

@@ -1,8 +1,7 @@
+use super::*;
 use crate::noun::{
     Atom, Cell, IndirectAtom, Noun, NounAllocator, DIRECT_MASK, DIRECT_TAG, INDIRECT_TAG,
 };
-
-use super::*;
 
 pub trait IntoArena {
     fn into_arena(self, arena: &mut NounArena) -> NounKey;

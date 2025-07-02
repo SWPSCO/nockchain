@@ -1,15 +1,22 @@
 use nockvm::interpreter::Context;
+use nockvm::jets::bits::util::lsh;
+use nockvm::jets::list::util::{lent, reap};
+use nockvm::jets::math::util::add;
 use nockvm::jets::util::{bite_to_word, chop, slot};
 use nockvm::jets::JetErr;
-use nockvm::noun::{Atom, IndirectAtom, Noun, D, T};
-use nockvm::jets::bits::util::lsh;
-use nockvm::jets::math::util::add;
 use nockvm::mem::NockStack;
-use tracing::{debug,error};
+use nockvm::noun::{Atom, IndirectAtom, Noun, D, NO, T, YES};
+use tracing::{debug, error};
 
 use crate::form::mary::*;
 use crate::form::math::mary::*;
-use crate::hand::handle::{finalize_mary, new_handle_mut_mary};
+use crate::form::Belt;
+use crate::hand::handle::{
+    finalize_mary, finalize_poly, new_handle_mut_mary, new_handle_mut_slice,
+};
+use crate::hand::structs::HoonList;
+use crate::jets::base_jets::{levy_based, rip_correct};
+use crate::jets::bp_jets::init_bpoly;
 use crate::jets::utils::jet_err;
 use crate::noun::noun_ext::AtomExt;
 
@@ -89,6 +96,44 @@ pub fn mary_transpose_jet(context: &mut Context, subject: Noun) -> Result<Noun, 
     Ok(res_cell)
 }
 
+pub fn lift_elt_jet(context: &mut Context, subject: Noun) -> Result<Noun, JetErr> {
+    let stack = &mut context.stack;
+    let door = slot(subject, 7)?;
+    let step = slot(door, 6)?.as_atom()?.as_u64()?;
+    let a = slot(subject, 6)?;
+
+    if step == 1u64 {
+        Ok(a)
+    } else {
+        let reap_res = reap(stack, step - 1, D(0))?;
+        let init_bpoly_arg = T(stack, &[a, reap_res]);
+        let init_bpoly_arg_list = HoonList::try_from(init_bpoly_arg)?;
+
+        let count = init_bpoly_arg_list.count();
+        let (res, res_poly): (IndirectAtom, &mut [Belt]) = new_handle_mut_slice(stack, Some(count));
+        init_bpoly(init_bpoly_arg_list, res_poly)?;
+
+        let res_cell = finalize_poly(stack, Some(res_poly.len()), res);
+        Ok(res_cell.as_cell()?.tail())
+    }
+}
+
+pub fn fet_jet(context: &mut Context, subject: Noun) -> Result<Noun, JetErr> {
+    let stack = &mut context.stack;
+    let door = slot(subject, 7)?;
+    let step = slot(door, 6)?.as_atom()?.as_u64()?;
+    let a = slot(subject, 6)?.as_atom()?;
+
+    let v = rip_correct(stack, 6, 1, a)?;
+
+    let lent_v = lent(v)? as u64;
+
+    if ((lent_v == 1) && (step == 1)) || (lent_v == (step + 1)) && levy_based(v) {
+        Ok(YES)
+    } else {
+        Ok(NO)
+    }
+}
 
 pub fn transpose_bpolys_jet(context: &mut Context, subject: Noun) -> Result<Noun, JetErr> {
     let sam = slot(subject, 6)?;
@@ -108,10 +153,7 @@ fn transpose_bpolys(context: &mut Context, bpolys: MarySlice) -> Result<Noun, Je
     mary_transpose(bpolys, offset, &mut res_poly);
 
     let res_cell = finalize_mary(
-        &mut context.stack,
-        res_poly.step as usize,
-        res_poly.len as usize,
-        res,
+        &mut context.stack, res_poly.step as usize, res_poly.len as usize, res,
     );
 
     Ok(res_cell)
@@ -126,7 +168,6 @@ pub fn snag_one_jet(context: &mut Context, subject: Noun) -> Result<Noun, JetErr
     snag_one(stack, mary_noun, i)
 }
 
-
 pub fn snag_one(stack: &mut NockStack, mary_noun: Noun, i: usize) -> Result<Noun, JetErr> {
     let mary_cell = mary_noun.as_cell()?;
     let ma_step = mary_cell.head().as_atom()?.as_u32()?;
@@ -136,14 +177,22 @@ pub fn snag_one(stack: &mut NockStack, mary_noun: Noun, i: usize) -> Result<Noun
     assert!(i < ma_len as usize);
 
     let res = cut(stack, 6, i * ma_step as usize, ma_step as usize, ma_dat)?;
-    if ma_step == 1 { return Ok(res); }
+    if ma_step == 1 {
+        return Ok(res);
+    }
     let high_bit = lsh(stack, 0, bex(6) * ma_step as usize, D(1).as_atom()?)?;
-    
+
     Ok(add(stack, high_bit.as_atom()?, res.as_atom()?).as_noun())
 }
 
 // cut from hoon-138
-fn cut(stack: &mut NockStack, bloq: usize, start: usize, run: usize, atom: Atom) -> Result<Noun,JetErr> {
+fn cut(
+    stack: &mut NockStack,
+    bloq: usize,
+    start: usize,
+    run: usize,
+    atom: Atom,
+) -> Result<Noun, JetErr> {
     if run == 0 {
         return Ok(D(0));
     }

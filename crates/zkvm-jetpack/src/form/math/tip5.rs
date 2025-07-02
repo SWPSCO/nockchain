@@ -7,7 +7,11 @@ pub const LOG2_STATE_SIZE: usize = 4;
 pub const CAPACITY: usize = 6;
 pub const RATE: usize = 10;
 pub const NUM_ROUNDS: usize = 7;
-const R: u128 = 18446744073709551616;
+pub const R: u128 = 18446744073709551616;
+pub const R2: u64 = 0xfffffffe00000001;
+pub const R_MOD_P: u64 = 4294967295;
+pub const RP: u128 = 0xffffffff000000010000000000000000;
+pub const P: u64 = 0xffffffff00000001;
 
 const LOOKUP_TABLE: [u8; 256] = [
     0, 7, 26, 63, 124, 215, 85, 254, 214, 228, 45, 185, 140, 173, 33, 240, 29, 177, 176, 32, 8,

@@ -1,11 +1,12 @@
 //! Karatsuba multiplication algorithm.
 
+use alloc::alloc::Layout;
+
 use crate::arch::word::{SignedWord, Word};
 use crate::memory::{self, Memory};
 use crate::mul::{self, helpers};
 use crate::sign::Sign::{self, *};
 use crate::{add, math};
-use alloc::alloc::Layout;
 
 // We must have 3 * floor((n+1)/2) <= 2n.
 //

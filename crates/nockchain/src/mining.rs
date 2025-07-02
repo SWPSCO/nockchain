@@ -165,11 +165,14 @@ pub async fn mining_attempt(candidate: NounSlab, handle: NockAppHandle) -> () {
         .await
         .expect("Failed to create temporary directory");
     let hot_state = zkvm_jetpack::hot::produce_prover_hot_state();
+    let test_jets_str = std::env::var("NOCK_TEST_JETS").unwrap_or_default();
+    let test_jets = nockapp::kernel::boot::parse_test_jets(test_jets_str.as_str());
     // Spawns a new std::thread for this mining attempt
-    let kernel =
-        Kernel::<SaveableCheckpoint>::load_with_hot_state_huge(KERNEL, None, &hot_state, false)
-            .await
-            .expect("Could not load mining kernel");
+    let kernel = Kernel::<SaveableCheckpoint>::load_with_hot_state_huge(
+        KERNEL, None, &hot_state, test_jets, false,
+    )
+    .await
+    .expect("Could not load mining kernel");
     let effects_slab = kernel
         .poke(MiningWire::Candidate.to_wire(), candidate)
         .await

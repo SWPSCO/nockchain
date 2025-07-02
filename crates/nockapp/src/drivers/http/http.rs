@@ -1,9 +1,3 @@
-use crate::drivers::http::acme::AcmeManager;
-use crate::nockapp::driver::{make_driver, IODriverFn, PokeResult};
-use crate::nockapp::wire::{Wire, WireRepr};
-use crate::nockapp::NockAppError;
-use crate::noun::slab::NounSlab;
-use crate::{AtomExt, Bytes};
 use std::collections::HashMap;
 use std::env;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -23,6 +17,13 @@ use tokio::select;
 use tokio::sync::{oneshot, RwLock};
 use tower_http::services::ServeDir;
 use tracing::{debug, error, info, warn};
+
+use crate::drivers::http::acme::AcmeManager;
+use crate::nockapp::driver::{make_driver, IODriverFn, PokeResult};
+use crate::nockapp::wire::{Wire, WireRepr};
+use crate::nockapp::NockAppError;
+use crate::noun::slab::NounSlab;
+use crate::{AtomExt, Bytes};
 
 #[derive(Debug, thiserror::Error)]
 pub enum HttpError {

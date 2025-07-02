@@ -114,13 +114,15 @@ pub fn jet_sivc_de(context: &mut Context, subject: Noun) -> Result {
 }
 
 mod util {
+    use std::result;
+
+    use nockvm_crypto::aes_siv::{ac_aes_siv_de, ac_aes_siv_en};
+
     use crate::jets::bits::util::met;
     use crate::jets::util::BAIL_FAIL;
     use crate::jets::{list, JetErr, Result};
     use crate::mem::NockStack;
     use crate::noun::{Atom, IndirectAtom, Noun, D, T};
-    use nockvm_crypto::aes_siv::{ac_aes_siv_de, ac_aes_siv_en};
-    use std::result;
 
     /// Associated data for AES-SIV functions.
     struct AcAesSivData {
@@ -282,12 +284,13 @@ mod util {
 
 #[cfg(test)]
 mod tests {
+    use ibig::ubig;
+
     use super::*;
     use crate::jets::util::test::{assert_noun_eq, init_context, A};
     use crate::jets::Jet;
     use crate::mem::NockStack;
     use crate::noun::{Cell, D, T};
-    use ibig::ubig;
 
     pub(super) fn assert_jet_in_door(
         c: &mut Context,

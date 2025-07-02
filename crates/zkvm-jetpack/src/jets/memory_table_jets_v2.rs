@@ -12,13 +12,14 @@ use tracing::debug;
 
 use crate::form::base::*;
 use crate::form::fext::*;
+use crate::form::gen_trace::{build_tree_data, TreeData};
 use crate::form::mary::{MarySlice, *};
 use crate::form::{Belt, Felt};
 use crate::hand::handle::{finalize_mary, new_handle_mut_mary};
 use crate::jets::table_utils::*;
 use crate::jets::utils::jet_err;
 
-pub fn memory_extend_jet(context: &mut Context, subject: Noun) -> Result<Noun, JetErr> {
+pub fn memory_v2_extend_jet(context: &mut Context, subject: Noun) -> Result<Noun, JetErr> {
     let sam = slot(subject, 6)?;
     let table_mary = slot(sam, 2)?;
     let chals_rd1 = slot(sam, 6)?;
@@ -26,7 +27,6 @@ pub fn memory_extend_jet(context: &mut Context, subject: Noun) -> Result<Noun, J
     let sf = slot(fock_ret, 15)?;
     let subject = slot(sf, 2)?;
     let formula = slot(sf, 3)?;
-    let subject_is_atom: bool = subject.is_atom();
 
     let chals: ExtChals = init_ext_chals(chals_rd1)?;
 
@@ -46,18 +46,8 @@ pub fn memory_extend_jet(context: &mut Context, subject: Noun) -> Result<Noun, J
         &chals,
     )?;
 
-    let subj_info: &MemoryBankEx = if subject_is_atom {
-        &memory_bank_ex_bunt()
-    } else {
-        &build_and_bft[0]
-    };
-
-    let subj_pc1: Felt = ifp_compress(&subj_info.parent, &chals.a, &chals.b, &chals.c);
-
     build_and_bft.iter().enumerate().for_each(|(i, mb)| {
         let row_idx = Row(i);
-
-        write_pelt(&mut res_mary, &subj_pc1, &row_idx, &Col(ext_idx(INPUT_IDX)));
 
         write_pelt(
             &mut res_mary,
@@ -261,23 +251,7 @@ struct MemoryBankEx {
     right: Ion,
 }
 
-fn memory_bank_ex_bunt() -> MemoryBankEx {
-    MemoryBankEx {
-        parent: ion_bunt(),
-        left: ion_bunt(),
-        right: ion_bunt(),
-    }
-}
-
-fn ion_bunt() -> Ion {
-    Ion {
-        size: Felt::zero(),
-        leaf: Felt::zero(),
-        dyck: Felt::zero(),
-    }
-}
-
-pub fn memory_mega_extend_jet(context: &mut Context, subject: Noun) -> Result<Noun, JetErr> {
+pub fn memory_v2_mega_extend_jet(context: &mut Context, subject: Noun) -> Result<Noun, JetErr> {
     let sam = slot(subject, 6)?;
     let table_mary = slot(sam, 2)?;
     let all_chals = slot(sam, 6)?;
@@ -302,7 +276,17 @@ pub fn memory_mega_extend_jet(context: &mut Context, subject: Noun) -> Result<No
     let first_row = get_row(&table, 0);
     let second_row = get_row(&table, 1);
 
-    let input = grab_pelt(first_row, INPUT_IDX);
+    let subj_fp_triple: TreeData = build_tree_data(subject, &chals.alf)?;
+    let input: Felt = ifp_compress(
+        &Ion {
+            size: subj_fp_triple.size,
+            dyck: subj_fp_triple.dyck,
+            leaf: subj_fp_triple.leaf,
+        },
+        &chals.a,
+        &chals.b,
+        &chals.c,
+    );
 
     let first_row_ax: Belt = grab_belt(first_row, AXIS_IDX);
     let first_row_fp: Felt = ifp_compress(
@@ -603,7 +587,7 @@ fn header(context: &mut Context) -> Noun {
 
 const TABLE_NAME: u64 = tas!(b"memory");
 const NUM_BASIC_COLS: u64 = 14;
-const NUM_EXT_COLS: u64 = 33;
+const NUM_EXT_COLS: u64 = 30;
 const NUM_MEGA_EXT_COLS: u64 = 24;
 
 // column indices
@@ -624,24 +608,23 @@ const MULT_LC_IDX: usize = 12;
 const MULT_RC_IDX: usize = 13;
 
 // extension columns (pelts)
-const INPUT_IDX: usize = 14;
-const PARENT_SIZE_IDX: usize = 17;
-const PARENT_DYCK_IDX: usize = 20;
-const PARENT_LEAF_IDX: usize = 23;
-const LC_SIZE_IDX: usize = 26;
-const LC_DYCK_IDX: usize = 29;
-const LC_LEAF_IDX: usize = 32;
-const RC_SIZE_IDX: usize = 35;
-const RC_DYCK_IDX: usize = 38;
-const RC_LEAF_IDX: usize = 41;
-const INV_IDX: usize = 44;
+const PARENT_SIZE_IDX: usize = 14;
+const PARENT_DYCK_IDX: usize = 17;
+const PARENT_LEAF_IDX: usize = 20;
+const LC_SIZE_IDX: usize = 23;
+const LC_DYCK_IDX: usize = 26;
+const LC_LEAF_IDX: usize = 29;
+const RC_SIZE_IDX: usize = 32;
+const RC_DYCK_IDX: usize = 35;
+const RC_LEAF_IDX: usize = 38;
+const INV_IDX: usize = 41;
 
 // mega-extension columns (pelts)
-const LN_IDX: usize = 47;
-const NC_IDX: usize = 50;
-const KVS_IDX: usize = 53;
-const KVS_IOZ_IDX: usize = 56;
-const KVSF_IDX: usize = 59;
-const DECODE_MSET_IDX: usize = 62;
-const OP0_MSET_IDX: usize = 65;
-const DATA_K_IDX: usize = 68;
+const LN_IDX: usize = 44;
+const NC_IDX: usize = 47;
+const KVS_IDX: usize = 50;
+const KVS_IOZ_IDX: usize = 53;
+const KVSF_IDX: usize = 56;
+const DECODE_MSET_IDX: usize = 59;
+const OP0_MSET_IDX: usize = 62;
+const DATA_K_IDX: usize = 65;

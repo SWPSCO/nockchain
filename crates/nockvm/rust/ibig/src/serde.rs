@@ -1,13 +1,15 @@
+use alloc::vec::Vec;
+use core::fmt::{self, Formatter};
+
+use serde::de::{Deserialize, Deserializer, SeqAccess, Visitor};
+use serde::ser::{Serialize, SerializeSeq, Serializer};
+use static_assertions::const_assert;
+
 use crate::arch::word::Word;
 use crate::buffer::Buffer;
 use crate::ibig::IBig;
 use crate::primitive::WORD_BITS_USIZE;
 use crate::ubig::UBig;
-use alloc::vec::Vec;
-use core::fmt::{self, Formatter};
-use serde::de::{Deserialize, Deserializer, SeqAccess, Visitor};
-use serde::ser::{Serialize, SerializeSeq, Serializer};
-use static_assertions::const_assert;
 
 const_assert!(64 % WORD_BITS_USIZE == 0);
 const WORDS_PER_U64: usize = 64 / WORD_BITS_USIZE;

@@ -1,10 +1,12 @@
+use std::ptr::{copy_nonoverlapping, null_mut};
+use std::slice;
+
+use either::Either::{self, *};
+
 use crate::mem::{NockStack, Preserve};
 use crate::mug::mug_u32;
 use crate::noun::Noun;
 use crate::unifying_equality::unifying_equality;
-use either::Either::{self, *};
-use std::ptr::{copy_nonoverlapping, null_mut};
-use std::slice;
 
 type MutStemEntry<T> = Either<*mut MutStem<T>, Leaf<T>>;
 

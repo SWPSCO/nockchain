@@ -1,11 +1,12 @@
 //! Toom-Cook-3 multiplication algorithm.
 
+use alloc::alloc::Layout;
+
 use crate::arch::word::{SignedWord, Word};
 use crate::memory::{self, Memory};
 use crate::mul::{self, helpers};
 use crate::sign::Sign::{self, *};
 use crate::{add, div, math, shift};
-use alloc::alloc::Layout;
 
 // We must have:
 // 2 * (n+2) <= n

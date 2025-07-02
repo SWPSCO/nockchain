@@ -1,14 +1,15 @@
+use core::str;
+use std::iter::Iterator;
+
+use bincode::{Decode, Encode};
+use bytes::Bytes;
 use nockvm::interpreter::Error;
 use nockvm::mem::NockStack;
+use nockvm::noun::{Atom, IndirectAtom, NounAllocator, D};
+use nockvm::serialization::{cue, jam};
 
 use crate::noun::slab::NounSlab;
 use crate::{Noun, Result, ToBytes, ToBytesExt};
-use bincode::{Decode, Encode};
-use bytes::Bytes;
-use core::str;
-use nockvm::noun::{Atom, IndirectAtom, NounAllocator, D};
-use nockvm::serialization::{cue, jam};
-use std::iter::Iterator;
 
 pub trait NounExt {
     fn cue_bytes(stack: &mut NockStack, bytes: &Bytes) -> Result<Noun, Error>;

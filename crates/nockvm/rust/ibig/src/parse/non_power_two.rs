@@ -1,12 +1,13 @@
 //! Parse in a non-power-of-two radix.
 
+use alloc::vec;
+
 use crate::arch::word::Word;
 use crate::buffer::Buffer;
 use crate::error::ParseError;
 use crate::mul;
 use crate::radix::{self, Digit};
 use crate::ubig::UBig;
-use alloc::vec;
 
 /// Parse in chunks of CHUNK_LEN * digits_per_word.
 const CHUNK_LEN: usize = 256;

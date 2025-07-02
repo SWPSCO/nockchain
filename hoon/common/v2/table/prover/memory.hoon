@@ -1,8 +1,8 @@
-/=  common  /common/table/memory
-/=  verifier-memory  /common/table/verifier/memory
+/=  common  /common/v2/table/memory
+/=  verifier-memory  /common/v2/table/verifier/memory
 /=  *  /common/zeke
 =/  util  constraint-util
-~%  %memory-table  ..ride  ~
+~%  %memory-table-v2  ..ride  ~
 |%
 +$  ion-triple-alt  [size=pelt dyck=pelt leaf=pelt]
 +$  memory-bank
@@ -32,26 +32,25 @@
   ++  mult-lc-idx        12
   ++  mult-rc-idx        13
   ::  pelts
-  ++  input-idx          14
-  ++  parent-size-idx    17
-  ++  parent-dyck-idx    20
-  ++  parent-leaf-idx    23
-  ++  lc-size-idx        26
-  ++  lc-dyck-idx        29
-  ++  lc-leaf-idx        32
-  ++  rc-size-idx        35
-  ++  rc-dyck-idx        38
-  ++  rc-leaf-idx        41
-  ++  inv-idx            44
+  ++  parent-size-idx    14
+  ++  parent-dyck-idx    17
+  ++  parent-leaf-idx    20
+  ++  lc-size-idx        23
+  ++  lc-dyck-idx        26
+  ++  lc-leaf-idx        29
+  ++  rc-size-idx        32
+  ++  rc-dyck-idx        35
+  ++  rc-leaf-idx        38
+  ++  inv-idx            41
   ::  mega-ext
-  ++  ln-idx             47
-  ++  nc-idx             50
-  ++  kvs-idx            53
-  ++  kvs-ioz-idx        56
-  ++  kvsf-idx           59
-  ++  decode-mset-idx    62
-  ++  op0-mset-idx       65
-  ++  data-k-idx         68
+  ++  ln-idx             44
+  ++  nc-idx             47
+  ++  kvs-idx            50
+  ++  kvs-ioz-idx        53
+  ++  kvsf-idx           56
+  ++  decode-mset-idx    59
+  ++  op0-mset-idx       62
+  ++  data-k-idx         65
   --
 ++  test-nocks
   ^-  (list ^)
@@ -472,16 +471,10 @@
           *ion-triple-alt
           *ion-triple-alt
       ==
-    =/  subj-info=memory-bank-ex
-      ?@  s.return  *memory-bank-ex
-      (snag 0 build-and-bft)
-    =/  subj-pc1
-          (ifp-compress parent.subj-info [a b c]:chals)
     %-  zing-bpolys
     %+  turn  build-and-bft
     |=  mb=memory-bank-ex
     %-  init-bpoly
-    %+  pr  subj-pc1
     %+  pr  size.parent.mb
     %+  pr  dyck.parent.mb
     %+  pr  leaf.parent.mb
@@ -512,7 +505,9 @@
     =/  [first-row=row second-row=row]
       :-  (~(snag-as-bpoly ave p.table) 0)
       (~(snag-as-bpoly ave p.table) 1)
-    =/  input  (grab-pelt input-idx:ids first-row)
+    =/  input
+        =-  (ifp-compress [a.chals b.chals c.chals] [size dyck leaf]:-)
+        (build-tree-data:util s.return alf.chals)
     =/  first-row-ax  (grab axis-idx:ids first-row)
     =/  first-row-fp
       %-  ifp-compress

@@ -1,12 +1,13 @@
 //! Primitive integral types.
 
-use crate::arch::word::{DoubleWord, Word};
-use crate::error::OutOfBoundsError;
-use crate::sign::Sign::{self, *};
 use core::convert::{TryFrom, TryInto};
 use core::fmt::Debug;
 use core::mem;
 use core::ops::{Add, Div, Mul, Shl, Shr, Sub};
+
+use crate::arch::word::{DoubleWord, Word};
+use crate::error::OutOfBoundsError;
+use crate::sign::Sign::{self, *};
 
 /// Cast `Word` to `DoubleWord`.
 #[inline]

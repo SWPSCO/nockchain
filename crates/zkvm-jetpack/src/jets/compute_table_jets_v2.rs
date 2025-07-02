@@ -16,7 +16,7 @@ use crate::hand::structs::HoonList;
 use crate::jets::table_utils::*;
 use crate::jets::utils::jet_err;
 
-pub fn compute_mega_extend_jet(context: &mut Context, subject: Noun) -> Result<Noun, JetErr> {
+pub fn compute_v2_mega_extend_jet(context: &mut Context, subject: Noun) -> Result<Noun, JetErr> {
     let sam = slot(subject, 6)?;
     let table_mary = slot(sam, 2)?;
     let all_chals = slot(sam, 6)?;
@@ -499,7 +499,7 @@ fn compress_ion(ion: &Ion, a: &Felt, b: &Felt, c: &Felt) -> Felt {
     )
 }
 
-pub fn compute_extend_jet(context: &mut Context, subject: Noun) -> Result<Noun, JetErr> {
+pub fn compute_v2_extend_jet(context: &mut Context, subject: Noun) -> Result<Noun, JetErr> {
     let sam = slot(subject, 6)?;
     let table_mary = slot(sam, 2)?;
     let chals_rd1 = slot(sam, 6)?;

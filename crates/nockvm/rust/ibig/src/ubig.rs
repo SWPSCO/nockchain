@@ -1,12 +1,13 @@
 //! Unsigned big integer.
 
+use core::slice;
+
 use self::Repr::*;
 use crate::arch::ntt;
 use crate::arch::word::Word;
 use crate::buffer::Buffer;
 use crate::math;
 use crate::primitive::WORD_BITS_USIZE;
-use core::slice;
 
 /// Internal representation of UBig.
 #[derive(Debug, Eq, Hash, PartialEq)]

@@ -114,15 +114,15 @@ pub fn jet_levy(context: &mut Context, subject: Noun) -> Result {
     util::levy(context, a_noun, b_noun)
 }
 
-
-
 pub mod util {
-    use crate::jets::util::{slam, BAIL_EXIT};
+    use std::result;
+
+    use crate::interpreter::Context;
+    use crate::jets::util::BAIL_EXIT;
     use crate::jets::{JetErr, Result};
     use crate::mem::NockStack;
     use crate::noun::{Cell, Noun, D, NO, T, YES};
-    use std::result;
-    use crate::interpreter::Context;
+    use crate::site::{site_slam, Site};
 
     /// Reverse order of list
     pub fn flop(stack: &mut NockStack, noun: Noun) -> Result {
@@ -258,25 +258,30 @@ pub mod util {
         }
     }
 
-    pub fn reap(stack: &mut NockStack, a: u64, b_noun: Noun ) -> Result {
+    pub fn reap(stack: &mut NockStack, a: u64, b_noun: Noun) -> Result {
         let mut tsil = D(0);
         let mut a_mut = a;
         loop {
-            if a_mut == 0 { break; }
+            if a_mut == 0 {
+                break;
+            }
             tsil = T(stack, &[b_noun, tsil]);
             a_mut = a_mut - 1;
         }
         Ok(tsil)
     }
 
-    pub fn levy(context: &mut Context, a_noun: Noun, b_noun: Noun) -> Result {
+    pub fn levy(context: &mut Context, a_noun: Noun, mut b_noun: Noun) -> Result {
+        let site = Site::new(context, &mut b_noun);
         let mut list = a_noun;
+
         loop {
             if unsafe { list.raw_equals(&D(0)) } {
                 return Ok(YES);
             }
+
             let cell = list.as_cell()?;
-            let b_res = slam(context, b_noun, cell.head())?;
+            let b_res = site_slam(context, &site, cell.head())?;
             if unsafe { b_res.raw_equals(&NO) } {
                 return Ok(NO);
             }

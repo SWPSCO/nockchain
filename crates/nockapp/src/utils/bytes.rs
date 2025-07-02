@@ -1,10 +1,12 @@
-use crate::utils::error::ConversionError;
-use crate::{Noun, Result};
+use std::any;
+
 use bytes::Bytes;
 use ibig::UBig;
 use nockvm::jets::cold::{Nounable, NounableResult};
 use nockvm::noun::{Atom, NounAllocator, Slots, D, T};
-use std::any;
+
+use crate::utils::error::ConversionError;
+use crate::{Noun, Result};
 
 pub trait ToBytes {
     fn to_bytes(&self) -> Result<Vec<u8>>;

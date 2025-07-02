@@ -7,33 +7,30 @@ pub mod save;
 pub mod test;
 pub mod wire;
 
-pub use error::NockAppError;
-
 use std::future::Future;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use driver::{IOAction, IODriverFn, NockAppHandle, PokeResult};
+pub use error::NockAppError;
+use futures::stream::StreamExt;
 use futures::FutureExt;
+use metrics::*;
+use nockvm::noun::SIG;
+use signal_hook::consts::signal::*;
+use signal_hook::consts::TERM_SIGNALS;
+use signal_hook_tokio::Signals;
 use tokio::select;
 use tokio::sync::{broadcast, mpsc, Mutex, OwnedMutexGuard};
 use tokio::time::{interval, Duration, Interval};
 use tokio_util::task::TaskTracker;
 use tracing::{debug, error, info, instrument, trace, warn};
+use wire::WireRepr;
 
 use crate::kernel::form::Kernel;
 use crate::noun::slab::{Jammer, NockJammer, NounSlab};
 use crate::save::{SaveableCheckpoint, Saver};
-
-use driver::{IOAction, IODriverFn, NockAppHandle, PokeResult};
-use metrics::*;
-use nockvm::noun::SIG;
-use wire::WireRepr;
-
-use futures::stream::StreamExt;
-use signal_hook::consts::signal::*;
-use signal_hook::consts::TERM_SIGNALS;
-use signal_hook_tokio::Signals;
 
 type NockAppResult = Result<(), NockAppError>;
 
