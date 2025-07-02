@@ -75,8 +75,32 @@ nuke-hoonc-data:
 nuke-assets:
 	rm -f assets/*.jam
 
+.PHONY: nuke-dumb
+nuke-dumb:
+	rm -f assets/dumb.jam
+
+.PHONY: nuke-wallet
+nuke-wallet:
+	rm -f assets/wal.jam
+
+.PHONY: nuke-miner
+nuke-miner:
+	rm -f assets/miner.jam
+
 .PHONY: build-hoon-all
 build-hoon-all: nuke-assets update-hoonc ensure-dirs build-trivial $(HOON_TARGETS)
+	$(call show_env_vars)
+
+.PHONY: build-dumb
+build-dumb: nuke-dumb update-hoonc ensure-dirs build-trivial assets/dumb.jam
+	$(call show_env_vars)
+
+.PHONY: build-wallet
+build-wallet: nuke-wallet update-hoonc ensure-dirs build-trivial assets/wal.jam
+	$(call show_env_vars)
+
+.PHONY: build-miner
+build-miner: nuke-miner update-hoonc ensure-dirs build-trivial assets/miner.jam
 	$(call show_env_vars)
 
 .PHONY: build-hoon

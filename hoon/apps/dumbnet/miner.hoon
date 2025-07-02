@@ -1,14 +1,37 @@
 /=  mine  /common/pow
 /=  sp  /common/stark/prover
+/=  t  /common/tx-engine
 /=  *  /common/zoon
 /=  *  /common/zeke
 /=  *  /common/wrapper
 =<  ((moat |) inner)  :: wrapped kernel
 =>
   |%
-  +$  effect  [%command %pow prf=proof:sp dig=tip5-hash-atom block-commitment=noun-digest:tip5 nonce=noun-digest:tip5]
   +$  kernel-state  [%state version=%1]
-  +$  cause  prover-input:sp
+  ::
+  +$  pool-id    @tas
+  +$  user-id-1  @tas
+  +$  user-id-2  @tas
+  ::
+  +$  cause
+    $:
+      version=?(%0 %1)
+      make-proof=?
+      commit=@
+      =pool-id
+      =user-id-1
+      =user-id-2
+    ==
+  ::
+  +$  effect  
+    $:
+      %res
+      eny=@
+      commit=@
+      prf=@
+      dig=tip5-hash-atom
+    ==
+  ::
   --
 |%
 ++  moat  (keep kernel-state) :: no state
@@ -27,15 +50,37 @@
   ++  poke
     |=  [wir=wire eny=@ our=@ux now=@da dat=*]
     ^-  [(list effect) k=kernel-state]
+    ::
     =/  cause  ((soft cause) dat)
     ?~  cause
       ~>  %slog.[0 [%leaf "error: bad cause"]]
       `k
+    ::
     =/  cause  u.cause
-    :: XX TODO set up stark config, construct effect
+    ::
+    =+  nonce-seed=[pool-id.cause user-id-1.cause user-id-2.cause eny]
+    ::
+    =/  nonce=noun-digest:tip5
+      (hash-noun-varlen:tip5 nonce-seed)
+    ::
+    =/  commit=block-commitment:t
+      ;;(block-commitment:t (cue commit.cause))
+    ::
+    =/  input=prover-input:sp
+      ?-  version.cause
+        %0  [%0 commit nonce pow-len]
+        %1  [%1 commit nonce pow-len]
+      ==
+    ::
+    ~&  %generating-proof
     =/  [prf=proof:sp dig=tip5-hash-atom] 
-      (prove-block-inner:mine cause)
+      ?:  make-proof.cause
+        (prove-block-inner:mine input)
+      [*proof:sp *tip5-hash-atom]
+    ~&  %jamming-proof
+    =/  prf-jam=@  (jam prf)
+    ~&  proof-done+dig
     :_  k
-    [%command %pow prf dig header.cause nonce.cause]~
+    ~[[%res eny commit.cause prf-jam dig]]
   --
 --
