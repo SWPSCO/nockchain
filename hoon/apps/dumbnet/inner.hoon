@@ -150,6 +150,7 @@
     ::
         [%transactions ~]
       ^-  (unit (unit (z-mip block-id:t tx-id:t tx:t)))
+      ~&  txs.c.k
       ``txs.c.k
     ::
         [%raw-transactions ~]
@@ -205,6 +206,7 @@
     ::
         [%desk-hash ~]
       ^-  (unit (unit (unit @uvI)))
+      ~&  desk-hash.a.k
       ``desk-hash.a.k
     ::
         [%mining-pubkeys ~]
@@ -237,7 +239,26 @@
       :-  pubkeys.m.k
       ?~  heaviest-block
         ~
-      `(to-page-summary:page:t (to-page:local-page:t u.heaviest-block))
+      =+  res=(to-page-summary:page:t (to-page:local-page:t u.heaviest-block))
+      ~&  res
+      `res
+    ::
+        [%height ~]
+      ^-  (unit (unit page-number:t))
+      ?~  heaviest-block.c.k
+        [~ ~]
+      =/  heaviest-block  (~(get z-by blocks.c.k) u.heaviest-block.c.k)
+      ?~  heaviest-block
+        [~ ~]
+      =+  summary=(to-page-summary:page:t (to-page:local-page:t u.heaviest-block))
+      ``height.summary
+        [%cstate ~]
+      ^-  (unit (unit *))
+      ``(jam c.k)
+        [%commit ~]
+      =/  commit=block-commitment:t  (block-commitment:page:t candidate-block.m.k)
+      =+  jammed=(jam commit)
+      ``jammed
     ==
   ::
   ++  poke
@@ -880,6 +901,8 @@
           %btc-data
         do-btc-data
       ::
+          %ff-consensus
+        do-ff-consensus
       ::  !!! COMMANDS BELOW ARE ONLY FOR TESTING. NEVER CALL IF RUNNING MAINNET !!!
       ::
           %set-constants
@@ -1064,6 +1087,22 @@
         ^-  [(list effect:dk) kernel-state:dk]
         ?>  ?=([%btc-data *] command)
         =.  c.k  (add-btc-data:con p.command)
+        `k
+      ++  do-ff-consensus
+        ^-  [(list effect:dk) kernel-state:dk]
+        ?>  ?=([%ff-consensus *] command)
+        ::  get incoming summary
+        ?~  heaviest-block.p.command  !!
+        =/  incoming-heaviest-block   (~(get z-by blocks.p.command) u.heaviest-block.p.command)
+        ?~  incoming-heaviest-block   !!
+        =+  incoming-summary=(to-page-summary:page:t (to-page:local-page:t u.incoming-heaviest-block))
+        ::  get present summary
+        ?~  heaviest-block.c.k  !!
+        =/  heaviest-block      (~(get z-by blocks.c.k) u.heaviest-block.c.k)
+        ?~  heaviest-block      !!
+        =+  summary=(to-page-summary:page:t (to-page:local-page:t u.heaviest-block))
+        ?>  (gth height.incoming-summary height.summary)
+        =.  c.k  p.command
         `k
       --::+handle-command
     ::
