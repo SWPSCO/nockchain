@@ -6,6 +6,19 @@ on:
   workflow_dispatch:
 
 jobs:
+  vars:
+    runs-on: ubuntu-latest
+    outputs:
+      short_sha: ${{ steps.set.outputs.short_sha }}
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          ref: master
+      - name: set short git commit sha
+        id: set
+        run: |
+          calculatedSha=$(git rev-parse master | cut -c1-7)
+          echo "short_sha=$calculatedSha" >> $GITHUB_OUTPUT
   build:
     needs: vars
     runs-on: ubuntu-latest
