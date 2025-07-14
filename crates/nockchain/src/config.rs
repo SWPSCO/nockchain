@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::time::Duration;
 
 use clap::{arg, command, value_parser, ArgAction, Parser};
@@ -90,10 +91,31 @@ pub struct NockchainCli {
     pub max_established: Option<u32>,
     #[arg(long, help = "Maximum established connections per peer")]
     pub max_established_per_peer: Option<u32>,
+    #[arg(
+        long,
+        help = "Prune <N> inbound connections when a peer is denied due to connection limits. (Use on boot nodes only.)"
+    )]
+    pub prune_inbound: Option<usize>,
     #[arg(long, help = "Maximum system memory percentage for connection limits")]
     pub max_system_memory_fraction: Option<f64>,
     #[arg(long, help = "Maximum process memory for connection limits (bytes)")]
     pub max_system_memory_bytes: Option<usize>,
+    #[arg(long, help = "Number of threads to mine with defaults to one less than the number of cpus available.", default_value = None)]
+    pub num_threads: Option<u64>,
+    #[arg(
+        long,
+        help = "Size of Proof of Work puzzle for mining on fakenet. Mainnet uses 64. Must be a power of 2. Defaults to 2. Ignored on mainnet.",
+        default_value = "2"
+    )]
+    pub fakenet_pow_len: Option<u64>,
+    #[arg(
+        long,
+        help = "log target difficulty for mining on fakenet. Defaults to 2 (so 2^2 attempts on average find a block). Ignored on mainnet.",
+        default_value = "1"
+    )]
+    pub fakenet_log_difficulty: Option<u64>,
+    #[arg(long, help = "Path to fake genesis block jam file")]
+    pub fakenet_genesis_jam_path: Option<PathBuf>,
 }
 
 impl NockchainCli {

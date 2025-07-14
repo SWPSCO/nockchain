@@ -1,8 +1,13 @@
 use std::cmp::max;
 use std::vec;
 
+use num_traits::MulAdd;
+
 use crate::form::fext::*;
 use crate::form::poly::*;
+use crate::hand::structs::HoonList;
+use crate::jets::fpntt_jets::fp_ntt;
+use crate::noun::noun_ext::NounExt;
 
 #[inline(always)]
 pub fn fpadd(a: &[Felt], b: &[Felt], res: &mut [Felt]) {
@@ -200,5 +205,68 @@ pub fn fpscal_(left: &Felt, right: &[Felt]) -> Vec<Felt> {
 pub fn bpoly_to_fpoly(bpoly: &[Belt], res: &mut [Felt]) {
     for (i, b) in bpoly.iter().enumerate() {
         res[i] = Felt::lift(*b);
+    }
+}
+
+#[inline(always)]
+pub fn fp_shift(poly_a: &[Felt], felt_b: &Felt, poly_res: &mut [Felt]) {
+    let mut felt_power: Felt = Felt::from([1, 0, 0]);
+
+    for i in 0..poly_a.len() {
+        let res_felt: &mut Felt = &mut Felt::from([0, 0, 0]);
+        fmul(&poly_a[i], &felt_power, res_felt);
+        poly_res[i] = *res_felt;
+
+        fmul(&felt_power.clone(), felt_b, &mut felt_power);
+    }
+}
+
+#[inline(always)]
+pub fn fp_coseword(fp: &[Felt], offset: &Felt, order: u32, root: &Felt) -> Vec<Felt> {
+    // shift
+    let len_res: u32 = order;
+    let mut res = vec![Felt::zero(); len_res as usize];
+    fp_shift(fp, offset, &mut res);
+
+    fp_ntt(&res, root)
+}
+
+// MIT License
+// Copyright (c) 2023 Andrew J. Radcliffe <andrewjradcliffe@gmail.com>
+pub fn horner_loop<T>(x: T, coefficients: &[T]) -> T
+where
+    T: Copy + MulAdd + MulAdd<Output = T>,
+{
+    let n = coefficients.len();
+    if n > 0 {
+        let a_n = coefficients[n - 1];
+        coefficients[0..n - 1]
+            .iter()
+            .rfold(a_n, |result, &a| result.mul_add(x, a))
+    } else {
+        panic!(
+            "coefficients.len() must be greater than or equal to 1, got {}",
+            n
+        );
+    }
+}
+
+// fpoly and felt ranks are lowest to highest
+pub fn fpeval(a: &[Felt], x: Felt) -> Felt {
+    horner_loop(x, a)
+}
+
+#[inline(always)]
+pub fn lift_to_fpoly(belts: HoonList, res: &mut [Felt]) {
+    for (i, b) in belts.into_iter().enumerate() {
+        let belt = b.as_belt().unwrap_or_else(|err| {
+            panic!(
+                "Panicked with {err:?} at {}:{} (git sha: {:?})",
+                file!(),
+                line!(),
+                option_env!("GIT_SHA")
+            )
+        });
+        res[i] = Felt::lift(belt);
     }
 }

@@ -15,7 +15,7 @@ Install `rustup` by following their instructions at: [https://rustup.rs/](https:
 Ensure you have these dependencies installed if running on Debian/Ubuntu:
 ```
 sudo apt update
-sudo apt install clang llvm-dev libclang-dev
+sudo apt install clang llvm-dev libclang-dev make
 ```
 
 Copy the example environment file and rename it to `.env`:
@@ -28,12 +28,6 @@ Install `hoonc`, the Hoon compiler:
 ```
 make install-hoonc
 export PATH="$HOME/.cargo/bin:$PATH"
-```
-
-To build the Nockchain and the wallet binaries and their required assets:
-
-```
-make build
 ```
 
 ## Install Wallet
@@ -96,13 +90,13 @@ Make sure your current directory is nockchain.
 To run a Nockchain node without mining.
 
 ```
-sh ./scripts/run_nockchain_node.sh
+bash ./scripts/run_nockchain_node.sh
 ```
 
 To run a Nockchain node and mine to a pubkey:
 
 ```
-sh ./scripts/run_nockchain_miner.sh
+bash ./scripts/run_nockchain_miner.sh
 ```
 
 For launch, make sure you run in a fresh working directory that does not include a .data.nockchain file from testing.
@@ -118,36 +112,6 @@ Yes, you can use the same pubkey if running multiple miners.
 Run `nockchain-wallet keygen` to generate a new key pair.
 
 If you are using the Makefile workflow, copy the public key to the `.env` file.
-
-### How do I run multiple instances on the same machine?
-
-To run multiple instances on the same machine, you need to:
-
-1. Create separate working directories for each instance
-2. Use different ports for each instance
-
-Here's how to set it up:
-
-First, make sure you have the most up-to-date version of Nockchain installed.
-
-```bash
-make install-nockchain
-```
-
-```bash
-Inside of the nockchain directory:
-
-# Create directories for each instance
-mkdir node1 node2
-
-# Copy .env to each directory
-cp .env node1/
-cp .env node2/
-
-# Run each instance in its own directory with .env loaded
-cd node1 && sh ../scripts/run_nockchain_miner.sh
-cd node2 && sh ../scripts/run_nockchain_miner.sh
-```
 
 ### How do I run a testnet?
 To run a testnet on your machine, follow the same instructions as above, except use the fakenet
@@ -227,9 +191,7 @@ Outgoing connection failures can occur due to:
 
 ### How do I know if it's mining?
 
-No way to manually check mining status yet. We're working on it.
-
-In the meantime, you can check the logs for mining activity.
+You can check the logs for mining activity.
 
 If you see a line that looks like:
 
@@ -239,9 +201,7 @@ If you see a line that looks like:
 
 ### How do I check block height?
 
-No way to manually check block height yet. We're working on it.
-
-In the meantime, you can check the logs for a line like:
+You can check the logs for a line like:
 
 ```sh
 block Vo3d2Qjy1YHMoaHJBeuQMgi4Dvi3Z2GrcHNxvNYAncgzwnQYLWnGVE added to validated blocks at 2
@@ -262,9 +222,6 @@ Common errors and their solutions:
 To check your wallet balance:
 
 ```bash
-# List all notes (UTXOs) that your node has seen
-nockchain-wallet --nockchain-socket ./nockchain.sock list-notes
-
 # List all notes by pubkey
 nockchain-wallet --nockchain-socket ./nockchain.sock list-notes-by-pubkey -p <your-pubkey>
 ```

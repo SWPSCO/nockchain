@@ -160,18 +160,22 @@
       [%update-state ~]
       [%nothing ~]
       [%keygen entropy=byts salt=byts]
-      [%derive-child key-type=?(%pub %prv) i=@ label=(unit @t)]
+      [%derive-child i=@ hardened=? label=(unit @tas)]
       [%import-keys keys=(list (pair trek meta))]
       [%export-keys ~]
       [%export-master-pubkey ~]
       [%import-master-pubkey =coil]                    ::  base58-encoded pubkey + chain code
       [%send-tx dat=draft]
       [%list-notes-by-pubkey pubkey=@t]                ::  base58-encoded pubkey
+      [%list-notes-by-pubkey-csv pubkey=@t]            ::  base58-encoded pubkey, CSV format
       $:  %simple-spend
           names=(list [first=@t last=@t])              ::  base58-encoded name hashes
           recipients=(list [m=@ pks=(list @t)])        ::  base58-encoded locks
           gifts=(list coins:transact)                  ::  number of coins to spend
           fee=coins:transact                           ::  fee
+          index=(unit @ud)                             ::  index of child key to spend from.
+                                                       ::  if key is hardened, index must have (bex 31)
+                                                       ::  already added
       ==
       $:  %aeroe-spend
           names=(list [first=@t last=@t])              ::  base58-encoded name hashes
@@ -548,26 +552,24 @@
   ++  from-public
     |=  =keyc:slip10
     (from-public:slip10 keyc)
-::
-::  Derives public key from parent public key
-::  index i is expected to be a bip32 style index
-::  meaning that for the n-th child key, i=n.
-::
-  ++  derive-public
+  ::
+  ::  derives the i-th child key(s) from a parent key.
+  ::  index i can be any child index. returns the door
+  ::  with the door sample modified with the values
+  ::  corresponding to the key. the core sample can then
+  ::  be harvested for keys.
+  ::
+  ++  derive
     |=  [parent=coil i=@u]
-    ?>  &(?=(%pub -.key.parent) (lte i (dec (bex 31))))
-    =>  [cor=(from-public [p.key cc]:parent) i=i]
-    (derive-public:cor i)
-::
-::  Derives private key from parent private key
-::  index i is expected to be a bip32 style index
-::  meaning that for n-th child key: i = (n + 2^31)
-::
-  ++  derive-private
-    |=  [parent=coil i=@u]
-    ?>  &(?=(%prv -.key.parent) (gte i (bex 31)))
-    =>  [cor=(from-private [p.key cc]:parent) i=i]
-    (derive-private:cor i)
+    ?-    -.key.parent
+        %pub
+      =>  [cor=(from-public [p.key cc]:parent) i=i]
+      (derive:cor i)
+    ::
+        %prv
+      =>  [cor=(from-private [p.key cc]:parent) i=i]
+      (derive:cor i)
+    ==
   --
 ::
 ++  vault
@@ -597,14 +599,21 @@
       ~|("receive-address not set - this is a bug" !!)
     receive-address.state
   ::
+  ++  has
+    |_  key-type=?(%pub %prv)
+    ++  key-path  ^-  trek
+      (welp base-path ~[key-type])
+    ::
+    ++  master
+      ^-  ?
+      =/  =trek  (welp key-path /m)
+      (~(has of keys.state) trek)
+    --
   ++  get
     |_  key-type=?(%pub %prv)
     ::
     ++  key-path  ^-  trek
       (welp base-path ~[key-type])
-    ::
-    ++  seed-path  ^-  trek
-      (welp base-path /seed)
     ::
     ++  master
       ^-  coil
@@ -682,29 +691,6 @@
         (welp key-path /label)
       label/u.label
     --
-  ::
-  ::  +derive-child: derives the i-th hardened/unhardened child
-  ::
-  ::    derives the i-th hardened or unhardened child from the master key.
-  ::    this arm will convert i to fit the slip10/bip32 indexing schemes.
-  ::    the i-th hardened corresponds to index i + 2^31 while the ith
-  ::    unhardened child corresponds to index i.
-  ::
-  ++  derive-child
-    |=  [parent=coil i=@u]
-    ^-  coil
-    ?:  (gte i (bex 31))
-      ~|("Child index {<i>} out of range. Child indices are capped to values between [0, 2^31)" !!)
-    ?~  master.state
-      ~|("No master keys available for derivation" !!)
-    ?:  ?=(%prv -.key.parent)
-      ::
-      ::  If the parent key is %prv, then the child is hardened
-      ::  and we add 2^31 to the index
-      =>  (derive-private:s10 parent (add i (bex 31)))
-      [%coil [%prv private-key] chain-code]
-    =>  (derive-public:s10 parent i)
-    [%coil [%pub public-key] chain-code]
   ::
   ++  get-note
     |=  name=nname:transact
@@ -947,6 +933,8 @@
       :((cury cat 3) '[' first ' ' last ']')
       '\0a- assets: '
       (scot %ud assets.note)
+      '\0a- block height: '
+      (scot %ud origin-page.note)
       '\0a- source: '
       (to-b58:hash:transact p.source.note)
       '\0a## lock'
@@ -1026,6 +1014,12 @@
     """
     ~[(make-markdown-effect nodes)]
   --
+  ::
+  ++  ui-to-tape
+    |=  @
+    ^-  tape
+    %-  trip
+    (rsh [3 2] (scot %ui +<))
 --
 ::
 %-  (moat &)
@@ -1158,6 +1152,7 @@
       %scan                  (do-scan cause)
       %list-notes            (do-list-notes cause)
       %list-notes-by-pubkey  (do-list-notes-by-pubkey cause)
+      %list-notes-by-pubkey-csv  (do-list-notes-by-pubkey-csv cause)
       %simple-spend          (do-simple-spend cause)
       %aeroe-spend           (do-aeroe-spend cause)
       %update-balance        (do-update-balance cause)
@@ -1776,6 +1771,44 @@
         [%exit 0]
     ==
   ::
+  ++  do-list-notes-by-pubkey-csv
+    |=  =cause
+    ?>  ?=(%list-notes-by-pubkey-csv -.cause)
+    =/  target-pubkey=schnorr-pubkey:transact
+      (from-b58:schnorr-pubkey:transact pubkey.cause)
+    =/  matching-notes=(list [name=nname:transact note=nnote:transact])
+      %+  skim  ~(tap z-by:zo balance.state)
+      |=  [name=nname:transact note=nnote:transact]
+      (~(has z-in:zo pubkeys.lock.note) target-pubkey)
+    =/  csv-header=tape
+      "name_first,name_last,assets,block_height,source_hash"
+    =/  csv-rows=(list tape)
+      %+  turn  matching-notes
+      |=  [name=nname:transact note=nnote:transact]
+      =/  name-b58=[first=@t last=@t]  (to-b58:nname:transact name)
+      =/  source-hash-b58=@t  (to-b58:hash:transact p.source.note)
+      """
+      {(trip first.name-b58)},{(trip last.name-b58)},{(ui-to-tape assets.note)},{(ui-to-tape origin-page.note)},{(trip source-hash-b58)}
+      """
+    =/  csv-content=tape
+      %+  welp  csv-header
+      %+  welp  "\0a"
+      %-  zing
+      %+  turn  csv-rows
+      |=  row=tape
+      "{row}\0a"
+    =/  filename=@t
+      %-  crip
+      "notes-{(trip (to-b58:schnorr-pubkey:transact target-pubkey))}.csv"
+    :_  state
+    :~  :-  %file
+        :-  %write
+        :-  filename
+        %-  crip
+        csv-content
+        [%exit 0]
+    ==
+  ::
   ++  do-simple-spend
     |=  =cause
     ?>  ?=(%simple-spend -.cause)
@@ -1821,12 +1854,15 @@
     ::
     ::  the fee is subtracted from the first note that permits doing so without overspending
     =/  fee=coins:transact  fee.cause
-    ::  use the first private key to construct the subsequent inputs
+    ::  get private key at specified index, or first derived key if no index
+    =/  private-keys=(list coil)  ~(coils get:v %prv)
+    ?~  private-keys
+      ~|("No private keys available for signing" !!)
     =/  sender=coil
-      =/  private-keys=(list coil)  ~(coils get:v %prv)
-      ?~  private-keys
-        ~|("No private keys available for signing" !!)
-      (head private-keys)
+      ?~  index.cause  i.private-keys
+      =/  key-at-index=meta  (~(by-index get:v %prv) u.index.cause)
+      ?>  ?=(%coil -.key-at-index)
+      key-at-index
     =/  sender-key=schnorr-seckey:transact
       (from-atom:schnorr-seckey:transact p.key.sender)
     ::  for each name, create an input from the corresponding note in sender's
@@ -1876,12 +1912,21 @@
         name  draft-name
       ==
     =/  draft-jam  (jam draft)
+    =/  markdown-text=@t
+      %-  crip
+      """
+      ## draft
+
+      - {<draft-name>}
+
+      {<draft>}
+      """
     =/  path=@t
       %-  crip
       "./drafts/{(trip name.draft)}.draft"
     %-  (debug "saving draft to {<path>}")
     =/  =effect  [%file %write path draft-jam]
-    :-  ~[effect [%exit 0]]
+    :-  ~[effect [%markdown markdown-text] [%exit 0]]
     state
   ::
   ::  this is just simple-spend but with an addition of passing in the draft path
@@ -2026,17 +2071,73 @@
         [%exit 0]
     ==
   ::
-  ::  derives child %pub or %prv key of current master key
-  ::  at index `i`. this will overwrite existing paths.
+  ::  derives child keys of current master key
+  ::  at index `i`. this will overwrite existing paths if
+  ::  the master key changes
   ++  do-derive-child
+    |^
     |=  =cause
     ?>  ?=(%derive-child -.cause)
-    =/  par=coil  ~(master get:v key-type.cause)
-    =/  child=coil  (derive-child:v par i.cause)
+    =/  index
+      ?:  hardened.cause
+        (add i.cause (bex 31))
+      i.cause
+    =/  derived-keys=(set coil)  (derive-child index)
     =.  keys.state
-      (key:put:v child `i.cause label.cause)
+      %-  ~(rep in derived-keys)
+      |=  [=coil keys=_keys.state]
+      =.  keys.state  keys
+      (key:put:v coil `index label.cause)
     :-  [%exit 0]~
     state
+    ::
+    ::  +derive-child: derives the i-th hardened/unhardened child key(s)
+    ::
+    ::    derives the i-th child from the master key. for hardened keys,
+    ::    (bex 31) should be already added to `i`.
+    ::
+    ++  derive-child
+      |=  i=@u
+      ^-  (set coil)
+      ?:  (gte i (bex 32))
+        ~|("Child index {<i>} out of range. Child indices are capped to values between [0, 2^32)" !!)
+      ?~  master.state
+        ~|("No master keys available for derivation" !!)
+      =;  coils=(list coil)
+        (silt coils)
+      =/  hardened  (gte i (bex 31))
+      ::
+      ::  Grab the prv master key if it exists (cold wallet)
+      ::  otherwise grab the pub master key (hot wallet).
+      =/  parent=coil
+        ?:  ~(master has:v %prv)
+          ~(master get:v %prv)
+        ~(master get:v %pub)
+      ?:  hardened
+        ?>  ?=(%prv -.key.parent)
+        ::
+        =>  (derive:s10 parent i)
+        :~  [%coil [%prv private-key] chain-code]
+            [%coil [%pub public-key] chain-code]
+        ==
+      ::
+      ::  if unhardened, we just assert that they are within the valid range
+      ?:  (gte i (bex 31))
+        ~|("Unhardened child index {<i>} out of range. Indices are capped to values between [0, 2^31)" !!)
+      ?-    -.key.parent
+       ::  if the parent is a private key, we can derive the unhardened prv and pub child
+          %prv
+        =>  (derive:s10 parent i)
+        :~  [%coil [%prv private-key] chain-code]
+            [%coil [%pub public-key] chain-code]
+        ==
+      ::
+       ::  if the parent is a public key, we can only derive the unhardened pub child
+          %pub
+        =>  (derive:s10 parent i)
+        ~[[%coil [%pub public-key] chain-code]]
+      ==
+    --
   ::
   ++  do-sign-tx
     |=  =cause

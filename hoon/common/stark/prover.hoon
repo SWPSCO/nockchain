@@ -16,8 +16,8 @@
     ==
 ~%  %stark-prover  ..stark-engine-jet-hook  ~
 |%
-+$  prover-input 
-  $%  $:  version=%0 
++$  prover-input
+  $%  $:  version=%0
           header=noun-digest:tip5
           nonce=noun-digest:tip5
           pow-len=@
@@ -45,7 +45,7 @@
   ~/  %prove
   |=  prover-input
   ^-  prove-result
-  ~&  version+version
+  ~>  %slog.[0 leaf+"starting proving attempt"]
   =/  [s=* f=*]  (puzzle-nock header nonce pow-len)
   =/  [prod=* return=fock-return]  (fink:fock [s f])
   =/  nock-common=_nock-common-v0-v1
@@ -78,16 +78,16 @@
       %1  static:common:memory-table-v0-v1
       %2  static:common:memory-table-v2
     ==
-  =/  pre=preprocess-data 
+  =/  pre=preprocess-data
     ?-  version
       %0  p.pre-0-1.prep.stark-config
       %1  p.pre-0-1.prep.stark-config
       %2  p.pre-2.prep.stark-config
     ==
-  %-  %~  generate-proof 
-        prove-door 
+  %-  %~  generate-proof
+        prove-door
       :*  nock-common
-          compute-funcs 
+          compute-funcs
           compute-common
           memory-funcs
           memory-common
@@ -216,7 +216,7 @@
       (make-challenge-map:chal challenges s f)
     ::
     ::  build mega-extension columns
-    =/  table-mega-exts=(list table-mary) 
+    =/  table-mega-exts=(list table-mary)
       (build-mega-extend tables challenges return)
     ::~&  %tables-built
     =.  tables

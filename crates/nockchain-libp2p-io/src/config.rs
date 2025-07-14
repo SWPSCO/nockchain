@@ -30,13 +30,13 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
 const IDENTIFY_INTERVAL: Duration = KADEMLIA_BOOTSTRAP_INTERVAL;
 
 /** Maximum number of established *incoming* connections */
-const MAX_ESTABLISHED_INCOMING_CONNECTIONS: u32 = 16;
+const MAX_ESTABLISHED_INCOMING_CONNECTIONS: u32 = 96;
 
 /** Maximum number of established *incoming* connections */
-const MAX_ESTABLISHED_OUTGOING_CONNECTIONS: u32 = 16;
+const MAX_ESTABLISHED_OUTGOING_CONNECTIONS: u32 = 32;
 
 /** Maximum number of established connections */
-const MAX_ESTABLISHED_CONNECTIONS: u32 = 32;
+const MAX_ESTABLISHED_CONNECTIONS: u32 = 128;
 
 /** Maximum number of established connections with a single peer ID */
 const MAX_ESTABLISHED_CONNECTIONS_PER_PEER: u32 = 2;

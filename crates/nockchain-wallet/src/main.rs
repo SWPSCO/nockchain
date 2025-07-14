@@ -8,7 +8,7 @@ use getrandom::getrandom;
 use nockapp::utils::bytes::Byts;
 use nockapp::{system_data_dir, CrownError, NockApp, NockAppError, ToBytesExt};
 use nockvm::jets::cold::Nounable;
-use nockvm::noun::{Atom, Cell, IndirectAtom, Noun, D, SIG, T};
+use nockvm::noun::{Atom, Cell, IndirectAtom, Noun, D, NO, SIG, T, YES};
 use tokio::fs as tokio_fs;
 use tokio::net::UnixStream;
 use tracing::{error, info};
@@ -67,20 +67,34 @@ impl Wire for WalletWire {
 /// Represents a Noun that the wallet kernel can handle
 type CommandNoun<T> = Result<(T, Operation), NockAppError>;
 
+fn validate_label(s: &str) -> Result<String, String> {
+    if s.chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    {
+        Ok(s.to_string())
+    } else {
+        Err("Label must contain only lowercase letters, numbers, and hyphens".to_string())
+    }
+}
+
 #[derive(Subcommand, Debug, Clone)]
 pub enum Commands {
     /// Generate a new key pair
     Keygen,
 
-    /// Derive a child key from the current master key
+    /// Derive child key (pub, private or both) from the current master key
     DeriveChild {
-        /// Type of key to derive (e.g., "pub", "priv")
-        #[arg(short, long)]
-        key_type: String,
-
         /// Index of the child key to derive
         #[arg(short, long, value_parser = clap::value_parser!(u64).range(0..=255))]
         index: u64,
+
+        /// Hardened or unhardened child key
+        #[arg(short, long)]
+        hardened: bool,
+
+        /// Label for the child key
+        #[arg(short, long, value_parser = validate_label, default_value = None)]
+        label: Option<String>,
     },
 
     /// Import keys from a file
@@ -147,6 +161,13 @@ pub enum Commands {
         pubkey: Option<String>,
     },
 
+    /// List notes by public key in CSV format
+    ListNotesByPubkeyCsv {
+        /// Public key to filter notes
+        #[arg(short, long)]
+        pubkey: String,
+    },
+
     /// Perform a simple spend operation
     SimpleSpend {
         /// Names of notes to spend (comma-separated)
@@ -161,6 +182,9 @@ pub enum Commands {
         /// Transaction fee
         #[arg(long)]
         fee: u64,
+        /// Optional key index to use for signing (0-255)
+        #[arg(short, long, value_parser = clap::value_parser!(u64).range(0..=255))]
+        index: Option<u64>,
     },
 
     /// Create a transaction from a draft file
@@ -209,6 +233,7 @@ impl Commands {
             Commands::Scan { .. } => "scan",
             Commands::ListNotes => "list-notes",
             Commands::ListNotesByPubkey { .. } => "list-notes-by-pubkey",
+            Commands::ListNotesByPubkeyCsv { .. } => "list-notes-by-pubkey-csv",
             Commands::SimpleSpend { .. } => "simple-spend",
             Commands::SendTx { .. } => "send-tx",
             Commands::UpdateBalance => "update-balance",
@@ -332,17 +357,21 @@ impl Wallet {
     //
     // # Arguments
     //
-    // * `key_type` - The type of key to derive (e.g., "pub", "priv")
     // * `index` - The index of the child key to derive
-    // TODO: add label if necessary
-    fn derive_child(key_type: KeyType, index: u64) -> CommandNoun<NounSlab> {
+    // * `hardened` - Whether the child key should be hardened
+    // * `label` - Optional label for the child key
+    fn derive_child(index: u64, hardened: bool, label: &Option<String>) -> CommandNoun<NounSlab> {
         let mut slab = NounSlab::new();
-        let key_type_noun = make_tas(&mut slab, key_type.to_string()).as_noun();
         let index_noun = D(index);
+        let hardened_noun = if hardened { YES } else { NO };
+        let label_noun = label.as_ref().map_or(SIG, |l| {
+            let label_noun = l.into_noun(&mut slab);
+            T(&mut slab, &[SIG, label_noun])
+        });
 
         Self::wallet(
             "derive-child",
-            &[key_type_noun, index_noun, SIG],
+            &[index_noun, hardened_noun, label_noun],
             Operation::Poke,
             &mut slab,
         )
@@ -374,7 +403,7 @@ impl Wallet {
             .map_err(|e| CrownError::Unknown(format!("Failed to decode draft: {}", e)))?;
 
         let index_noun = match index {
-            Some(i) => D(i),
+            Some(i) => T(&mut slab, &[D(0), D(i)]),
             None => D(0),
         };
 
@@ -527,6 +556,7 @@ impl Wallet {
         recipients: String,
         gifts: String,
         fee: u64,
+        index: Option<u64>,
     ) -> CommandNoun<NounSlab> {
         let mut slab = NounSlab::new();
 
@@ -630,10 +660,17 @@ impl Wallet {
         });
 
         let fee_noun = D(fee);
+        let index_noun = match index {
+            Some(i) => {
+                let inner = D(i);
+                T(&mut slab, &[D(0), inner])
+            }
+            None => D(0),
+        };
 
         Self::wallet(
             "simple-spend",
-            &[names_noun, recipients_noun, gifts_noun, fee_noun],
+            &[names_noun, recipients_noun, gifts_noun, fee_noun, index_noun],
             Operation::Poke,
             &mut slab,
         )
@@ -716,6 +753,18 @@ impl Wallet {
         let pubkey_noun = make_tas(&mut slab, pubkey).as_noun();
         Self::wallet(
             "list-notes-by-pubkey",
+            &[pubkey_noun],
+            Operation::Poke,
+            &mut slab,
+        )
+    }
+
+    /// Lists notes by public key in CSV format
+    fn list_notes_by_pubkey_csv(pubkey: &str) -> CommandNoun<NounSlab> {
+        let mut slab = NounSlab::new();
+        let pubkey_noun = make_tas(&mut slab, pubkey).as_noun();
+        Self::wallet(
+            "list-notes-by-pubkey-csv",
             &[pubkey_noun],
             Operation::Poke,
             &mut slab,
@@ -813,20 +862,11 @@ async fn main() -> Result<(), NockAppError> {
             getrandom(&mut salt).map_err(|e| CrownError::Unknown(e.to_string()))?;
             Wallet::keygen(&entropy, &salt)
         }
-        Commands::DeriveChild { key_type, index } => {
-            // Validate key_type is either "pub" or "priv"
-            let key_type = match key_type.as_str() {
-                "pub" => KeyType::Pub,
-                "priv" => KeyType::Prv,
-                _ => {
-                    return Err(CrownError::Unknown(
-                        "Key type must be either 'pub' or 'priv'".into(),
-                    )
-                    .into())
-                }
-            };
-            Wallet::derive_child(key_type, *index)
-        }
+        Commands::DeriveChild {
+            index,
+            hardened,
+            label,
+        } => Wallet::derive_child(*index, *hardened, label),
         Commands::SignTx { draft, index } => Wallet::sign_tx(draft, *index),
         Commands::ImportKeys { input } => Wallet::import_keys(input),
         Commands::ExportKeys => Wallet::export_keys(),
@@ -851,12 +891,20 @@ async fn main() -> Result<(), NockAppError> {
                 return Err(CrownError::Unknown("Public key is required".into()).into());
             }
         }
+        Commands::ListNotesByPubkeyCsv { pubkey } => Wallet::list_notes_by_pubkey_csv(pubkey),
         Commands::SimpleSpend {
             names,
             recipients,
             gifts,
             fee,
-        } => Wallet::simple_spend(names.clone(), recipients.clone(), gifts.clone(), *fee),
+            index,
+        } => Wallet::simple_spend(
+            names.clone(),
+            recipients.clone(),
+            gifts.clone(),
+            *fee,
+            *index,
+        ),
         Commands::SendTx { draft } => Wallet::send_tx(draft),
         Commands::UpdateBalance => Wallet::update_balance(),
         Commands::ExportMasterPubkey => Wallet::export_master_pubkey(),
@@ -1009,11 +1057,14 @@ mod tests {
 
         // Derive a child key
         let index = 0;
-        let (noun, op) = Wallet::derive_child(key_type.clone(), index)?;
+        let hardened = true;
+        let label = None;
+        let (noun, op) = Wallet::derive_child(index, hardened, &label)?;
 
         let wire = WalletWire::Command(Commands::DeriveChild {
-            key_type: key_type.clone().to_string().to_owned(),
             index,
+            hardened,
+            label,
         })
         .to_wire();
 
@@ -1281,12 +1332,13 @@ mod tests {
         let fee = 1;
 
         let (noun, op) =
-            Wallet::simple_spend(names.clone(), recipients.clone(), gifts.clone(), fee)?;
+            Wallet::simple_spend(names.clone(), recipients.clone(), gifts.clone(), fee, None)?;
         let wire = WalletWire::Command(Commands::SimpleSpend {
             names: names.clone(),
             recipients: recipients.clone(),
             gifts: gifts.clone(),
             fee: fee.clone(),
+            index: None,
         })
         .to_wire();
         let spend_result = wallet.app.poke(wire, noun.clone()).await?;
@@ -1307,14 +1359,14 @@ mod tests {
 
         // these should be valid names of notes in the wallet balance
         let names = "[Amt4GcpYievY4PXHfffiWriJ1sYfTXFkyQsGzbzwMVzewECWDV3Ad8Q BJnaDB3koU7ruYVdWCQqkFYQ9e3GXhFsDYjJ1vSmKFdxzf6Y87DzP4n]".to_string();
-        let recipients = "EHmKL2U3vXfS5GYAY5aVnGdukfDWwvkQPCZXnjvZVShsSQi3UAuA4tQ".to_string();
+        let recipients = "3HKKp7xZgCw1mhzk4iw735S2ZTavCLHc8YDGRP6G9sSTrRGsaPBu1AqJ8cBDiw2LwhRFnQG7S3N9N9okc28uBda6oSAUCBfMSg5uC9cefhrFrvXVGomoGcRvcFZTWuJzm3ch".to_string();
         let gifts = "0".to_string();
         let fee = 0;
 
         // generate keys
         let (genkey_noun, genkey_op) = Wallet::gen_master_privkey("correct horse battery staple")?;
         let (spend_noun, spend_op) =
-            Wallet::simple_spend(names.clone(), recipients.clone(), gifts.clone(), fee)?;
+            Wallet::simple_spend(names.clone(), recipients.clone(), gifts.clone(), fee, None)?;
 
         let wire1 = WalletWire::Command(Commands::GenMasterPrivkey {
             seedphrase: "correct horse battery staple".to_string(),
@@ -1328,6 +1380,7 @@ mod tests {
             recipients: recipients.clone(),
             gifts: gifts.clone(),
             fee: fee.clone(),
+            index: None,
         })
         .to_wire();
         let spend_result = wallet.app.poke(wire2, spend_noun.clone()).await?;

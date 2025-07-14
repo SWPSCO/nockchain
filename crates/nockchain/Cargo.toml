@@ -39,6 +39,8 @@ termcolor.workspace = true
 tokio = { workspace = true, features = ["full"] }
 tracing.workspace = true
 tracing-test.workspace = true
+num_cpus = { workspace = true }
+rand = { workspace = true }
 
 zkvm-jetpack.workspace = true
 

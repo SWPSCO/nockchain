@@ -30,7 +30,11 @@ macro_rules! based {
 pub fn badd(a: u64, b: u64) -> u64 {
     based!(a);
     based!(b);
-    (((a as u128) + (b as u128)) % PRIME_128) as u64
+
+    let b = PRIME.wrapping_sub(b);
+    let (r, c) = a.overflowing_sub(b);
+    let adj = 0u32.wrapping_sub(c as u32);
+    r.wrapping_sub(adj as u64)
 }
 
 #[inline(always)]
@@ -58,7 +62,31 @@ pub fn bsub(a: u64, b: u64) -> u64 {
 /// Reduce a 128 bit number
 #[inline(always)]
 pub fn reduce(n: u128) -> u64 {
-    (n % PRIME_128) as u64
+    reduce_159(n as u64, (n >> 64) as u32, (n >> 96) as u64)
+}
+
+/// Reduce a 159 bit number
+/// See <https://cp4space.hatsya.com/2021/09/01/an-efficient-prime-for-number-theoretic-transforms/>
+/// See <https://github.com/mir-protocol/plonky2/blob/3a6d693f3ffe5aa1636e0066a4ea4885a10b5cdf/field/src/goldilocks_field.rs#L340-L356>
+#[inline(always)]
+pub fn reduce_159(low: u64, mid: u32, high: u64) -> u64 {
+    let (mut low2, carry) = low.overflowing_sub(high);
+    if carry {
+        low2 = low2.wrapping_add(PRIME);
+    }
+
+    let mut product = (mid as u64) << 32;
+    product -= product >> 32;
+
+    let (mut result, carry) = product.overflowing_add(low2);
+    if carry {
+        result = result.wrapping_sub(PRIME);
+    }
+
+    if result >= PRIME {
+        result -= PRIME;
+    }
+    result
 }
 
 #[inline(always)]

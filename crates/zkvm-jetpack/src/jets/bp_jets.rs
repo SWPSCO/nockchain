@@ -3,7 +3,8 @@ use nockvm::jets::list::util::flop;
 use nockvm::jets::util::slot;
 use nockvm::jets::{JetErr, Result};
 use nockvm::mem::NockStack;
-use nockvm::noun::{Atom, IndirectAtom, Noun, D, NO, T, YES};
+use nockvm::noun::{Atom, Cell, IndirectAtom, Noun, D, NO, T, YES};
+use tracing::debug;
 
 use crate::form::fext::{fadd, fmul};
 use crate::form::math::bpoly::*;
@@ -324,4 +325,45 @@ pub fn bpeval_lift_jet(context: &mut Context, subject: Noun) -> Result {
         res = res_add;
         p = p_cell.tail();
     }
+}
+
+pub fn bpdvr_jet(context: &mut Context, subject: Noun) -> Result {
+    let sam = slot(subject, 6)?;
+    let ba = slot(sam, 2)?;
+    let bb = slot(sam, 3)?;
+
+    let (Ok(ba_poly), Ok(bb_poly)) = (BPolySlice::try_from(ba), BPolySlice::try_from(bb)) else {
+        debug!("ba or bb was not a bpoly");
+        return jet_err();
+    };
+
+    if bb_poly.is_zero() {
+        debug!("divide by zero");
+        return jet_err();
+    }
+
+    let ba_deg = ba_poly.degree();
+    let bb_deg = bb_poly.degree();
+    let q_deg = ba_deg.saturating_sub(bb_deg);
+
+    let (q_len, r_len) = if ba_poly.is_zero() {
+        (1, 1)
+    } else {
+        (q_deg + 1, bb_deg + 1)
+    };
+
+    let (q_atom, q_poly): (IndirectAtom, &mut [Belt]) =
+        new_handle_mut_slice(&mut context.stack, Some(q_len as usize));
+
+    let (r_cell, r_poly): (IndirectAtom, &mut [Belt]) =
+        new_handle_mut_slice(&mut context.stack, Some(r_len as usize));
+
+    bpdvr(ba_poly.0, bb_poly.0, q_poly, r_poly);
+
+    let res_cell_q = finalize_poly(&mut context.stack, Some(q_len as usize), q_atom);
+
+    let r_final_len = r_poly.degree() + 1;
+    let res_cell_r = finalize_poly(&mut context.stack, Some(r_final_len as usize), r_cell);
+
+    Ok(Cell::new(&mut context.stack, res_cell_q, res_cell_r).as_noun())
 }

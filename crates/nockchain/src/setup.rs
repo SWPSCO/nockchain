@@ -18,7 +18,7 @@ pub static FAKENET_GENESIS_BLOCK: &[u8] = include_bytes!(env!("FAKENET_GENESIS_P
 #[cfg(not(feature = "bazel_build"))]
 pub static FAKENET_GENESIS_BLOCK: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/jams/fakenet-genesis.jam"
+    "/jams/fakenet-genesis-pow-2-bex-1.jam"
 ));
 
 // TODO: Necessary for now, but we will delete this parameter from genesis seal
@@ -27,9 +27,18 @@ pub const FAKENET_GENESIS_MESSAGE: &str = "3WNP3WtcQJYtP5PCvFHDQVEeiZEznsULEY5Lc
 pub const REALNET_GENESIS_MESSAGE: &str = "2c8Ltbg44dPkEGcNPupcVAtDgD87753M9pG2fg8yC2mTEqg5qAFvvbT";
 
 pub enum SetupCommand {
-    PokeFakenetConstants,
+    PokeFakenetConstants(BlockchainConstants),
     PokeSetGenesisSeal(String),
     PokeSetBtcData,
+}
+
+pub fn fakenet_blockchain_constaints(pow_len: u64, target_bex: u64) -> BlockchainConstants {
+    BlockchainConstants::new()
+        .with_pow_len(pow_len)
+        .with_genesis_target_atom_bex(target_bex as u128)
+        .with_update_candidate_timestamp_interval(Seconds(15 * 60))
+        .with_coinbase_timelock_min(0)
+        .with_first_month_coinbase_min(0)
 }
 
 pub async fn poke<J: Jammer + Send + 'static>(
@@ -37,15 +46,9 @@ pub async fn poke<J: Jammer + Send + 'static>(
     command: SetupCommand,
 ) -> Result<(), Box<dyn Error>> {
     let poke: NounSlab = match command {
-        SetupCommand::PokeFakenetConstants => {
+        SetupCommand::PokeFakenetConstants(constants) => {
             let mut poke_slab = NounSlab::new();
             let tag = make_tas(&mut poke_slab, "set-constants").as_noun();
-            let constants = BlockchainConstants::new()
-                .with_pow_len(1)
-                .with_genesis_target_atom_bex(1)
-                .with_update_candidate_timestamp_interval(Seconds(15 * 60))
-                .with_coinbase_timelock_min(0)
-                .with_first_month_coinbase_min(0);
 
             let constants_slab = constants.into_slab();
             poke_slab.copy_from_slab(&constants_slab);
@@ -87,11 +90,17 @@ pub async fn poke<J: Jammer + Send + 'static>(
     Ok(())
 }
 
-pub fn heard_fake_genesis_block() -> Result<NounSlab, NockAppError> {
+pub fn heard_fake_genesis_block(
+    fake_genesis_data: Option<Vec<u8>>,
+) -> Result<NounSlab, NockAppError> {
     let mut poke_slab = NounSlab::new();
     let tag = make_tas(&mut poke_slab, "heard-block").as_noun();
     // load the block bytes
-    let block_bytes = Bytes::from(FAKENET_GENESIS_BLOCK);
+    let block_bytes = if let Some(data) = fake_genesis_data {
+        Bytes::from(data)
+    } else {
+        Bytes::from(FAKENET_GENESIS_BLOCK)
+    };
     let block = poke_slab.cue_into(block_bytes)?;
     let poke_noun = T(&mut poke_slab, &[D(tas!(b"fact")), D(0), tag, block]);
     poke_slab.set_root(poke_noun);

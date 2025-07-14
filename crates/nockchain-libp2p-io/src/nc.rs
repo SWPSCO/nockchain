@@ -14,7 +14,7 @@ use libp2p::peer_store::Store;
 use libp2p::request_response::Event::*;
 use libp2p::request_response::Message::*;
 use libp2p::request_response::{self};
-use libp2p::swarm::{ConnectionId, DialError, SwarmEvent};
+use libp2p::swarm::{ConnectionId, DialError, ListenError, SwarmEvent};
 use libp2p::{
     allow_block_list, connection_limits, memory_connection_limits, Multiaddr, PeerId, Swarm,
 };
@@ -168,6 +168,7 @@ pub fn make_libp2p_driver(
     memory_limits: Option<memory_connection_limits::Behaviour>,
     initial_peers: &[Multiaddr],
     force_peers: &[Multiaddr],
+    prune_inbound_size: Option<usize>,
     equix_builder: equix::EquiXBuilder,
     chain_interval: Duration,
     init_complete_tx: Option<tokio::sync::oneshot::Sender<()>>,
@@ -277,19 +278,29 @@ pub fn make_libp2p_driver(
                                 identify_received(&mut swarm, peer_id, info)?;
                             },
                             SwarmEvent::ConnectionEstablished { connection_id, peer_id, endpoint, .. } => {
-                                message_tracker.lock().await.track_connection(connection_id, peer_id, endpoint.get_remote_address());
+                                message_tracker.lock().await.track_connection(connection_id, peer_id, endpoint.get_remote_address(), endpoint.clone());
                                 debug!("SEvent: {peer_id} is new friend via: {endpoint:?}");
                             },
                             SwarmEvent::ConnectionClosed { connection_id, peer_id, endpoint, cause, .. } => {
                                 message_tracker.lock().await.lost_connection(connection_id);
-                                info!("SEvent: friendship ended with {peer_id} via: {endpoint:?}. cause: {cause:?}");
-                                // Clean up the message tracker when a peer disconnects
-                                let mut tracker = message_tracker.lock().await;
-                                tracker.remove_peer(&peer_id);
+                                debug!("SEvent: friendship ended with {peer_id} via: {endpoint:?}. cause: {cause:?}");
                             },
                             SwarmEvent::IncomingConnectionError { local_addr, send_back_addr, error, .. } => {
                                trace!("SEvent: Failed incoming connection from {} to {}: {}",
                                send_back_addr, local_addr, error);
+
+                               // When connection limits are reached, randomly prune inbound connections
+                               match error {
+                                   ListenError::Denied { cause } => {
+                                       metrics.incoming_connections_blocked_by_limits.increment();
+                                       if let Some(prune_factor) = prune_inbound_size {
+                                           if let Ok(_exceeded) = cause.downcast::<libp2p::connection_limits::Exceeded>() {
+                                               message_tracker.lock().await.prune_inbound_connections(metrics.clone(), &mut swarm, prune_factor);
+                                           }
+                                       }
+                                   }
+                                   _ => {}
+                               }
                             },
                             SwarmEvent::Behaviour(NockchainEvent::RequestResponse(Message { connection_id , peer, message })) => {
                                 trace!("SEvent: received RequestResponse");
@@ -619,6 +630,17 @@ async fn handle_effect(
             } else {
                 connected_peers.clone()
             };
+
+            if request_type.data() == tas!(b"raw-tx") {
+                if let Ok(raw_tx_cell) = request_body.tail().as_cell() {
+                    if raw_tx_cell.head().eq_bytes(b"by-id") {
+                        trace!("Requesting raw transaction by ID, removing ID from seen set");
+                        let tx_id = tip5_hash_to_base58(raw_tx_cell.tail())?;
+                        let mut tracker_guard = message_tracker.clone().lock_owned().await;
+                        tracker_guard.seen_txs.remove(&tx_id);
+                    }
+                }
+            }
 
             debug!("Sending request to {} peers", target_peers.len());
 

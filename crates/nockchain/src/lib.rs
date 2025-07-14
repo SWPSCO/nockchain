@@ -383,7 +383,21 @@ pub async fn init_with_kernel<J: Jammer + Send + 'static>(
     };
 
     let born_init_tx = if cli.as_ref().map(|c| c.fakenet).unwrap_or(false) {
-        setup::poke(&mut nockapp, setup::SetupCommand::PokeFakenetConstants).await?;
+        let pow_len = cli
+            .as_ref()
+            .map(|c| c.fakenet_pow_len.unwrap_or(2))
+            .unwrap_or(2);
+        let target = cli
+            .as_ref()
+            .map(|c| c.fakenet_log_difficulty.unwrap_or(1))
+            .unwrap_or(1);
+        setup::poke(
+            &mut nockapp,
+            setup::SetupCommand::PokeFakenetConstants(setup::fakenet_blockchain_constaints(
+                pow_len, target,
+            )),
+        )
+        .await?;
         if let Some(true) = is_kernel_mainnet {
             panic!("Fatal: attemped to boot mainnet node with fakenet flag")
         } else if !genesis_seal_set {
@@ -399,7 +413,17 @@ pub async fn init_with_kernel<J: Jammer + Send + 'static>(
         let born_init_tx = fake_genesis_signals.register_driver("born");
         let _ = fake_genesis_signals.create_task();
 
-        let poke = setup::heard_fake_genesis_block()?;
+        // Check if custom genesis path is provided, read file if so
+        let genesis_data = if let Some(genesis_path) = cli
+            .as_ref()
+            .and_then(|c| c.fakenet_genesis_jam_path.as_ref())
+        {
+            Some(fs::read(genesis_path)?)
+        } else {
+            None
+        };
+
+        let poke = setup::heard_fake_genesis_block(genesis_data)?;
         let fakenet_driver = fake_genesis_signals.create_driver(poke, None);
         nockapp.add_io_driver(fakenet_driver).await;
         Some(born_init_tx)
@@ -431,10 +455,23 @@ pub async fn init_with_kernel<J: Jammer + Send + 'static>(
         }
     });
 
+    let prune_inbound = cli.as_ref().and_then(|c| c.prune_inbound);
+
     let mine = cli.as_ref().map_or(false, |c| c.mine);
 
+    let threads = cli
+        .as_ref()
+        .and_then(|c| {
+            if let Some(num_threads) = &c.num_threads {
+                Some(*num_threads)
+            } else {
+                Some(1)
+            }
+        })
+        .expect("Failed to get number of threads for mining");
+
     let mining_driver =
-        crate::mining::create_mining_driver(mining_config, mine, Some(mining_init_tx));
+        crate::mining::create_mining_driver(mining_config, mine, threads, Some(mining_init_tx));
     nockapp.add_io_driver(mining_driver).await;
 
     let libp2p_driver = nockchain_libp2p_io::nc::make_libp2p_driver(
@@ -445,6 +482,7 @@ pub async fn init_with_kernel<J: Jammer + Send + 'static>(
         memory_limits,
         &initial_peer_multiaddrs,
         &force_peers,
+        prune_inbound,
         equix_builder,
         config::CHAIN_INTERVAL,
         Some(libp2p_init_tx),
@@ -506,28 +544,28 @@ fn welcome() {
 
     print_banner(&mut stdout, banner);
 
-    let info = [
-        ("Build label", env!("BUILD_EMBED_LABEL")),
-        ("Build host", env!("BUILD_HOST")),
-        ("Build user", env!("BUILD_USER")),
-        ("Build timestamp", env!("BUILD_TIMESTAMP")),
-        ("Build date", env!("FORMATTED_DATE")),
-        // ("Git commit", env!("BAZEL_GIT_COMMIT")),
-        // ("Build timestamp", env!("VERGEN_BUILD_TIMESTAMP")),
-        // ("Cargo debug", env!("VERGEN_CARGO_DEBUG")),
-        // ("Cargo features", env!("VERGEN_CARGO_FEATURES")),
-        // ("Cargo opt level", env!("VERGEN_CARGO_OPT_LEVEL")),
-        // ("Cargo target", env!("VERGEN_CARGO_TARGET_TRIPLE")),
-        // ("Git branch", env!("VERGEN_GIT_BRANCH")),
-        // ("Git commit date", env!("VERGEN_GIT_COMMIT_DATE")),
-        // ("Git commit author", env!("VERGEN_GIT_COMMIT_AUTHOR_NAME")),
-        // ("Git commit message", env!("VERGEN_GIT_COMMIT_MESSAGE")),
-        // ("Git commit timestamp", env!("VERGEN_GIT_COMMIT_TIMESTAMP")),
-        // ("Git commit SHA", env!("VERGEN_GIT_SHA")),
-        // ("Rustc channel", env!("VERGEN_RUSTC_CHANNEL")),
-        // ("Rustc host", env!("VERGEN_RUSTC_HOST_TRIPLE")),
-        // ("Rustc LLVM version", env!("VERGEN_RUSTC_LLVM_VERSION")),
-    ];
+    //let info = [
+    //("Build label", env!("BUILD_EMBED_LABEL")),
+    //("Build host", env!("BUILD_HOST")),
+    //("Build user", env!("BUILD_USER")),
+    //("Build timestamp", env!("BUILD_TIMESTAMP")),
+    //("Build date", env!("FORMATTED_DATE")),
+    // ("Git commit", env!("BAZEL_GIT_COMMIT")),
+    // ("Build timestamp", env!("VERGEN_BUILD_TIMESTAMP")),
+    // ("Cargo debug", env!("VERGEN_CARGO_DEBUG")),
+    // ("Cargo features", env!("VERGEN_CARGO_FEATURES")),
+    // ("Cargo opt level", env!("VERGEN_CARGO_OPT_LEVEL")),
+    // ("Cargo target", env!("VERGEN_CARGO_TARGET_TRIPLE")),
+    // ("Git branch", env!("VERGEN_GIT_BRANCH")),
+    // ("Git commit date", env!("VERGEN_GIT_COMMIT_DATE")),
+    // ("Git commit author", env!("VERGEN_GIT_COMMIT_AUTHOR_NAME")),
+    // ("Git commit message", env!("VERGEN_GIT_COMMIT_MESSAGE")),
+    // ("Git commit timestamp", env!("VERGEN_GIT_COMMIT_TIMESTAMP")),
+    // ("Git commit SHA", env!("VERGEN_GIT_SHA")),
+    // ("Rustc channel", env!("VERGEN_RUSTC_CHANNEL")),
+    // ("Rustc host", env!("VERGEN_RUSTC_HOST_TRIPLE")),
+    // ("Rustc LLVM version", env!("VERGEN_RUSTC_LLVM_VERSION")),
+    //];
 
-    print_version_info(&mut stdout, &info);
+    //print_version_info(&mut stdout, &info);
 }

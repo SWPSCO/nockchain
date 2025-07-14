@@ -25,8 +25,11 @@ const DEFAULT_LOG_FILTER: &str = "info,slogger=trace";
 
 #[derive(Debug, Clone, ValueEnum)]
 pub enum NockStackSize {
+    Tiny,
+    Small,
     Normal,
-    Big,
+    Medium,
+    Large,
     Huge,
 }
 
@@ -284,12 +287,24 @@ pub async fn setup_<J: Jammer + Send + 'static>(
 
     let kernel_f = async |checkpoint| {
         let kernel: Kernel<SaveableCheckpoint> = match cli.stack_size {
+            NockStackSize::Tiny => {
+                Kernel::load_with_hot_state_tiny(jam, checkpoint, hot_state, test_jets, cli.trace)
+                    .await?
+            }
+            NockStackSize::Small => {
+                Kernel::load_with_hot_state_small(jam, checkpoint, hot_state, test_jets, cli.trace)
+                    .await?
+            }
             NockStackSize::Normal => {
                 Kernel::load_with_hot_state(jam, checkpoint, hot_state, test_jets, cli.trace)
                     .await?
             }
-            NockStackSize::Big => {
-                Kernel::load_with_hot_state_big(jam, checkpoint, hot_state, test_jets, cli.trace)
+            NockStackSize::Medium => {
+                Kernel::load_with_hot_state_medium(jam, checkpoint, hot_state, test_jets, cli.trace)
+                    .await?
+            }
+            NockStackSize::Large => {
+                Kernel::load_with_hot_state_large(jam, checkpoint, hot_state, test_jets, cli.trace)
                     .await?
             }
             NockStackSize::Huge => {

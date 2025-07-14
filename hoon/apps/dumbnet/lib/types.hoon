@@ -329,10 +329,16 @@
       [%request p=request]  :: request specific tx or block
       [%track p=track]  :: runtime tracking of blocks for %liar-block-id effect
       [%seen p=seen]    ::  seen so don't reprocess
-      [%mine prover-input:sp]
+      [%mine mine-start]
       lie
       span-effect
       [%exit code=@]
+  ==
+::
++$  mine-start
+  $%  [%0 block-commitment=noun-digest:tip5:zeke target=bignum:bignum:dt pow-len=@]
+      [%1 block-commitment=noun-digest:tip5:zeke target=bignum:bignum:dt pow-len=@]
+      [%2 block-commitment=noun-digest:tip5:zeke target=bignum:bignum:dt pow-len=@]
   ==
 ::
 +$  seen

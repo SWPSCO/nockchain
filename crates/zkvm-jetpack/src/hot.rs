@@ -7,6 +7,7 @@ use crate::jets::cheetah_jets::*;
 use crate::jets::compute_table_jets_v2::*;
 use crate::jets::crypto_jets::*;
 use crate::jets::fext_jets::*;
+use crate::jets::fp_jets::*;
 use crate::jets::fpntt_jets::*;
 use crate::jets::mary_jets::*;
 use crate::jets::mega_jets::*;
@@ -15,6 +16,7 @@ use crate::jets::proof_gen_jets::*;
 use crate::jets::shape_jets::*;
 use crate::jets::tip5_jets::*;
 use crate::jets::tip5_sponge::*;
+use crate::jets::trace_gen_jets::*;
 use crate::jets::verifier_jets::*;
 
 pub fn produce_prover_hot_state() -> Vec<HotEntry> {
@@ -27,6 +29,7 @@ pub fn produce_prover_hot_state() -> Vec<HotEntry> {
     jets.extend(XTRA_JETS);
     jets.extend(EXTENSION_FIELD_JETS);
     jets.extend(ZKVM_TABLE_JETS_V2);
+    jets.extend(CUSTOM_LIST_JETS);
 
     jets
 }
@@ -145,6 +148,7 @@ pub const XTRA_JETS: &[HotEntry] = &[
             Left(b"pow"),
             Left(b"stark-engine"),
             Left(b"stark-verifier"),
+            Left(b"verify-door"),
             Left(b"evaluate-deep"),
         ],
         1,
@@ -343,6 +347,25 @@ pub const XTRA_JETS: &[HotEntry] = &[
             Left(b"misc-lib"),
             Left(b"proof-lib"),
             Left(b"utils"),
+            Left(b"constraint-util"),
+            Left(b"build-tree-data"),
+        ],
+        1,
+        build_tree_data_jet,
+    ),
+    (
+        &[
+            K_138,
+            Left(b"one"),
+            Left(b"two"),
+            Left(b"tri"),
+            Left(b"qua"),
+            Left(b"pen"),
+            Left(b"zeke"),
+            Left(b"ext-field"),
+            Left(b"misc-lib"),
+            Left(b"proof-lib"),
+            Left(b"utils"),
             Left(b"fri"),
             Left(b"table-lib"),
             Left(b"stark-core"),
@@ -433,6 +456,21 @@ pub const EXTENSION_FIELD_JETS: &[HotEntry] = &[
         ],
         1,
         bp_coseword_jet,
+    ),
+    (
+        &[
+            K_138,
+            Left(b"one"),
+            Left(b"two"),
+            Left(b"tri"),
+            Left(b"qua"),
+            Left(b"pen"),
+            Left(b"zeke"),
+            Left(b"ext-field"),
+            Left(b"coseword"),
+        ],
+        1,
+        fp_coseword_jet,
     ),
     (
         &[
@@ -568,6 +606,51 @@ pub const EXTENSION_FIELD_JETS: &[HotEntry] = &[
         ],
         1,
         fp_ntt_jet,
+    ),
+    (
+        &[
+            K_138,
+            Left(b"one"),
+            Left(b"two"),
+            Left(b"tri"),
+            Left(b"qua"),
+            Left(b"pen"),
+            Left(b"zeke"),
+            Left(b"ext-field"),
+            Left(b"init-fpoly"),
+        ],
+        1,
+        init_fpoly_jet,
+    ),
+    (
+        &[
+            K_138,
+            Left(b"one"),
+            Left(b"two"),
+            Left(b"tri"),
+            Left(b"qua"),
+            Left(b"pen"),
+            Left(b"zeke"),
+            Left(b"ext-field"),
+            Left(b"fpeval"),
+        ],
+        1,
+        fpeval_jet,
+    ),
+    (
+        &[
+            K_138,
+            Left(b"one"),
+            Left(b"two"),
+            Left(b"tri"),
+            Left(b"qua"),
+            Left(b"pen"),
+            Left(b"zeke"),
+            Left(b"ext-field"),
+            Left(b"lift-to-fpoly"),
+        ],
+        1,
+        lift_to_fpoly_jet,
     ),
 ];
 
@@ -786,6 +869,20 @@ pub const BASE_POLY_JETS: &[HotEntry] = &[
         ],
         1,
         bp_hadamard_jet,
+    ),
+    (
+        &[
+            K_138,
+            Left(b"one"),
+            Left(b"two"),
+            Left(b"tri"),
+            Left(b"qua"),
+            Left(b"pen"),
+            Left(b"zeke"),
+            Left(b"bpdvr"),
+        ],
+        1,
+        bpdvr_jet,
     ),
 ];
 
@@ -1181,4 +1278,19 @@ pub const CURVE_JETS: &[HotEntry] = &[(
     ],
     1,
     ch_scal_jet,
+)];
+
+pub const CUSTOM_LIST_JETS: &[HotEntry] = &[(
+    &[
+        K_138,
+        Left(b"one"),
+        Left(b"two"),
+        Left(b"tri"),
+        Left(b"qua"),
+        Left(b"pen"),
+        Left(b"zeke"),
+        Left(b"range"),
+    ],
+    1,
+    range_jet,
 )];

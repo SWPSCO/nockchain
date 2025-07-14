@@ -20,7 +20,7 @@
   |_  k=kernel-state:dk
   +*  min      ~(. dumb-miner m.k constants.k)
       der      ~(. dumb-derived d.k constants.k)
-      con      ~(. dumb-consensus c.k p.k constants.k)
+      con      ~(. dumb-consensus c.k constants.k)
       t        ~(. c-transact constants.k)
   ::
   ::  We should be calling the inner kernel load in case of update
@@ -36,7 +36,9 @@
     ~&  [%nockchain-state-version -.arg]
     ::  cut
     |^
-    ~>  %bout  (check-checkpoints (state-n-to-5 arg))
+    =.  k  ~>  %bout  (update-constants (check-checkpoints (state-n-to-5 arg)))
+    =.  c.k  ~>  %bout  check-and-repair:con
+    k
     ::  this arm should be renamed each state upgrade to state-n-to-[latest] and extended to loop through all upgrades
     ++  state-n-to-5
       |=  arg=load-kernel-state:dk
@@ -165,6 +167,12 @@
         derived-state  (~(update-highest dumb-derived derived-state constants) height.q.i.list)
         list  t.list
       ==
+    ::
+    ::  ensure constants get updated to defaults set tx-engine core
+    ++  update-constants
+      |=  arg=kernel-state:dk
+      arg(constants *blockchain-constants:t)
+    ::
     ++  check-checkpoints
       |=  arg=kernel-state:dk
       =/  mainnet=(unit ?)  (~(is-mainnet dumb-derived d.arg constants.arg) c.arg)
@@ -209,7 +217,6 @@
     ::
         [%transactions ~]
       ^-  (unit (unit (z-mip block-id:t tx-id:t tx:t)))
-      ~&  txs.c.k
       ``txs.c.k
     ::
         [%raw-transactions ~]
@@ -265,7 +272,6 @@
     ::
         [%desk-hash ~]
       ^-  (unit (unit (unit @uvI)))
-      ~&  desk-hash.a.k
       ``desk-hash.a.k
     ::
         [%mining-pubkeys ~]
@@ -299,41 +305,25 @@
       :-  pubkeys.m.k
       ?~  heaviest-block
         ~
-      =+  res=(to-page-summary:page:t (to-page:local-page:t u.heaviest-block))
-      ~&  res
-      `res
+      `(to-page-summary:page:t (to-page:local-page:t u.heaviest-block))
     ::
-        [%height ~]
-      ^-  (unit (unit page-number:t))
-      ?~  heaviest-block.c.k
-        [~ ~]
-      =/  heaviest-block  (~(get z-by blocks.c.k) u.heaviest-block.c.k)
-      ?~  heaviest-block
-        [~ ~]
-      =+  summary=(to-page-summary:page:t (to-page:local-page:t u.heaviest-block))
-      ``height.summary
-    ::
-        [%template ~]
-      =/  network-target=bignum:bignum:zeke
-        (~(got z-by targets.c.k) parent.candidate-block.m.k)
-      ::
-      =/  commit=block-commitment:t
-        (block-commitment:page:t candidate-block.m.k)
-      ::
-      :+  ~  ~
-      :+  (jam commit)
-        network-target=(merge:bignum:zeke network-target)
-      ::  this is obviously a placeholder!
-      ::  the idea is to have this be dynamic based on the
-      ::  network target minus some reasonable value
-      pool-target=100.000
-    ::
+         [%blocks-summary ~]
+      ^-  (unit (unit (list [block-id:t page:t])))
+      :-  ~
+      :-  ~
+      %~  tap  z-by
+      ^-  (z-map block-id:t page:t)
+      %-  ~(run z-by blocks.c.k)
+      |=  lp=local-page:t
+      ^-  page:t
+      lp(pow ~)
     ==
   ::
   ++  poke
     |=  [wir=wire eny=@ our=@ux now=@da dat=*]
     ^-  [(list effect:dk) kernel-state:dk]
     |^
+    =/  old-state  m.k
     =/  cause  ((soft cause:dk) dat)
     ?~  cause
       ~>  %slog.[0 [%leaf "error: badly formatted cause, should never occur."]]
@@ -359,7 +349,22 @@
       ==
     ::  possibly update timestamp on candidate block for mining
     =.  m.k  (update-timestamp:min now)
-    effs^k
+    :_  k
+    ?.  mining.m.k
+      effs
+    ?:  =(candidate-block.m.k candidate-block.old-state)
+      effs
+    ::  emit effect if candidate block changed
+    =/  target  (~(got z-by targets.c.k) parent.candidate-block.m.k)
+    =/  version=proof-version:sp
+      (height-to-proof-version:con height.candidate-block.m.k)
+    =/  commit  (block-commitment:page:t candidate-block.m.k)
+    :_  effs
+    ?-  version
+      %0  [%mine %0 commit target pow-len:t]
+      %1  [%mine %1 commit target pow-len:t]
+      %2  [%mine %2 commit target pow-len:t]
+    ==
     ::
     ::  +heard-genesis-block: check if block is a genesis block and decide whether to keep it
     ++  heard-genesis-block
@@ -823,7 +828,7 @@
             %+  rap  3
             :~  ' with proof version '  (scot %u version.u.pow.pag)
             ==
-          ' .Skipping pow check because check-pow-flag was disabled'
+          '. Skipping pow check because check-pow-flag was disabled'
         %-  trip
         ^-  @t
         %+  rap  3
@@ -864,7 +869,7 @@
       ::
       =/  is-reorg=?
         ?~  old-heavy  %.n  ::  first block after genesis, not a reorg
-        !=(parent.pag u.old-heavy)
+        &(is-new-heaviest !=(parent.pag u.old-heavy))
       ::  case (b): new heaviest block - check if it's a reorganization
       =?  effs  is-reorg
         ?~  old-heavy  effs
@@ -884,9 +889,23 @@
           ==
         [orphaned-block-span reorg-span effs]
       ::
-      ::  Drop pending blocks and transactions which haven't
-      ::  been included in testing and are too old.
-      =.  c.k  (garbage-collect:con retain.a.k)
+      ::  Garbage collect pending blocks and excluded transactions.
+      ::  Garbage collection only runs when we receive a new heaviest
+      ::  block, since that's when the block height advances and we can
+      ::  determine what's expired. Pending blocks are removed based on
+      ::  elapsed heaviest blocks since they were heard. Excluded txs are
+      ::  removed based on the same criteria with the added check that they
+      ::  they aren't spent in the current heaviest chain.
+      =?  c.k  is-new-heaviest
+        (garbage-collect:con retain.a.k)
+      ::
+      ::  if new block is heaviest, regossip txs that haven't been garbage collected
+      =?  effs  is-new-heaviest
+        %-  ~(rep z-in excluded-txs.c.k)
+        |=  [=tx-id:t effs=_effs]
+        [[%gossip %0 %heard-tx (got-raw-tx:con tx-id)] effs]
+      ::  regossip block transactions if mining
+      =.  effs  (weld (regossip-block-txs-effects pag) effs)
       ::
       ::  tell the miner about the new block
       =.  m.k  (heard-new-block:min c.k now)
@@ -950,6 +969,8 @@
       |^
       ?-  -.command
           %born
+        ::  We leave this string interpolation in because %born only happens once on boot
+        ~&  constants+constants.k
         (do-born eny)
       ::
           %pow
@@ -976,6 +997,7 @@
       ::
           %btc-data
         do-btc-data
+      ::
       ::  !!! COMMANDS BELOW ARE ONLY FOR TESTING. NEVER CALL IF RUNNING MAINNET !!!
       ::
           %set-constants
@@ -1026,16 +1048,6 @@
         ?.  =(bc.command commit)
           ~&  "mined for wrong (old) block commitment"
           (do-mine nonce.command)
-        ?.  =(nonce.command next-nonce.m.k)
-          ~&  "mined wrong (old) nonce"
-          =/  version=proof-version:sp
-            (height-to-proof-version:con height.candidate-block.m.k)
-          :_  k
-          ?-  version
-            %0  [%mine %0 commit next-nonce.m.k pow-len:t]~
-            %1  [%mine %1 commit next-nonce.m.k pow-len:t]~
-            %2  [%mine %2 commit next-nonce.m.k pow-len:t]~
-          ==
         ?:  %+  check-target:mine  dig.command
             (~(got z-by targets.c.k) parent.candidate-block.m.k)
           =.  m.k  (set-pow:min prf.command)
@@ -1045,8 +1057,7 @@
           :_  k
           (weld heard-block-effs mine-effs)
         :: mine the next nonce
-        :: (do-mine (atom-to-digest:tip5:zeke dig.command))
-        `k
+        (do-mine (atom-to-digest:tip5:zeke dig.command))
       ::
       ++  do-set-mining-key
         ^-  [(list effect:dk) kernel-state:dk]
@@ -1127,7 +1138,7 @@
         ?:  init.a.k
           ::  kernel in init phase, command ignored
           `k
-        =/  tx-req-effs=(list effect:dk)
+        =/  effects=(list effect:dk)
           %+  turn  missing-tx-ids:con
           |=  =tx-id:t
           ^-  effect:dk
@@ -1138,10 +1149,11 @@
           ?~  heaviest-block.c.k
             *page-number:t  ::  rerequest genesis block
           +(height:(~(got z-by blocks.c.k) u.heaviest-block.c.k))
-        =/  effs=(list effect:dk)
-          :-  [%request %block %by-height heavy-height]
-          tx-req-effs
-        effs^k
+        =.  effects
+          [[%request %block %by-height heavy-height] effects]
+        =.  effects
+          (weld regossip-candidate-block-txs-effects effects)
+        effects^k
       ::
       ++  do-genesis
         ::  generate genesis block and sets it as candidate block
@@ -1192,17 +1204,18 @@
           `k
         =/  commit=block-commitment:t
           (block-commitment:page:t candidate-block.m.k)
+        =/  target  target.candidate-block.m.k
         =/  proof-version  (height-to-proof-version:con height.candidate-block.m.k)
-        =/  proof-input=prover-input:sp
+        =/  mine-start
           ?-  proof-version
-            %0  [%0 commit nonce pow-len:t]
-            %1  [%1 commit nonce pow-len:t]
-            %2  [%2 commit nonce pow-len:t]
+            %0  [%0 commit target pow-len:t]
+            %1  [%1 commit target pow-len:t]
+            %2  [%2 commit target pow-len:t]
           ==
         =.  next-nonce.m.k  nonce
-        :: ~&  mining-on+nonce
+        ~&  mining-on+nonce
         :_  k
-        [%mine proof-input]~
+        [%mine mine-start]~
       ::
       ::  only send a %elders request for reasonable heights
       ++  missing-parent-effects
@@ -1246,6 +1259,24 @@
           ==
         ~>  %slog.[0 leaf+log-message]
         [%request %block %elders block-id peer-id]~ :: ask for elders
+    ::
+    ::  only if mining: re-gossip transactions included in block when block is fully validated
+    ::  precondition: all transactions for block are in raw-txs
+    ++  regossip-block-txs-effects
+      |=  =page:t
+      ^-  (list effect:dk)
+      ?.  mining.m.k  ~
+      %-  ~(rep z-in tx-ids.page)
+      |=  [=tx-id:t effects=(list effect:dk)]
+      ^-  (list effect:dk)
+      =/  tx=raw-tx:t  raw-tx:(~(got z-by raw-txs.c.k) tx-id)
+      =/  fec=effect:dk  [%gossip %0 %heard-tx tx]
+      [fec effects]
+    ::
+    ::  only if mining: regossip transactions included in candidate block
+    ++  regossip-candidate-block-txs-effects
+      ^-  (list effect:dk)
+      (regossip-block-txs-effects candidate-block.m.k)
     --::  +poke
   --::  +kernel
 --

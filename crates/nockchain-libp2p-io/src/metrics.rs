@@ -43,6 +43,11 @@ metrics_struct![
     (peer_connections_established, "nockchain-libp2p-io.peer_connections_established", Count),
     (peer_connections_closed, "nockchain-libp2p-io.peer_connections_closed", Count),
     (peer_connection_failures, "nockchain-libp2p-io.peer_connection_failures", Count),
+    (
+        incoming_connections_blocked_by_limits,
+        "nockchain-libp2p-io.incoming_connections_blocked_by_limits", Count
+    ),
+    (incoming_connections_pruned, "nockchain-libp2p-io.incoming_connections_pruned", Count),
     (kademlia_bootstrap_attempts, "nockchain-libp2p-io.kademlia_bootstrap_attempts", Count),
     (kademlia_bootstrap_failures, "nockchain-libp2p-io.kademlia_bootstrap_failures", Count),
     (active_peer_connections, "nockchain-libp2p-io.active_peer_connections", Gauge),

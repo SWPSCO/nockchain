@@ -1,5 +1,6 @@
 use bitvec::prelude::{BitSlice, Lsb0};
 use ibig::UBig;
+use nockvm::interpreter::Context;
 use nockvm::jets::JetErr;
 use nockvm::mem::NockStack;
 use nockvm::noun::{Atom, IndirectAtom, Noun, D, DIRECT_MAX, NONE, T};
@@ -127,4 +128,14 @@ pub fn hoon_list_to_vecnoun(list: Noun) -> Result<Vec<Noun>, JetErr> {
 #[inline(always)]
 pub fn is_hoon_list_end(noun: &Noun) -> bool {
     unsafe { noun.raw_equals(&D(0)) }
+}
+
+pub fn make_cell_hash(context: &mut Context, hash: &[u64]) -> Noun {
+    assert!(hash.len() == 5);
+    let mut res_cell = Atom::new(&mut context.stack, hash[4]).as_noun();
+    for i in (0..=3).rev() {
+        let b = Atom::new(&mut context.stack, hash[i]).as_noun();
+        res_cell = T(&mut context.stack, &[b, res_cell]);
+    }
+    res_cell
 }

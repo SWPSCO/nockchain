@@ -42,7 +42,7 @@
           ::  14 days measured in seconds, 1.209.600
           target-epoch-duration=^~(:(mul 14 24 60 60))
           ::  how long to wait before changing candidate block timestamp
-          update-candidate-timestamp-interval=~m2
+          update-candidate-timestamp-interval=~m5
           ::  how far in the future to accept a timestamp on a block
           max-future-timestamp=^~((mul 60 120))
           ::  how many blocks in the past to look at to compute median timestamp from
@@ -392,6 +392,7 @@
 ::    possible.
 ++  page
   =<  form
+  ~%  %page  ..page  ~
   |%
   +$  form
     $+  page
@@ -536,8 +537,9 @@
   ::    transactions (which are not inlined in the block, so must also be passed
   ::    in). we pass in raw-txs instead of txs because this is utilized when building
   ::    candidate blocks, and so the txs will not be available in the $consensus-state.
-  ++  compute-size
-    |=  [pag=form got-raw-tx=$-(tx-id raw-tx)]
+  ++  compute-size-without-txs
+    ~/  %compute-size-without-txs
+    |=  pag=form
     ^-  size
     ;:  add
         ::  max size of digest in bits, we need to check against upper bound because
@@ -548,13 +550,16 @@
         :: size of page in number of bits. note that we do not include the digest
         :: or powork.
         (compute-size-jam `*`+>.pag)
-        ::
-        %+  roll
-          ~(tap z-in tx-ids.pag)
-        |=  [id=tx-id sum-sizes=size]
-        %+  add  sum-sizes
-        (compute-size:raw-tx (got-raw-tx id))
     ==
+  ::
+  ++  txs-size-by-id
+    ~/  %txs-size-by-id
+    |=  [pag=form got-raw-tx=$-(tx-id raw-tx)]
+    %+  roll
+      ~(tap z-in tx-ids.pag)
+    |=  [id=tx-id sum-sizes=size]
+    %+  add  sum-sizes
+    (compute-size:raw-tx (got-raw-tx id))
   ::
   ++  to-local-page
     |=  pag=form
@@ -2203,5 +2208,13 @@
     %_  tac
       txs   (~(put z-in txs.tac) tx)
     ==
+  ::
+  ++  txs-size-by-set
+    ~/  %txs-size-by-set
+    |=  form
+    %-  ~(rep z-in txs)
+    |=  [=tx sum-sizes=^size]
+    %+  add  sum-sizes
+    (compute-size:raw-tx -.tx)
   --
 --

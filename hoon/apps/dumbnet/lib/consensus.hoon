@@ -6,8 +6,56 @@
 ::
 ::  this library is where _every_ update to the consensus state
 ::  occurs, no matter how minor.
-|_  [c=consensus-state:dk p=pending-state:dk =blockchain-constants:dumb-transact]
+|_  [c=consensus-state:dk =blockchain-constants:dumb-transact]
 +*  t  ~(. dumb-transact blockchain-constants)
+::
+::  assert preconditions, provide reason for failure
+++  apt
+  ^-  (unit @tas)
+  ?.  ~(apt z-by blocks-needed-by.c)  `%inapt-blocks-needed-by
+  ?.  ~(apt z-in excluded-txs.c)  `%inapt-excluded-txs
+  ?.  ~(apt z-by spent-by.c)  `%inapt-spent-by
+  ?.  ~(apt z-by pending-blocks.c)  `%inapt-pending-blocks
+  ?.  ~(apt z-by balance.c)  `%inapt-balance
+  ?.  ~(apt z-by txs.c)  `%inapt-txs
+  ::  these would take too long but a full semantic verification would include them
+  ::?.  ~(apt z-by raw-txs.c)  `%inapt-raw-txs
+  ::?.  ~(apt z-by blocks.c)  `%inapt-blocks
+  ::?.  ~(apt z-by min-timestamps.c)  `%inapt-min-timestamps
+  ::?.  ~(apt z-by epoch-start.c)  `%inapt-epoch-start
+  ::?.  ~(apt z-by targets.c)  `%inapt-targets
+  ?.  =(excluded-txs.c (~(int z-in excluded-txs.c) ~(key z-by raw-txs.c)))
+    `%extra-excluded-txs
+  ?.  =(*(z-set tx-id:t) (~(int z-in excluded-txs.c) ~(key z-by blocks-needed-by.c)))
+    `%excluded-txs-arent
+  ?.  =(excluded-txs.c (~(dif z-in ~(key z-by raw-txs.c)) ~(key z-by blocks-needed-by.c)))
+    `%txs-fell-through-cracks
+  ~
+::
+::  repair a bad state
+++  repair
+  |=  reason=@tas
+  ~&  [%repair reason]
+  |-  ^-  consensus-state:dk
+  ?+  reason  ~|  [%cannot-repair reason]  !!
+      %extra-included-txs
+    $(reason %txs-fell-through-cracks)
+  ::
+      %excluded-txs-arent
+    $(reason %txs-fell-through-cracks)
+  ::
+      %txs-fell-through-cracks
+    =/  rtx=(z-map tx-id:t *)  raw-txs.c
+    =/  bnb=(z-map tx-id:t *)  blocks-needed-by.c
+    c(excluded-txs ~(key z-by (~(dif z-by rtx) bnb)))
+  ==
+::
+::  check for bad state, repair if necessary
+++  check-and-repair
+  |-  ^-  consensus-state:dk
+  =/  reason  apt
+  ?~  reason  c
+  $(c (repair u.reason))
 ::
 ++  has-raw-tx
   |=  tid=tx-id:t
@@ -67,13 +115,6 @@
     c(btc-data `btc-hash)
   ~>  %slog.[0 leaf+"received btc block hash, waiting to hear nockchain genesis block!"]
   c(btc-data `btc-hash)
-::
-++  inputs-in-spent-by
-  |=  raw=raw-tx:t
-  ^-  ?
-  %-  ~(any z-in (inputs-names:raw-tx:t raw))
-  |=  =nname:t
-  (~(has z-by spent-by.c) nname)
 ::
 ++  inputs-in-heaviest-balance
   |=  raw=raw-tx:t
@@ -179,7 +220,11 @@
 ++  check-size
   |=  pag=page:t
   ^-  ?
-  (lte (compute-size:page:t pag got-raw-tx) max-block-size:t)
+  %+  lte
+    %+  add
+      (compute-size-without-txs:page:t pag)
+    (txs-size-by-id:page:t pag got-raw-tx)
+  max-block-size:t
 ::
 ++  accept-page
   |=  [pag=page:t acc=tx-acc:t now=@da]
@@ -358,7 +403,7 @@
   ?.  (check-size pag)
     ::~&  >>>  "block {digest-b58} is too large"
     [%.n %block-too-large]
-  =/  raw-tx-set=(set (unit raw-tx:t))
+  =/  raw-tx-set=(z-set (unit raw-tx:t))
     (~(run z-in tx-ids.pag) |=(=tx-id:t (get-raw-tx tx-id)))
   =/  raw-tx-list=(list (unit raw-tx:t))  ~(tap z-in raw-tx-set)
   =|  tx-list=(list tx:t)
@@ -598,7 +643,7 @@
   =/  min-height  (sub height u.retain)
   %-  ~(rep z-by pending-blocks.c)
   |=  [[=block-id:t =page:t heard-at=@] dropable=(list block-id:t)]
-  ?:  (lth heard-at min-height)
+  ?:  (lte heard-at min-height)
     [block-id dropable]
   dropable
 ::
@@ -664,7 +709,7 @@
   ?>  (~(has z-in excluded-txs.c) tx-id)
   =/  raw-tx  raw-tx:(~(got z-by raw-txs.c) tx-id)
   =.  raw-txs.c  (~(del z-by raw-txs.c) tx-id)
-  =.  excluded-txs.c  (~(del z-by excluded-txs.c) tx-id)
+  =.  excluded-txs.c  (~(del z-in excluded-txs.c) tx-id)
   =.  spent-by.c
     %-  ~(rep z-in (inputs-names:raw-tx:t raw-tx))
     |=  [=nname:t sb=_spent-by.c]
@@ -678,7 +723,7 @@
   ?~  heaviest-block.c  ~
   =/  height  height:(~(got z-by blocks.c) u.heaviest-block.c)
   =/  spent=(z-set tx-id:t)
-    %-  ~(rep z-by excluded-txs.c)
+    %-  ~(rep z-in excluded-txs.c)
     |=  [=tx-id:t spent=(z-set tx-id:t)]
     ^-  (z-set tx-id:t)
     =/  raw-tx  raw-tx:(~(got z-by raw-txs.c) tx-id)
@@ -688,10 +733,10 @@
   ?~  retain  spent
   ?:  (lth height u.retain)  spent
   =/  min-height  (sub height u.retain)
-  %-  ~(rep z-by excluded-txs.c)
+  %-  ~(rep z-in excluded-txs.c)
   |=  [=tx-id:t dropable=_spent]
   =/  [=raw-tx:t heard-at=@]  (~(got z-by raw-txs.c) tx-id)
-  ?:  (lth heard-at min-height)
+  ?:  (lte heard-at min-height)
     (~(put z-in dropable) tx-id)
   dropable
 ::

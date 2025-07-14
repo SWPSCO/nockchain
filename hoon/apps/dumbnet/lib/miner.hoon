@@ -40,6 +40,12 @@
   ^-  mining-state:dk
   m(digest.candidate-block (compute-digest:page:t candidate-block.m))
 ::
+++  candidate-block-below-max-size
+  %+  lte
+    %+  add  (compute-size-without-txs:page:t candidate-block.m)
+    (txs-size-by-set:tx-acc:t candidate-acc.m)
+  max-block-size:t
+::
 ::  +update-timestamp: updates timestamp on candidate block if needed
 ::
 ::    this should be run every time we get a poke.
@@ -83,11 +89,16 @@
   =/  new-acc=(unit tx-acc:t)
     (process:tx-acc:t candidate-acc.m u.tx height.candidate-block.m)
   ?~  new-acc
-    ::~&  >>>  """
-    ::         tx {(trip (to-b58:hash:t id.raw))} cannot be added to candidate
-    ::         block.
-    ::         """
+    =/  print-var
+        %-  trip
+        %+  rap  3
+        :~  'tx '
+            (to-b58:hash:t id.raw)
+            ' cannot be added to candidate block.'
+        ==
+    ~>  %slog.[3 %leaf^print-var]
     m
+  =/  old-mining-state  m
   ::  we can add tx to candidate-block
   =.  tx-ids.candidate-block.m
     (~(put z-in tx-ids.candidate-block.m) id.raw)
@@ -98,6 +109,9 @@
   ::  since we don't have replace-by-fee
   ?:  =(new-fees old-fees)
     ::  fees are equal so no need to recalculate split
+    ?.  candidate-block-below-max-size
+      ~>  %slog.[0 leaf+"exceeds max block size, not adding tx"]
+      old-mining-state
     m
   ::  fees are unequal. for this miner, fees are only ever monotonically
   ::  incremented and so this assertion should never fail.
@@ -111,6 +125,10 @@
   =/  new-assets=coins:t  (add old-assets fee-diff)
   =.  coinbase.candidate-block.m
     (new:coinbase-split:t new-assets shares.m)
+  ::  check size of candidate block
+  ?.  candidate-block-below-max-size
+    ~>  %slog.[0 leaf+"exceeds max block size, not adding tx"]
+    old-mining-state
   m
 ::
 ::  +heard-new-block: refreshes the candidate block to be mined in reaction to a new block
@@ -154,7 +172,7 @@
     (new:tx-acc:t (~(get z-by balance.c) u.heaviest-block.c))
   ::
   ::  roll over the pending txs and try to include them in the new candidate block
-  %-  ~(rep z-by excluded-txs.c)
+  %-  ~(rep z-in excluded-txs.c)
   |=  [=tx-id:t min=_m]
   =.  m  min
   =/  raw  raw-tx:(~(got z-by raw-txs.c) tx-id)
