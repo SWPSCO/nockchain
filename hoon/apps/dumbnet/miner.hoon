@@ -17,7 +17,7 @@
     $:
       version=?(%0 %1)
       make-proof=?
-      commit=@
+      commit=block-commitment:t
       =pool-id
       =user-id-1
       =user-id-2
@@ -27,8 +27,8 @@
     $:
       %res
       eny=@
-      commit=@
-      prf=@
+      commit=block-commitment:t
+      prf=proof:sp
       dig=tip5-hash-atom
     ==
   ::
@@ -51,6 +51,7 @@
     |=  [wir=wire eny=@ our=@ux now=@da dat=*]
     ^-  [(list effect) k=kernel-state]
     ::
+    ~&  dat+dat
     =/  cause  ((soft cause) dat)
     ?~  cause
       ~>  %slog.[0 [%leaf "error: bad cause"]]
@@ -63,8 +64,7 @@
     =/  nonce=noun-digest:tip5
       (hash-noun-varlen:tip5 nonce-seed)
     ::
-    =/  commit=block-commitment:t
-      ;;(block-commitment:t (cue commit.cause))
+    =/  commit  commit.cause
     ::
     =/  input=prover-input:sp
       ?-  version.cause
@@ -77,10 +77,8 @@
       ?:  make-proof.cause
         (prove-block-inner:mine input)
       [*proof:sp *tip5-hash-atom]
-    ~&  %jamming-proof
-    =/  prf-jam=@  (jam prf)
     ~&  proof-done+dig
     :_  k
-    ~[[%res eny commit.cause prf-jam dig]]
+    ~[[%res eny commit prf dig]]
   --
 --

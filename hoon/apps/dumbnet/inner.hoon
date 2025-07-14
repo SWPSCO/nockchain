@@ -305,7 +305,34 @@
       :-  pubkeys.m.k
       ?~  heaviest-block
         ~
-      `(to-page-summary:page:t (to-page:local-page:t u.heaviest-block))
+      =+  res=(to-page-summary:page:t (to-page:local-page:t u.heaviest-block))
+      `res
+    ::
+        [%height ~]
+      ^-  (unit (unit page-number:t))
+      ?~  heaviest-block.c.k
+        [~ ~]
+      =/  heaviest-block  (~(get z-by blocks.c.k) u.heaviest-block.c.k)
+      ?~  heaviest-block
+        [~ ~]
+      =+  summary=(to-page-summary:page:t (to-page:local-page:t u.heaviest-block))
+      ``height.summary
+    ::
+        [%template ~]
+      ^-  (unit (unit [block-commitment:t @ @]))
+      =/  network-target=bignum:bignum:zeke
+        (~(got z-by targets.c.k) parent.candidate-block.m.k)
+      ::
+      =/  commit=block-commitment:t
+        (block-commitment:page:t candidate-block.m.k)
+      ::
+      :+  ~  ~
+      :+  commit
+        network-target=(merge:bignum:zeke network-target)
+      ::  this is obviously a placeholder!
+      ::  the idea is to have this be dynamic based on the
+      ::  network target minus some reasonable value
+      pool-target=100.000
     ::
          [%blocks-summary ~]
       ^-  (unit (unit (list [block-id:t page:t])))

@@ -5,7 +5,11 @@
 ++  check-target
   |=  [proof-hash-atom=tip5-hash-atom target-bn=bignum:bignum]
   ^-  ?
-  =/  target-atom=@  (merge:bignum target-bn)
+  (check-target-atom proof-hash-atom (merge:bignum target-bn))
+::
+++  check-target-atom
+  |=  [proof-hash-atom=tip5-hash-atom target-atom=tip5-hash-atom]
+  ^-  ?
   ?>  (lte proof-hash-atom max-tip5-atom:tip5)
   (lte proof-hash-atom target-atom)
 ::
