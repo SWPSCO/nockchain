@@ -47,13 +47,13 @@
     |=  [wir=wire eny=@ our=@ux now=@da dat=*]
     ^-  [(list effect) k=kernel-state]
     ::
-    ~&  dat+dat
     =/  cause  ((soft cause) dat)
     ?~  cause
       ~>  %slog.[0 [%leaf "error: bad cause"]]
       `k
     ::
     =/  c  u.cause
+    ~&  cause+c
     ::
     =/  input=prover-input:sp
       ?-  version.c
