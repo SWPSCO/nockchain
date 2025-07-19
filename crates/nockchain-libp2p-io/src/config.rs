@@ -27,7 +27,7 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
 /** How long QUIC should wait before timing out an idle connection */
 // const MAX_IDLE_TIMEOUT_MILLISECS: u32 = CONNECTION_TIMEOUT.as_millis() as u32;
 /** How often we should send an identify message to a peer */
-const IDENTIFY_INTERVAL: Duration = KADEMLIA_BOOTSTRAP_INTERVAL;
+const IDENTIFY_INTERVAL: Duration = Duration::from_secs(120);
 
 /** Maximum number of established *incoming* connections */
 const MAX_ESTABLISHED_INCOMING_CONNECTIONS: u32 = 96;
@@ -46,6 +46,9 @@ const MAX_PENDING_INCOMING_CONNECTIONS: u32 = 16;
 
 /** Maximum pending outcoing connections */
 const MAX_PENDING_OUTGOING_CONNECTIONS: u32 = 16;
+
+/** Minimum number of peers */
+const MIN_PEERS: usize = 8;
 
 // Request/response constants
 // const REQUEST_RESPONSE_MAX_CONCURRENT_STREAMS: usize = MAX_ESTABLISHED_CONNECTIONS as usize * 2;
@@ -121,6 +124,10 @@ pub struct LibP2PConfig {
     #[serde(default = "default_max_pending_outgoing_connections")]
     pub max_pending_outgoing_connections: u32,
 
+    /// Minimum number of peers
+    #[serde(default = "default_min_peers")]
+    pub min_peers: usize,
+
     /// Request/response timeout (seconds)
     #[serde(default = "default_request_response_timeout_secs")]
     pub request_response_timeout_secs: u64,
@@ -152,8 +159,8 @@ pub struct LibP2PConfig {
 
     /// Interval for logging peer status
     /// This is the interval at which peer status will be logged.
-    #[serde(default = "default_peer_status_log_interval_secs")]
-    pub peer_status_log_interval_secs: u64,
+    #[serde(default = "default_peer_status_interval_secs")]
+    pub peer_status_interval_secs: u64,
 
     /// Interval for debouncing elders
     #[serde(default = "default_elders_debounce_reset_secs")]
@@ -164,6 +171,10 @@ pub struct LibP2PConfig {
     /// added to the heaviest chain.
     #[serde(default = "default_seen_tx_clear_interval")]
     pub seen_tx_clear_interval: u64,
+
+    /// Timeout for pokes
+    #[serde(default = "default_poke_timeout_secs")]
+    pub poke_timeout_secs: u64,
 }
 
 // Default value functions
@@ -206,6 +217,9 @@ fn default_max_pending_incoming_connections() -> u32 {
 fn default_max_pending_outgoing_connections() -> u32 {
     MAX_PENDING_OUTGOING_CONNECTIONS
 }
+fn default_min_peers() -> usize {
+    MIN_PEERS
+}
 fn default_request_response_timeout_secs() -> u64 {
     REQUEST_RESPONSE_TIMEOUT.as_secs()
 }
@@ -226,8 +240,8 @@ fn default_peer_store_record_capacity() -> NonZero<usize> {
         .expect("Peer store record capacity must be non-zero")
 }
 
-fn default_peer_status_log_interval_secs() -> u64 {
-    60 // Log peer status every 60 seconds
+fn default_peer_status_interval_secs() -> u64 {
+    300 // Log peer status and potentially redial every 5 minutes
 }
 
 fn default_elders_debounce_reset_secs() -> u64 {
@@ -236,6 +250,10 @@ fn default_elders_debounce_reset_secs() -> u64 {
 
 fn default_seen_tx_clear_interval() -> u64 {
     SEEN_TX_CLEAR_INTERVAL // By default, clear seen_tx cache after every new block on heaviest chain
+}
+
+fn default_poke_timeout_secs() -> u64 {
+    10 // Timeout for pokes
 }
 
 // Do _not_ use this default implementation in production code. It's just a fallback.
@@ -256,14 +274,16 @@ impl Default for LibP2PConfig {
             max_established_connections_per_peer: default_max_established_connections_per_peer(),
             max_pending_incoming_connections: default_max_pending_incoming_connections(),
             max_pending_outgoing_connections: default_max_pending_outgoing_connections(),
+            min_peers: default_min_peers(),
             request_response_timeout_secs: default_request_response_timeout_secs(),
             request_high_threshold: default_request_high_threshold(),
             request_high_reset_secs: default_request_high_reset_secs(),
             identify_protocol_version: default_identify_protocol_version(),
             peer_store_record_capacity: default_peer_store_record_capacity(),
-            peer_status_log_interval_secs: default_peer_status_log_interval_secs(),
+            peer_status_interval_secs: default_peer_status_interval_secs(),
             elders_debounce_reset_secs: default_elders_debounce_reset_secs(),
             seen_tx_clear_interval: default_seen_tx_clear_interval(),
+            poke_timeout_secs: default_poke_timeout_secs(),
         }
     }
 }
@@ -346,8 +366,8 @@ impl LibP2PConfig {
         self.max_established_connections as usize * 2
     }
 
-    pub fn peer_status_log_interval_secs(&self) -> std::time::Duration {
-        Duration::from_secs(self.peer_status_log_interval_secs)
+    pub fn peer_status_interval_secs(&self) -> std::time::Duration {
+        Duration::from_secs(self.peer_status_interval_secs)
     }
 
     pub fn elders_debounce_reset(&self) -> std::time::Duration {
@@ -356,5 +376,17 @@ impl LibP2PConfig {
 
     pub fn seen_tx_clear_interval(&self) -> u64 {
         self.seen_tx_clear_interval
+    }
+
+    pub fn min_peers(&self) -> usize {
+        self.min_peers
+    }
+
+    pub fn poke_timeout_secs(&self) -> u64 {
+        self.poke_timeout_secs
+    }
+
+    pub fn poke_timeout(&self) -> Duration {
+        Duration::from_secs(self.poke_timeout_secs)
     }
 }

@@ -122,6 +122,14 @@
 +$  balance
   $+  wallet-balance
   (z-map:zo nname:transact nnote:transact)
+::
++$  ledger
+  %-  list
+  $:  name=nname:transact
+      recipient=lock:transact
+      gifts=coins:transact
+      =timelock-intent:transact
+  ==
 ::  $state: wallet state
 ::
 +$  state
@@ -173,9 +181,8 @@
           recipients=(list [m=@ pks=(list @t)])        ::  base58-encoded locks
           gifts=(list coins:transact)                  ::  number of coins to spend
           fee=coins:transact                           ::  fee
-          index=(unit @ud)                             ::  index of child key to spend from.
-                                                       ::  if key is hardened, index must have (bex 31)
-                                                       ::  already added
+          index=(unit @ud)                             ::  index of child key to spend from
+          =timelock-intent:transact                    ::  timelock constraint
       ==
       $:  %aeroe-spend
           names=(list [first=@t last=@t])              ::  base58-encoded name hashes
@@ -390,7 +397,43 @@
 ::
 ++  moat  (keep state)
 ::
-
+::  +timelock-helpers: helper functions for creating timelock-intents
+::
+++  timelock-helpers
+  |%
+  ::  +make-relative-timelock-intent: create relative timelock-intent
+  ::
+  ::    min-rel: minimum pages after note creation before spendable
+  ::    max-rel: maximum pages after note creation when spendable
+  ++  make-relative-timelock-intent
+    |=  [min-rel=(unit @ud) max-rel=(unit @ud)]
+    ^-  timelock-intent:transact
+    `[*timelock-range:transact (new:timelock-range:transact min-rel max-rel)]
+  ::
+  ::  +make-absolute-timelock-intent: create absolute timelock-intent
+  ::
+  ::    min-abs: minimum absolute page number when spendable
+  ::    max-abs: maximum absolute page number when spendable
+  ++  make-absolute-timelock-intent
+    |=  [min-abs=(unit @ud) max-abs=(unit @ud)]
+    ^-  timelock-intent:transact
+    `[(new:timelock-range:transact min-abs max-abs) *timelock-range:transact]
+  ::
+  ::  +make-combined-timelock-intent: create timelock-intent with both absolute and relative
+  ++  make-combined-timelock-intent
+    |=  $:  min-abs=(unit @ud)
+            max-abs=(unit @ud)
+            min-rel=(unit @ud)
+            max-rel=(unit @ud)
+        ==
+    ^-  timelock-intent:transact
+    `[(new:timelock-range:transact min-abs max-abs) (new:timelock-range:transact min-rel max-rel)]
+  ::
+  ::  +no-timelock: convenience function for no timelock constraint
+  ++  no-timelock
+    ^-  timelock-intent:transact
+    *timelock-intent:transact
+  --
 ::
 ::  +edit: modify inputs
 ++  edit
@@ -932,14 +975,14 @@
       =+  (to-b58:nname:transact name.note)
       :((cury cat 3) '[' first ' ' last ']')
       '\0a- assets: '
-      (scot %ud assets.note)
+      (scot %ui assets.note)
       '\0a- block height: '
-      (scot %ud origin-page.note)
+      (scot %ui origin-page.note)
       '\0a- source: '
       (to-b58:hash:transact p.source.note)
       '\0a## lock'
       '\0a- m: '
-      (scot %ud m.lock.note)
+      (scot %ui m.lock.note)
       '\0a- signers: '
     ==
   %-  crip
@@ -1337,7 +1380,9 @@
     =^  cmd-effs  state
       =+  try-poke=(mule |.((poke ov)))
       ?-  -.try-poke
-        %|  ~>  %slog.[%0 leaf+"poke failed, continuing to execute pending commands"]  [[%exit 0]~ state]
+          %|
+        ~>  %slog.[%0 leaf+"poke failed, exiting"]
+        ((slog p.try-poke) [[%exit 0]~ state])
         %&  p.try-poke
       ==
     $(cmds t.cmds, effs (weld effs cmd-effs))
@@ -1837,7 +1882,7 @@
             =((lent names) (lent gifts))
         ==
       ~|("different number of names/recipients/gifts" !!)
-    =|  ledger=(list [name=nname:transact recipient=lock:transact gifts=coins:transact])
+    =|  =ledger
     =.  ledger
       |-
       ?~  names  ledger
@@ -1846,7 +1891,7 @@
       ?~  gifts  ledger
       ?~  recipients  ledger
       %=  $
-        ledger      [[i.names i.recipients i.gifts] ledger]
+        ledger      [[i.names i.recipients i.gifts timelock-intent.cause] ledger]
         names       t.names
         gifts       t.gifts
         recipients  t.recipients
@@ -1855,11 +1900,8 @@
     ::  the fee is subtracted from the first note that permits doing so without overspending
     =/  fee=coins:transact  fee.cause
     ::  get private key at specified index, or first derived key if no index
-    =/  private-keys=(list coil)  ~(coils get:v %prv)
-    ?~  private-keys
-      ~|("No private keys available for signing" !!)
     =/  sender=coil
-      ?~  index.cause  i.private-keys
+      ?~  index.cause  ~(master get:v %prv)
       =/  key-at-index=meta  (~(by-index get:v %prv) u.index.cause)
       ?>  ?=(%coil -.key-at-index)
       key-at-index
@@ -1874,6 +1916,7 @@
       |=  $:  $:  name=nname:transact
                   recipient=lock:transact
                   gift=coins:transact
+                  =timelock-intent:transact
               ==
             spent-fee=?
           ==
@@ -1886,12 +1929,44 @@
           ==
         ::  we can subtract the fee from this note
         :_  %.y
-        %-  with-choice:with-refund:simple-from-note:new:input:transact
-       [recipient gift fee note sender-key assert-receive-address:v]
+        =/  gift-seed=seed:transact
+          %-  new:seed:transact
+          :*  *(unit source:transact)      :: output-source
+              recipient                    :: recipient
+              timelock-intent              :: timelock-intent
+              gift                         :: gift
+              (hash:nnote:transact note)   :: parent-hash
+          ==
+        =/  refund=coins:transact  (sub assets.note (add gift fee))
+        =/  refund-seed=seed:transact
+          %-  new:seed:transact
+          :*  *(unit source:transact)
+              assert-receive-address:v
+              *timelock-intent:transact    :: no timelock on refund
+              refund
+              (hash:nnote:transact note)
+          ==
+        =/  seed-list=(list seed:transact)
+          ?:  =(0 refund)  ~[gift-seed]
+          ~[gift-seed refund-seed]
+        =/  seeds-set=seeds:transact  (new:seeds:transact seed-list)
+        =/  spend-obj=spend:transact  (new:spend:transact seeds-set fee)
+        =.  spend-obj  (sign:spend:transact spend-obj sender-key)
+        [note spend-obj]
       ::  we cannot subtract the fee from this note, or we already have from a previous one
-      :_  %.n
-      %-  with-choice:with-refund:simple-from-note:new:input:transact
-      [recipient gift 0 note sender-key assert-receive-address:v]
+      :_  spent-fee
+      =/  gift-seed=seed:transact
+        %-  new:seed:transact
+        :*  *(unit source:transact)      :: output-source
+            recipient                    :: recipient
+            timelock-intent              :: timelock-intent
+            gift                         :: gift
+            (hash:nnote:transact note)   :: parent-hash
+        ==
+      =/  seeds-set=seeds:transact  (new:seeds:transact ~[gift-seed])
+      =/  spend-obj=spend:transact  (new:spend:transact seeds-set 0)
+      =.  spend-obj  (sign:spend:transact spend-obj sender-key)
+      [note spend-obj]
     ::
     ?.  spent-fee
       ~|("no note suitable to subtract fee from, aborting operation" !!)

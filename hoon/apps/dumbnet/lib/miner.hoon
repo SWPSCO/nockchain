@@ -30,6 +30,9 @@
     ~|('invalid shares' !!)
   m(shares s)
 ::
+++  mining-pubkeys-set
+  !=(*(z-set lock:t) pubkeys.m)
+::
 +|  %candidate-block
 ++  set-pow
   |=  prf=proof:sp
@@ -46,19 +49,57 @@
     (txs-size-by-set:tx-acc:t candidate-acc.m)
   max-block-size:t
 ::
-::  +update-timestamp: updates timestamp on candidate block if needed
+::  grab all raw-txs that could possibly be included in block.
+::  note that this set could include txs that are not spendable
+::  from the current heaviest balance. we rely on the logic inside
+::  of process:tx-acc
+::  to catch these txs and reject them.
+++  candidate-txs
+  |=  c=consensus-state:dk
+  ^-  (z-set raw-tx:t)
+  |^
+    %-  ~(rep z-in candidate-tx-ids)
+    |=  [=tx-id:t txs=(set raw-tx:t)]
+    =/  raw  raw-tx:(~(got z-by raw-txs.c) tx-id)
+    (~(put z-in txs) raw)
+  ::
+  ::  union of excluded tx-ids and pending block tx ids
+  ::  excluding tx-ids already included in candidate block
+  ++  candidate-tx-ids
+    %-  %~  dif  z-in
+        (~(uni z-in excluded-txs.c) pending-block-tx-ids)
+    tx-ids.candidate-block.m
+  ::
+  ::  set of available raw-txs from pending blocks
+  ++  pending-block-tx-ids
+    ^-  (z-set tx-id:t)
+    %-  ~(rep z-by pending-blocks.c)
+    |=  [[block-id:t pag=page:t *] all=(z-set tx-id:t)]
+    ^-  (z-set tx-id:t)
+    %-  ~(rep z-in tx-ids.pag)
+    |=  [=tx-id:t all=_all]
+    ?:  (~(has z-by raw-txs.c) tx-id)
+      (~(put z-in all) tx-id)
+    all
+  --
 ::
-::    this should be run every time we get a poke.
-++  update-timestamp
-  |=  now=@da
-  ^-  mining-state:dk
-  ?:  |(=(*page:t candidate-block.m) !mining.m)
-    ::  not mining or no candidate block is set so no need to update timestamp
-    m
+::  +update-candidate-block: updates candidate block if interval is hit
+::
+::  updates timestamp and adds txs to candidate block. this should be run
+::  every time we get a poke.
+::
+++  update-candidate-block
+  |=  [c=consensus-state:dk now=@da]
+  ^-  [? mining-state:dk]
+  ?:  ?|  =(*page:t candidate-block.m)
+          !mining-pubkeys-set
+      ==
+    ::  not mining or no candidate block is set so no need to update
+    [%.n m]
   ?:  %+  gte  timestamp.candidate-block.m
-      (time-in-secs:page:t (sub now update-candidate-timestamp-interval:t))
+      (time-in-secs:page:t (sub now update-candidate-interval:t))
     ::  has not reached interval (default ~m2), so leave timestamp alone
-    m
+    [%.n m]
   =.  timestamp.candidate-block.m  (time-in-secs:page:t now)
   =/  print-var
     %-  trip
@@ -67,17 +108,31 @@
       'candidate block timestamp updated: '
     (scot %$ timestamp.candidate-block.m)
   ~>  %slog.[0 [%leaf print-var]]
-  m
+  :-  %.y
+  (add-txs-to-candidate c)
+::
+++  add-txs-to-candidate
+  |=  c=consensus-state:dk
+  ^-  mining-state:dk
+  ::  if the mining pubkey is not set, do nothing
+  ?:  =(*(z-set lock:t) pubkeys.m)  m
+  %-  ~(rep z-in (candidate-txs c))
+  |=  [raw=raw-tx:t min=_m]
+  =.  m  min
+  (heard-new-tx raw)
+::
 ::
 ::  +heard-new-tx: potentially changes candidate block in reaction to a raw-tx
 ++  heard-new-tx
   |=  raw=raw-tx:t
   ^-  mining-state:dk
-  ~>  %slog.[3 'miner: heard-new-tx']
   ~>  %slog.[3 (cat 3 'miner: heard-new-tx: raw-tx: ' (to-b58:hash:t id.raw))]
-  ::
   ::  if the mining pubkey is not set, do nothing
   ?:  =(*(z-set lock:t) pubkeys.m)  m
+  ::
+  ::  if the transaction is already in the candidate block, do nothing
+  ?:  (~(has z-in tx-ids.candidate-block.m) id.raw)
+    m
   ::  check to see if block is valid with tx - this checks whether the inputs
   ::  exist, whether the new size will exceed block size, and whether timelocks
   ::  are valid
@@ -107,11 +162,19 @@
   =/  new-fees=coins:t  fees.candidate-acc.m
   ::  check if new-fees != old-fees to determine if split should be recalculated.
   ::  since we don't have replace-by-fee
+  =/  added-to-candidate-print=tape
+      %-  trip
+      %+  rap  3
+      :~  'added tx '
+          (to-b58:hash:t id.raw)
+          ' to the candidate block.'
+      ==
   ?:  =(new-fees old-fees)
     ::  fees are equal so no need to recalculate split
     ?.  candidate-block-below-max-size
-      ~>  %slog.[0 leaf+"exceeds max block size, not adding tx"]
+      ~>  %slog.[3 leaf+"exceeds max block size, not adding tx"]
       old-mining-state
+    ~>  %slog.[3 %leaf^added-to-candidate-print]
     m
   ::  fees are unequal. for this miner, fees are only ever monotonically
   ::  incremented and so this assertion should never fail.
@@ -127,8 +190,9 @@
     (new:coinbase-split:t new-assets shares.m)
   ::  check size of candidate block
   ?.  candidate-block-below-max-size
-    ~>  %slog.[0 leaf+"exceeds max block size, not adding tx"]
+    ~>  %slog.[3 leaf+"exceeds max block size, not adding tx"]
     old-mining-state
+  ~>  %slog.[3 %leaf^added-to-candidate-print]
   m
 ::
 ::  +heard-new-block: refreshes the candidate block to be mined in reaction to a new block
@@ -151,7 +215,7 @@
   ?:  =(u.heaviest-block.c parent.candidate-block.m)
     ~>  %slog.[0 leaf+"heaviest block unchanged, do not generate new candidate block"]
     m
-  ?:  =(*(z-set lock:t) pubkeys.m)
+  ?.  mining-pubkeys-set
     ~>  %slog.[0 leaf+"no pubkey(s) set so no new candidate block will be generated"]
     m
   =/  print-var
@@ -171,10 +235,6 @@
   =.  candidate-acc.m
     (new:tx-acc:t (~(get z-by balance.c) u.heaviest-block.c))
   ::
-  ::  roll over the pending txs and try to include them in the new candidate block
-  %-  ~(rep z-in excluded-txs.c)
-  |=  [=tx-id:t min=_m]
-  =.  m  min
-  =/  raw  raw-tx:(~(got z-by raw-txs.c) tx-id)
-  (heard-new-tx raw)
+  ::  roll over the candidate txs and try to include them in the new candidate block
+  (add-txs-to-candidate c)
 --

@@ -1,5 +1,6 @@
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use futures::future::Future;
 use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
@@ -60,6 +61,7 @@ pub enum IOAction {
         wire: WireRepr,
         poke: NounSlab,
         ack_channel: oneshot::Sender<PokeResult>,
+        timeout: Option<Duration>,
     },
     /// Peek request to [`crate::NockApp`]
     Peek {
@@ -81,6 +83,25 @@ impl NockAppHandle {
                 wire,
                 poke,
                 ack_channel,
+                timeout: None,
+            })
+            .await?;
+        Ok(())
+    }
+
+    pub async fn send_poke_timeout(
+        &self,
+        ack_channel: oneshot::Sender<PokeResult>,
+        wire: WireRepr,
+        poke: NounSlab,
+        timeout: Duration,
+    ) -> Result<(), NockAppError> {
+        self.io_sender
+            .send(IOAction::Poke {
+                wire,
+                poke,
+                ack_channel,
+                timeout: Some(timeout),
             })
             .await?;
         Ok(())
@@ -98,6 +119,7 @@ impl NockAppHandle {
             wire,
             poke,
             ack_channel,
+            timeout: None,
         })?)
     }
 
@@ -105,6 +127,18 @@ impl NockAppHandle {
     pub async fn poke(&self, wire: WireRepr, poke: NounSlab) -> Result<PokeResult, NockAppError> {
         let (ack_channel, ack_future) = oneshot::channel();
         self.send_poke(ack_channel, wire, poke).await?;
+        Ok(ack_future.await?)
+    }
+
+    pub async fn poke_timeout(
+        &self,
+        wire: WireRepr,
+        poke: NounSlab,
+        timeout: Duration,
+    ) -> Result<PokeResult, NockAppError> {
+        let (ack_channel, ack_future) = oneshot::channel();
+        self.send_poke_timeout(ack_channel, wire, poke, timeout)
+            .await?;
         Ok(ack_future.await?)
     }
 

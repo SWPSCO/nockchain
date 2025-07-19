@@ -58,7 +58,6 @@ pub struct NockchainCli {
         help = "Advanced mining key configuration (mutually exclusive with --mining-pubkey). Format: share,m:key1,key2,key3",
         value_parser = value_parser!(MiningKeyConfig),
         num_args = 1..,
-        value_delimiter = ',',
     )]
     pub mining_key_adv: Option<Vec<MiningKeyConfig>>,
     #[arg(long, help = "Whether to run as fakenet", default_value_t = false)]

@@ -32,11 +32,11 @@ pub enum SetupCommand {
     PokeSetBtcData,
 }
 
-pub fn fakenet_blockchain_constaints(pow_len: u64, target_bex: u64) -> BlockchainConstants {
+pub fn fakenet_blockchain_constants(pow_len: u64, target_bex: u64) -> BlockchainConstants {
     BlockchainConstants::new()
         .with_pow_len(pow_len)
         .with_genesis_target_atom_bex(target_bex as u128)
-        .with_update_candidate_timestamp_interval(Seconds(15 * 60))
+        .with_update_candidate_timestamp_interval(Seconds(5 * 60))
         .with_coinbase_timelock_min(0)
         .with_first_month_coinbase_min(0)
 }

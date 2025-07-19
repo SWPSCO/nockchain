@@ -672,6 +672,7 @@ mod tests {
             wire: _wire,
             poke: noun_slab,
             ack_channel: _,
+            timeout: _,
         }) = timeout(Duration::from_secs(1), rx_io.recv())
             .await
             .unwrap_or_else(|err| {

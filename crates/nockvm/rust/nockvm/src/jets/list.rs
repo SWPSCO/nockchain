@@ -580,11 +580,11 @@ mod tests {
     fn test_scag() {
         let c = &mut init_context();
 
-        let ab00 = T(&mut c.stack, &[D(0), D(0)]);
-        let ab01 = T(&mut c.stack, &[D(0), D(1)]);
-        let ab02 = T(&mut c.stack, &[D(0), D(2)]);
-        let ab21 = T(&mut c.stack, &[D(2), D(1)]);
-        let ab32 = T(&mut c.stack, &[D(3), D(2)]);
+        // let ab00 = T(&mut c.stack, &[D(0), D(0)]);
+        // let ab01 = T(&mut c.stack, &[D(0), D(1)]);
+        // let ab02 = T(&mut c.stack, &[D(0), D(2)]);
+        // let ab21 = T(&mut c.stack, &[D(2), D(1)]);
+        // let ab32 = T(&mut c.stack, &[D(3), D(2)]);
         let c1341342 = T(
             &mut c.stack,
             &[D(1), D(3), D(4), D(1), D(3), D(4), D(2), D(0)],

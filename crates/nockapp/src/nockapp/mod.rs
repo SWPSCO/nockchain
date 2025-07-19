@@ -306,6 +306,18 @@ impl<J: Jammer + Send + 'static> NockApp<J> {
         Ok(())
     }
 
+    /// Save the kernel to disk, blocking operation
+    pub async fn save_blocking(&mut self) -> NockAppResult {
+        trace!("save_blocking: locking save_mutex");
+        let guard = self.save_mutex.clone().lock_owned().await;
+        trace!("save_blocking: save_mutex locked");
+        let join_handle = self.save_f(async {}, guard).await?;
+        join_handle
+            .await
+            .map_err(|e| NockAppError::JoinError(e))??;
+        Ok(())
+    }
+
     /// Peek at a noun in the kernel, blocking operation
     #[tracing::instrument(skip(self, path))]
     pub fn peek_sync(&mut self, path: NounSlab) -> Result<NounSlab, NockAppError> {
@@ -364,6 +376,16 @@ impl<J: Jammer + Send + 'static> NockApp<J> {
         cause: NounSlab,
     ) -> Result<Vec<NounSlab>, NockAppError> {
         let effects_slab = self.kernel.poke(wire, cause).await?;
+        Ok(effects_slab.to_vec())
+    }
+
+    pub async fn poke_timeout(
+        &mut self,
+        wire: WireRepr,
+        cause: NounSlab,
+        timeout: Duration,
+    ) -> Result<Vec<NounSlab>, NockAppError> {
+        let effects_slab = self.kernel.poke_timeout(wire, cause, timeout).await?;
         Ok(effects_slab.to_vec())
     }
 
@@ -555,7 +577,8 @@ impl<J: Jammer + Send + 'static> NockApp<J> {
                 wire,
                 poke,
                 ack_channel,
-            } => self.handle_poke(wire, poke, ack_channel).await,
+                timeout,
+            } => self.handle_poke(wire, poke, ack_channel, timeout).await,
             IOAction::Peek {
                 path,
                 result_channel,
@@ -569,23 +592,43 @@ impl<J: Jammer + Send + 'static> NockApp<J> {
         wire: WireRepr,
         cause: NounSlab,
         ack_channel: tokio::sync::oneshot::Sender<PokeResult>,
+        timeout: Option<Duration>,
     ) {
-        let poke_future = self.kernel.poke(wire, cause);
-        let effect_broadcast = self.effect_broadcast.clone();
-        let _ = self.tasks.spawn(async move {
-            let poke_result = poke_future.await;
-            match poke_result {
-                Ok(effects) => {
-                    let _ = ack_channel.send(PokeResult::Ack);
-                    for effect_slab in effects.to_vec() {
-                        let _ = effect_broadcast.send(effect_slab);
+        if let Some(timeout) = timeout {
+            let poke_future = self.kernel.poke_timeout(wire, cause, timeout);
+            let effect_broadcast = self.effect_broadcast.clone();
+            let _ = self.tasks.spawn(async move {
+                let poke_result = poke_future.await;
+                match poke_result {
+                    Ok(effects) => {
+                        let _ = ack_channel.send(PokeResult::Ack);
+                        for effect_slab in effects.to_vec() {
+                            let _ = effect_broadcast.send(effect_slab);
+                        }
+                    }
+                    Err(_) => {
+                        let _ = ack_channel.send(PokeResult::Nack);
                     }
                 }
-                Err(_) => {
-                    let _ = ack_channel.send(PokeResult::Nack);
+            });
+        } else {
+            let poke_future = self.kernel.poke(wire, cause);
+            let effect_broadcast = self.effect_broadcast.clone();
+            let _ = self.tasks.spawn(async move {
+                let poke_result = poke_future.await;
+                match poke_result {
+                    Ok(effects) => {
+                        let _ = ack_channel.send(PokeResult::Ack);
+                        for effect_slab in effects.to_vec() {
+                            let _ = effect_broadcast.send(effect_slab);
+                        }
+                    }
+                    Err(_) => {
+                        let _ = ack_channel.send(PokeResult::Nack);
+                    }
                 }
-            }
-        });
+            });
+        }
     }
 
     #[instrument(skip_all)]

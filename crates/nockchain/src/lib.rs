@@ -393,7 +393,7 @@ pub async fn init_with_kernel<J: Jammer + Send + 'static>(
             .unwrap_or(1);
         setup::poke(
             &mut nockapp,
-            setup::SetupCommand::PokeFakenetConstants(setup::fakenet_blockchain_constaints(
+            setup::SetupCommand::PokeFakenetConstants(setup::fakenet_blockchain_constants(
                 pow_len, target,
             )),
         )

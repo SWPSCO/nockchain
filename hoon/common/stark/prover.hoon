@@ -45,7 +45,6 @@
   ~/  %prove
   |=  prover-input
   ^-  prove-result
-  ~>  %slog.[0 leaf+"starting proving attempt"]
   =/  [s=* f=*]  (puzzle-nock header nonce pow-len)
   =/  [prod=* return=fock-return]  (fink:fock [s f])
   =/  nock-common=_nock-common-v0-v1

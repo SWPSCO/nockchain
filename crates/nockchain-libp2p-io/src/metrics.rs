@@ -64,5 +64,10 @@ metrics_struct![
     (peer_request_rate_limited, "nockchain-libp2p-io.peer_request_rate_limited", Count),
     (request_failed, "nockchain-libp2p-io.request_failed", Count),
     (response_failed_not_dropped, "nockchain-libp2p-io.response_failed_not_dropped", Count),
-    (response_dropped, "nockchain-libp2p-io.response_dropped", Count)
+    (response_dropped, "nockchain-libp2p-io.response_dropped", Count),
+    // Per-cause poke timings
+    (timer_poke_time, "nockchain-libp2p-io.timer_poke_time", TimingCount),
+    (heard_tx_poke_time, "nockchain-libp2p-io.heard_tx_poke_time", TimingCount),
+    (heard_block_poke_time, "nockchain-libp2p-io.heard_block_poke_time", TimingCount),
+    (heard_elders_poke_time, "nockchain-libp2p-io.heard_elders_poke_time", TimingCount)
 ];

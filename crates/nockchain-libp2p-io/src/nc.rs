@@ -29,7 +29,7 @@ use nockvm::noun::{Atom, Noun, D, T};
 use nockvm_macros::tas;
 use rand::seq::SliceRandom;
 use serde_bytes::ByteBuf;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{mpsc, Mutex, MutexGuard};
 use tokio::task::{AbortHandle, JoinError, JoinSet};
 use tokio::time::{Duration, MissedTickBehavior};
 use tracing::{debug, error, info, instrument, trace, warn};
@@ -189,9 +189,11 @@ pub fn make_libp2p_driver(
             let request_high_reset = libp2p_config.request_high_reset();
             let initial_peer_retries = libp2p_config.initial_peer_retries;
             let request_high_threshold = libp2p_config.request_high_threshold;
-            let peer_status_log_interval = libp2p_config.peer_status_log_interval_secs();
+            let peer_status_interval = libp2p_config.peer_status_interval_secs();
             let elders_debounce_reset = libp2p_config.elders_debounce_reset();
             let seen_tx_clear_interval = libp2p_config.seen_tx_clear_interval();
+            let min_peers = libp2p_config.min_peers();
+            let poke_timeout = libp2p_config.poke_timeout();
             let mut swarm = match crate::p2p::start_swarm(
                 libp2p_config, keypair, bind, allowed, limits, memory_limits,
             ) {
@@ -225,7 +227,8 @@ pub fn make_libp2p_driver(
             nockchain_timer.set_missed_tick_behavior(MissedTickBehavior::Skip);
             let nockchain_timer_mutex = Arc::new(Mutex::new(()));
             let (traffic_handle, effect_handle) = handle.dup();
-            let traffic_cop = traffic_cop::TrafficCop::new(traffic_handle, &mut join_set);
+            let traffic_cop =
+                traffic_cop::TrafficCop::new(traffic_handle, &mut join_set, poke_timeout);
 
             let mut initial_peer_retries_remaining = initial_peer_retries;
             dial_peers(&mut swarm, &initial_peers)?;
@@ -233,7 +236,7 @@ pub fn make_libp2p_driver(
                 let _ = tx.send(());
                 debug!("libp2p driver initialization complete signal sent");
             }
-            let mut peer_status_log = tokio::time::interval(peer_status_log_interval);
+            let mut connectivity_interval = tokio::time::interval(peer_status_interval);
             loop {
                 let timer_fut = async {
                     let _ = nockchain_timer.tick().await;
@@ -241,10 +244,14 @@ pub fn make_libp2p_driver(
                 };
                 tokio::select! {
                     guard = timer_fut => {
-                        join_set.spawn("timer".to_string(), send_timer_poke(guard, traffic_cop.clone()))
+                        join_set.spawn("timer".to_string(), send_timer_poke(guard, traffic_cop.clone(), metrics.clone()))
                     }
-                    _ = peer_status_log.tick() => {
-                        log_peer_status(&mut swarm, &metrics).await;
+                    _ = connectivity_interval.tick() => {
+                        let peer_count = log_peer_status(&mut swarm, &metrics).await;
+                        if peer_count < min_peers {
+                            let tracker = message_tracker.lock().await;
+                            dial_more_peers(&mut swarm, tracker);
+                        }
                     },
                     Ok(noun_slab) = effect_handle.next_effect() => {
                         let _span = tracing::trace_span!("broadcast").entered();
@@ -282,8 +289,13 @@ pub fn make_libp2p_driver(
                                 debug!("SEvent: {peer_id} is new friend via: {endpoint:?}");
                             },
                             SwarmEvent::ConnectionClosed { connection_id, peer_id, endpoint, cause, .. } => {
-                                message_tracker.lock().await.lost_connection(connection_id);
-                                debug!("SEvent: friendship ended with {peer_id} via: {endpoint:?}. cause: {cause:?}");
+                                let mut message_tracker_lock = message_tracker.lock().await;
+                                let _ = message_tracker_lock.lost_connection(connection_id);
+                                if let Some(cause) = cause {
+                                    debug!("SEvent: friendship ended with {peer_id} via: {endpoint:?}. cause: {cause:?}");
+                                } else {
+                                    debug!("SEvent: friendship ended by us with {peer_id} via: {endpoint:?}.");
+                                }
                             },
                             SwarmEvent::IncomingConnectionError { local_addr, send_back_addr, error, .. } => {
                                trace!("SEvent: Failed incoming connection from {} to {}: {}",
@@ -548,12 +560,17 @@ impl NockchainResponse {
 async fn send_timer_poke(
     guard: tokio::sync::OwnedMutexGuard<()>,
     traffic_cop: traffic_cop::TrafficCop,
+    metrics: Arc<NockchainP2PMetrics>,
 ) -> Result<(), NockAppError> {
     let mut slab = NounSlab::new();
     let timer_noun = T(&mut slab, &[D(tas!(b"command")), D(tas!(b"timer")), D(0)]);
     slab.set_root(timer_noun);
     let wire = nockapp::drivers::timer::TimerWire::Tick.to_wire();
-    traffic_cop.poke_high_priority(wire, slab).await?;
+    let (timing, timing_rx) = tokio::sync::oneshot::channel();
+    let permit = traffic_cop.poke_high_priority_permit().await?;
+    permit.poke_high_priority(wire, slab, Some(timing)).await?;
+    let elapsed = timing_rx.await?;
+    let _ = metrics.timer_poke_time.add_timing(&elapsed);
     drop(guard);
     Ok(())
 }
@@ -1003,8 +1020,8 @@ async fn handle_request_response(
                         });
 
                     let poke_kernel = tokio::task::spawn(async move {
+                        let permit = traffic.poke_high_priority_permit().await?;
                         let gossip = NockchainFact::from_noun_slab(&request_slab)?;
-
                         match gossip {
                             NockchainFact::HeardBlock(ref id, _) => {
                                 let tracker = message_tracker.lock().await;
@@ -1028,7 +1045,10 @@ async fn handle_request_response(
                                     metrics.tx_seen_cache_misses.increment();
                                 }
                             }
-                            NockchainFact::HeardElders(..) => (),
+                            NockchainFact::HeardElders(..) => {
+                                warn!("Heard elders over gossip, should not happen!");
+                                return Ok(());
+                            }
                         }
 
                         let wire = Libp2pWire::Gossip(peer);
@@ -1040,10 +1060,21 @@ async fn handle_request_response(
                         );
 
                         let poke = gossip.fact_poke();
-                        match traffic
-                            .poke_high_priority(wire.to_wire(), poke.clone())
-                            .await
-                        {
+                        let (timing, timing_rx) = tokio::sync::oneshot::channel();
+                        let poke_result = permit
+                            .poke_high_priority(wire.to_wire(), poke.clone(), Some(timing))
+                            .await;
+                        let elapsed = timing_rx.await?;
+                        match gossip {
+                            NockchainFact::HeardBlock(_, _) => {
+                                metrics.heard_block_poke_time.add_timing(&elapsed);
+                            }
+                            NockchainFact::HeardTx(_, _) => {
+                                metrics.heard_tx_poke_time.add_timing(&elapsed);
+                            }
+                            _ => {}
+                        }
+                        match poke_result {
                             Ok(PokeResult::Ack) => match gossip {
                                 NockchainFact::HeardBlock(..) => {
                                     metrics.gossip_acked_heard_block.increment();
@@ -1121,6 +1152,7 @@ async fn handle_request_response(
         }
         Response { response, .. } => match response {
             NockchainResponse::Result { message } => {
+                let permit = traffic.poke_high_priority_permit().await?;
                 trace!("handle_request_response: Response result received");
                 let mut response_slab = NounSlab::new();
                 let message_bytes = Bytes::from(message.to_vec());
@@ -1149,13 +1181,40 @@ async fn handle_request_response(
                 );
 
                 let response = NockchainFact::from_noun_slab(&response_slab)?;
+                match response {
+                    NockchainFact::HeardBlock(ref id, _) => {
+                        let tracker = message_tracker.lock().await;
+                        if tracker.seen_blocks.contains(id) {
+                            trace!("Block already seen, not processing: {:?}", id);
+                            metrics.block_seen_cache_hits.increment();
+                            return Ok(());
+                        } else {
+                            trace!("block not seen, processing: {:?}", id);
+                            metrics.block_seen_cache_misses.increment();
+                        }
+                    }
+                    NockchainFact::HeardTx(..) => {}
+                    NockchainFact::HeardElders(..) => {}
+                }
+
                 let wire = Libp2pWire::Response(peer);
                 let poke_slab = response.fact_poke();
 
-                match traffic
-                    .poke_high_priority(wire.to_wire(), poke_slab.clone())
-                    .await
-                {
+                let (timing, timing_rx) = tokio::sync::oneshot::channel();
+                let poke_result = permit
+                    .poke_high_priority(wire.to_wire(), poke_slab.clone(), Some(timing))
+                    .await;
+                let elapsed = timing_rx.await?;
+
+                if response_cell.head().eq_bytes(b"heard-block") {
+                    metrics.heard_block_poke_time.add_timing(&elapsed);
+                } else if response_cell.head().eq_bytes(b"heard-tx") {
+                    metrics.heard_tx_poke_time.add_timing(&elapsed);
+                } else if response_cell.head().eq_bytes(b"heard-elders") {
+                    metrics.heard_elders_poke_time.add_timing(&elapsed);
+                }
+
+                match poke_result {
                     Ok(PokeResult::Ack) => match response {
                         NockchainFact::HeardBlock(..) => {
                             metrics.responses_acked_heard_block.increment();
@@ -1169,11 +1228,7 @@ async fn handle_request_response(
                     },
                     Ok(PokeResult::Nack) => {
                         match response {
-                            NockchainFact::HeardBlock(height, _) => {
-                                debug!(
-                                    "Poke response nacked for heard-block at height: {:?}",
-                                    height
-                                );
+                            NockchainFact::HeardBlock(..) => {
                                 metrics.responses_nacked_heard_block.increment();
                             }
                             NockchainFact::HeardTx(id, _) => {
@@ -1231,8 +1286,11 @@ async fn handle_request_response(
     Ok(())
 }
 
-async fn log_peer_status(swarm: &mut Swarm<NockchainBehaviour>, metrics: &NockchainP2PMetrics) {
-    {
+async fn log_peer_status(
+    swarm: &mut Swarm<NockchainBehaviour>,
+    metrics: &NockchainP2PMetrics,
+) -> usize {
+    let connected_peer_count = {
         info!("Logging current peer status...");
         let connected_peers: Vec<_> = swarm.connected_peers().cloned().collect();
         let peer_count = connected_peers.len();
@@ -1252,7 +1310,8 @@ async fn log_peer_status(swarm: &mut Swarm<NockchainBehaviour>, metrics: &Nockch
         }
 
         let _ = metrics.active_peer_connections.swap(peer_count as f64);
-    }
+        peer_count
+    };
 
     // Count peers in the routing table by iterating through k-buckets
     let mut routing_table_size = 0;
@@ -1271,6 +1330,7 @@ async fn log_peer_status(swarm: &mut Swarm<NockchainBehaviour>, metrics: &Nockch
             "Routing table has {} entries", routing_table_size
         );
     };
+    connected_peer_count
 }
 
 /// Converts a request noun into a scry path that can be used to query the Nockchain state.
@@ -2253,12 +2313,37 @@ fn dial_peers(
 }
 
 mod traffic_cop {
+    use std::time::Instant;
+
     use tokio::select;
     use tokio::sync::oneshot;
 
     use super::*;
 
     const TRAFFIC_COP_BUFFER_SIZE: usize = 50;
+
+    pub(crate) struct HighPriorityPermit<'a> {
+        permit: mpsc::Permit<'a, TrafficCopPoke>,
+    }
+
+    impl<'a> HighPriorityPermit<'a> {
+        pub(crate) async fn poke_high_priority(
+            self,
+            wire: WireRepr,
+            cause: NounSlab,
+            timing: Option<oneshot::Sender<Duration>>,
+        ) -> Result<PokeResult, NockAppError> {
+            let (result_tx, result_rx) = oneshot::channel();
+            let poke = TrafficCopPoke {
+                wire,
+                cause,
+                timing,
+                result: result_tx,
+            };
+            self.permit.send(poke);
+            result_rx.await?
+        }
+    }
 
     enum TrafficCopAction {
         Poke(TrafficCopPoke),
@@ -2271,6 +2356,7 @@ mod traffic_cop {
     struct TrafficCopPoke {
         wire: WireRepr,
         cause: NounSlab,
+        timing: Option<oneshot::Sender<Duration>>,
         result: oneshot::Sender<Result<PokeResult, NockAppError>>,
     }
 
@@ -2284,12 +2370,13 @@ mod traffic_cop {
         pub(crate) fn new(
             handle: NockAppHandle,
             join_set: &mut TrackedJoinSet<Result<(), NockAppError>>,
+            poke_timeout: Duration,
         ) -> Self {
             let (high_priority_pokes, high) = mpsc::channel(1);
             let (low_priority, low) = mpsc::channel(TRAFFIC_COP_BUFFER_SIZE);
             join_set.spawn(
                 "traffic_cop".to_string(),
-                traffic_cop_task(handle, high, low),
+                traffic_cop_task(handle, high, low, poke_timeout),
             );
             Self {
                 high_priority_pokes,
@@ -2297,22 +2384,15 @@ mod traffic_cop {
             }
         }
 
-        pub(crate) async fn poke_high_priority(
+        pub(crate) async fn poke_high_priority_permit(
             &self,
-            wire: WireRepr,
-            cause: NounSlab,
-        ) -> Result<PokeResult, NockAppError> {
-            let (result_tx, result_rx) = oneshot::channel();
-            let poke = TrafficCopPoke {
-                wire,
-                cause,
-                result: result_tx,
-            };
-            self.high_priority_pokes
-                .send(poke)
+        ) -> Result<HighPriorityPermit, NockAppError> {
+            let permit = self
+                .high_priority_pokes
+                .reserve()
                 .await
                 .map_err(|_| NockAppError::ChannelClosedError)?;
-            result_rx.await?
+            Ok(HighPriorityPermit { permit })
         }
 
         #[allow(dead_code)]
@@ -2320,11 +2400,13 @@ mod traffic_cop {
             &self,
             wire: WireRepr,
             cause: NounSlab,
+            timing: Option<oneshot::Sender<std::time::Duration>>,
         ) -> Result<PokeResult, NockAppError> {
             let (result_tx, result_rx) = oneshot::channel();
             let action = TrafficCopAction::Poke(TrafficCopPoke {
                 wire,
                 cause,
+                timing,
                 result: result_tx,
             });
             self.low_priority.try_send(action).map_err(|e| match e {
@@ -2358,12 +2440,15 @@ mod traffic_cop {
         handle: NockAppHandle,
         mut high: mpsc::Receiver<TrafficCopPoke>,
         mut low: mpsc::Receiver<TrafficCopAction>,
+        poke_timeout: Duration,
     ) -> Result<(), NockAppError> {
         loop {
             select! { biased;
                 high_priority_poke = high.recv() => match high_priority_poke {
-                    Some(TrafficCopPoke { wire, cause, result }) => {
-                        let res = handle.poke(wire, cause).await;
+                    Some(TrafficCopPoke { wire, cause, result, timing }) => {
+                        let now = Instant::now();
+                        let res = handle.poke_timeout(wire, cause, poke_timeout).await;
+                        timing.map(|c| c.send(now.elapsed()));
                         let _ = result.send(res).map_err(|e| {
                             error!("Failed to send high priority poke result");
                             e
@@ -2375,8 +2460,11 @@ mod traffic_cop {
                     }
                 },
                 low_priority_action = low.recv() => match low_priority_action {
-                    Some(TrafficCopAction::Poke(TrafficCopPoke { wire, cause, result })) => {
-                        let res = handle.poke(wire, cause).await;
+                    Some(TrafficCopAction::Poke(TrafficCopPoke { wire, cause, result, timing })) => {
+                        let now = Instant::now();
+                        let res = handle.poke_timeout(wire, cause, poke_timeout).await;
+                        let elapsed = now.elapsed();
+                        timing.map(|c| c.send(elapsed));
                         let _ = result.send(res).map_err(|e| {
                             error!("Failed to send low priority poke result");
                             e
@@ -2475,4 +2563,35 @@ fn log_inbound_failure(
             debug!("Unsupported protocol when responding to peer {}", peer)
         }
     };
+}
+
+fn dial_more_peers(swarm: &mut Swarm<NockchainBehaviour>, tracker: MutexGuard<MessageTracker>) {
+    let mut addresses_to_dial = Vec::new();
+    for bucket in swarm.behaviour_mut().kad.kbuckets() {
+        for peer in bucket.iter() {
+            if tracker
+                .peer_connections
+                .contains_key(&peer.node.key.into_preimage())
+            {
+                continue;
+            }
+            for address in peer.node.value.iter() {
+                let mut address = address.clone();
+
+                if let Ok(address_with_peer_id) =
+                    address.clone().with_p2p(peer.node.key.into_preimage())
+                {
+                    address = address_with_peer_id;
+                }
+                addresses_to_dial.push(address);
+            }
+        }
+    }
+    addresses_to_dial.shuffle(&mut rand::thread_rng());
+    for address in addresses_to_dial {
+        info!("Redialing {}", address);
+        if let Err(err) = swarm.dial(address) {
+            log_dial_error(err);
+        };
+    }
 }

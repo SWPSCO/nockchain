@@ -6,6 +6,11 @@ use nockapp::kernel::boot;
 use nockapp::NockApp;
 use zkvm_jetpack::hot::produce_prover_hot_state;
 
+// When enabled, use jemalloc for more stable memory allocation
+#[cfg(feature = "jemalloc")]
+#[global_allocator]
+static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     nockvm::check_endian();

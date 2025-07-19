@@ -17,8 +17,8 @@ get_cpu_count() {
 # Get total CPU hyperthreads
 total_threads=$(get_cpu_count)
 
-# Subtract 4
-threads=$((total_threads * 2 - 4))
+# Subtract 2
+threads=$((total_threads - 2))
 
 # minimum 1
 num_threads=$((threads > 1 ? threads : 1))

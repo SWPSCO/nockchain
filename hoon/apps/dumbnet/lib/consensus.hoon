@@ -189,8 +189,8 @@
     (chunk:bignum:t next-target-atom)
   ?:  =(prev-target-atom next-target-atom)
     next-target-bn
-  ~>  %slog.[0 (cat 3 'previous target: ' (scot %ud prev-target-atom))]
-  ~>  %slog.[0 (cat 3 'new target: ' (scot %ud next-target-atom))]
+  ~>  %slog.[0 (cat 3 'previous target: ' (rsh [3 2] (scot %ui prev-target-atom)))]
+  ~>  %slog.[0 (cat 3 'new target: ' (rsh [3 2] (scot %ui next-target-atom)))]
   next-target-bn
 ::
 ::  +compute-epoch-duration: computes the duration of an epoch in seconds
@@ -374,9 +374,9 @@
   ?.  check-heaviness
     [%.n %page-heaviness-invalid]
   ::
-  =/  check-coinbase-split=?
+  =/  check-based-coinbase-split=?
     (based:coinbase-split:t coinbase.pag)
-  ?.  check-coinbase-split
+  ?.  check-based-coinbase-split
     [%.n %coinbase-split-not-based]
   =/  check-msg-length=?
     (lth (lent msg.pag) 20)
@@ -386,6 +386,12 @@
     (validate:page-msg:t msg.pag)
   ?.  check-msg-valid
     [%.n %msg-not-valid]
+  =/  check-soft-page=?
+    ?~  softed-pag=((soft page:t) pag)
+      %.n
+    %.y
+  ?.  check-soft-page
+    [%.n %page-not-soft]
   ::
   [%.y ~]
 ::
@@ -669,6 +675,7 @@
 ::
 ::  add an already-validated raw transaction, producing a list of blocks ready to validate
 ++  add-raw-tx
+  ~/  %add-raw-tx
   |=  =raw-tx:t
   ^-  [(list block-id:t) consensus-state:dk]
   ?<  (~(has z-by raw-txs.c) id.raw-tx)

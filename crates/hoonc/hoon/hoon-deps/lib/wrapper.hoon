@@ -82,6 +82,8 @@
         [[%$ %arvo ~] *]
       =/  g  ((soft crud) +.ovum)
       ?~  g  ~&(%invalid-goof effects^..poke)
+      ?:  ?=(%intr mote.goof.u.g)
+        [effects ..poke]
       =-  [effects ..poke]
       (slog tang.goof.u.g)
     ::

@@ -24,6 +24,91 @@ use nockapp::utils::make_tas;
 use nockapp::wire::{Wire, WireRepr};
 use nockapp::{exit_driver, file_driver, markdown_driver, one_punch_driver};
 
+/// Represents a timelock range with optional min and max page numbers
+#[derive(Debug, Clone)]
+pub struct TimelockRange {
+    pub min: Option<u64>,
+    pub max: Option<u64>,
+}
+
+impl TimelockRange {
+    pub fn new(min: Option<u64>, max: Option<u64>) -> Self {
+        Self { min, max }
+    }
+
+    pub fn none() -> Self {
+        Self {
+            min: None,
+            max: None,
+        }
+    }
+
+    /// Convert to noun representation: [min=(unit page-number) max=(unit page-number)]
+    pub fn to_noun(&self, slab: &mut NounSlab) -> Noun {
+        let min_noun = match self.min {
+            Some(val) => T(slab, &[D(0), D(val)]), // unit: [~ value]
+            None => D(0),                          // unit: ~
+        };
+        let max_noun = match self.max {
+            Some(val) => T(slab, &[D(0), D(val)]), // unit: [~ value]
+            None => D(0),                          // unit: ~
+        };
+        T(slab, &[min_noun, max_noun])
+    }
+}
+
+/// Represents a timelock intent - optional constraint for output notes
+#[derive(Debug, Clone)]
+pub struct TimelockIntent {
+    pub absolute: Option<TimelockRange>,
+    pub relative: Option<TimelockRange>,
+}
+
+impl TimelockIntent {
+    pub fn new(absolute: Option<TimelockRange>, relative: Option<TimelockRange>) -> Self {
+        Self { absolute, relative }
+    }
+
+    pub fn none() -> Self {
+        Self {
+            absolute: None,
+            relative: None,
+        }
+    }
+
+    pub fn absolute_only(range: TimelockRange) -> Self {
+        Self {
+            absolute: Some(range),
+            relative: Some(TimelockRange::none()),
+        }
+    }
+
+    pub fn relative_only(range: TimelockRange) -> Self {
+        Self {
+            absolute: Some(TimelockRange::none()),
+            relative: Some(range),
+        }
+    }
+
+    /// Convert to noun representation: (unit [absolute=timelock-range relative=timelock-range])
+    pub fn to_noun(&self, slab: &mut NounSlab) -> Noun {
+        match (&self.absolute, &self.relative) {
+            (None, None) => D(0), // unit: ~ (no intent)
+            (abs, rel) => {
+                let default_abs_range = TimelockRange::none();
+                let default_rel_range = TimelockRange::none();
+                let abs_range = abs.as_ref().unwrap_or(&default_abs_range);
+                let rel_range = rel.as_ref().unwrap_or(&default_rel_range);
+
+                let abs_noun = abs_range.to_noun(slab);
+                let rel_noun = rel_range.to_noun(slab);
+                let content = T(slab, &[abs_noun, rel_noun]);
+                T(slab, &[D(0), content]) // unit: [~ content]
+            }
+        }
+    }
+}
+
 #[derive(Parser, Debug, Clone)]
 #[command(author, version, about, long_about = None)]
 struct WalletCli {
@@ -185,6 +270,12 @@ pub enum Commands {
         /// Optional key index to use for signing (0-255)
         #[arg(short, long, value_parser = clap::value_parser!(u64).range(0..=255))]
         index: Option<u64>,
+        /// Type of timelock intent: "absolute", "relative", or "none"
+        #[arg(long, default_value = "none")]
+        timelock_intent: String,
+        /// Minimum block height for absolute timelock or relative delay in blocks
+        #[arg(long)]
+        timelock_min: Option<u64>,
     },
 
     /// Create a transaction from a draft file
@@ -256,8 +347,9 @@ pub enum KeyType {
     Pub,
     Prv,
 }
+
 impl KeyType {
-    fn to_string(&self) -> &'static str {
+    pub fn to_string(&self) -> &'static str {
         match self {
             KeyType::Pub => "pub",
             KeyType::Prv => "prv",
@@ -557,6 +649,7 @@ impl Wallet {
         gifts: String,
         fee: u64,
         index: Option<u64>,
+        timelock_intents: Vec<TimelockIntent>,
     ) -> CommandNoun<NounSlab> {
         let mut slab = NounSlab::new();
 
@@ -626,6 +719,16 @@ impl Wallet {
             .into());
         }
 
+        // Use the first timelock intent if provided, or a default one
+        let timelock_intent = if timelock_intents.is_empty() {
+            TimelockIntent::none()
+        } else {
+            timelock_intents
+                .into_iter()
+                .next()
+                .unwrap_or(TimelockIntent::none())
+        };
+
         // Convert names to list of pairs
         let names_noun = names_vec
             .into_iter()
@@ -668,9 +771,14 @@ impl Wallet {
             None => D(0),
         };
 
+        // Convert timelock intent to noun
+        let timelock_intent_noun = timelock_intent.to_noun(&mut slab);
+
         Self::wallet(
             "simple-spend",
-            &[names_noun, recipients_noun, gifts_noun, fee_noun, index_noun],
+            &[
+                names_noun, recipients_noun, gifts_noun, fee_noun, index_noun, timelock_intent_noun,
+            ],
             Operation::Poke,
             &mut slab,
         )
@@ -867,6 +975,7 @@ async fn main() -> Result<(), NockAppError> {
             hardened,
             label,
         } => Wallet::derive_child(*index, *hardened, label),
+
         Commands::SignTx { draft, index } => Wallet::sign_tx(draft, *index),
         Commands::ImportKeys { input } => Wallet::import_keys(input),
         Commands::ExportKeys => Wallet::export_keys(),
@@ -898,13 +1007,35 @@ async fn main() -> Result<(), NockAppError> {
             gifts,
             fee,
             index,
-        } => Wallet::simple_spend(
-            names.clone(),
-            recipients.clone(),
-            gifts.clone(),
-            *fee,
-            *index,
-        ),
+            timelock_intent,
+            timelock_min,
+        } => {
+            let parsed_timelock_intent = match timelock_intent.as_str() {
+                "absolute" => {
+                    TimelockIntent::absolute_only(TimelockRange::new(*timelock_min, None))
+                }
+                "relative" => {
+                    TimelockIntent::relative_only(TimelockRange::new(*timelock_min, None))
+                }
+                "none" => TimelockIntent::none(),
+                _ => {
+                    return Err(CrownError::Unknown(format!(
+                        "Unknown timelock intent: {}",
+                        timelock_intent
+                    ))
+                    .into())
+                }
+            };
+
+            Wallet::simple_spend(
+                names.clone(),
+                recipients.clone(),
+                gifts.clone(),
+                *fee,
+                *index,
+                vec![parsed_timelock_intent],
+            )
+        }
         Commands::SendTx { draft } => Wallet::send_tx(draft),
         Commands::UpdateBalance => Wallet::update_balance(),
         Commands::ExportMasterPubkey => Wallet::export_master_pubkey(),
@@ -1331,14 +1462,22 @@ mod tests {
         let gifts = "1,2".to_string();
         let fee = 1;
 
-        let (noun, op) =
-            Wallet::simple_spend(names.clone(), recipients.clone(), gifts.clone(), fee, None)?;
+        let (noun, op) = Wallet::simple_spend(
+            names.clone(),
+            recipients.clone(),
+            gifts.clone(),
+            fee,
+            None,
+            vec![TimelockIntent::none()],
+        )?;
         let wire = WalletWire::Command(Commands::SimpleSpend {
             names: names.clone(),
             recipients: recipients.clone(),
             gifts: gifts.clone(),
             fee: fee.clone(),
             index: None,
+            timelock_intent: "none".to_string(),
+            timelock_min: None,
         })
         .to_wire();
         let spend_result = wallet.app.poke(wire, noun.clone()).await?;
@@ -1360,13 +1499,20 @@ mod tests {
         // these should be valid names of notes in the wallet balance
         let names = "[Amt4GcpYievY4PXHfffiWriJ1sYfTXFkyQsGzbzwMVzewECWDV3Ad8Q BJnaDB3koU7ruYVdWCQqkFYQ9e3GXhFsDYjJ1vSmKFdxzf6Y87DzP4n]".to_string();
         let recipients = "3HKKp7xZgCw1mhzk4iw735S2ZTavCLHc8YDGRP6G9sSTrRGsaPBu1AqJ8cBDiw2LwhRFnQG7S3N9N9okc28uBda6oSAUCBfMSg5uC9cefhrFrvXVGomoGcRvcFZTWuJzm3ch".to_string();
+
         let gifts = "0".to_string();
         let fee = 0;
 
         // generate keys
         let (genkey_noun, genkey_op) = Wallet::gen_master_privkey("correct horse battery staple")?;
-        let (spend_noun, spend_op) =
-            Wallet::simple_spend(names.clone(), recipients.clone(), gifts.clone(), fee, None)?;
+        let (spend_noun, spend_op) = Wallet::simple_spend(
+            names.clone(),
+            recipients.clone(),
+            gifts.clone(),
+            fee,
+            None,
+            vec![TimelockIntent::none()],
+        )?;
 
         let wire1 = WalletWire::Command(Commands::GenMasterPrivkey {
             seedphrase: "correct horse battery staple".to_string(),
@@ -1381,6 +1527,8 @@ mod tests {
             gifts: gifts.clone(),
             fee: fee.clone(),
             index: None,
+            timelock_intent: "none".to_string(),
+            timelock_min: None,
         })
         .to_wire();
         let spend_result = wallet.app.poke(wire2, spend_noun.clone()).await?;

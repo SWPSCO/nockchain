@@ -80,6 +80,7 @@ pub enum SerfAction<C> {
         wire: WireRepr,
         cause: NounSlab,
         result: oneshot::Sender<Result<NounSlab>>,
+        result_ack: oneshot::Receiver<()>,
     },
     // Provide metrics
     ProvideMetrics {
@@ -214,6 +215,7 @@ impl<C> SerfThread<C> {
     // We are very carefully ensuring that the future does not contain the &self reference, to allow spawning a task without lifetime issues
     pub fn poke(&self, wire: WireRepr, cause: NounSlab) -> impl Future<Output = Result<NounSlab>> {
         let (result, result_fut) = oneshot::channel();
+        let (result_ack_sender, result_ack) = oneshot::channel();
         let action_sender = self.action_sender.clone();
         async move {
             action_sender
@@ -221,20 +223,59 @@ impl<C> SerfThread<C> {
                     wire,
                     cause,
                     result,
+                    result_ack,
                 })
                 .await?;
-            result_fut.await?
+            let res = result_fut.await?;
+            let _ = result_ack_sender.send(());
+            res
+        }
+    }
+
+    pub fn poke_timeout(
+        &self,
+        wire: WireRepr,
+        cause: NounSlab,
+        timeout: Duration,
+    ) -> impl Future<Output = Result<NounSlab>> {
+        let (result, result_fut) = oneshot::channel();
+        let (result_ack_sender, result_ack) = oneshot::channel();
+        let action_sender = self.action_sender.clone();
+        let cancel = self.cancel_token.clone();
+        let timer = tokio::time::sleep(timeout);
+        let cancel_task = tokio::spawn(async move {
+            timer.await;
+            cancel.cancel();
+        });
+        async move {
+            action_sender
+                .send(SerfAction::Poke {
+                    wire,
+                    cause,
+                    result,
+                    result_ack,
+                })
+                .await?;
+            let res = result_fut.await?;
+            cancel_task.abort();
+            let _ = cancel_task.await;
+            let _ = result_ack_sender.send(());
+            res
         }
     }
 
     pub(crate) fn poke_sync(&self, wire: WireRepr, cause: NounSlab) -> Result<NounSlab> {
         let (result, result_fut) = oneshot::channel();
+        let (result_ack_sender, result_ack) = oneshot::channel();
         self.action_sender.blocking_send(SerfAction::Poke {
             wire,
             cause,
             result,
+            result_ack,
         })?;
-        result_fut.blocking_recv()?
+        let res = result_fut.blocking_recv()?;
+        let _ = result_ack_sender.send(());
+        res
     }
 
     pub(crate) fn peek_sync(&self, ovo: NounSlab) -> Result<NounSlab> {
@@ -428,6 +469,7 @@ fn serf_loop<C: SerfCheckpoint>(
                 wire,
                 cause,
                 result,
+                result_ack,
             } => {
                 if inhibit.load(Ordering::SeqCst) {
                     let _ = result
@@ -453,6 +495,10 @@ fn serf_loop<C: SerfCheckpoint>(
                 if let Some(nockapp_metrics) = &serf.metrics {
                     nockapp_metrics.serf_loop_poke.add_timing(&action_elapsed);
                 };
+                let _ = result_ack.blocking_recv().map_err(|e| {
+                    debug!("Failed to receive result ack in serf thread");
+                    e
+                });
             }
             SerfAction::ProvideMetrics { metrics, result } => {
                 serf.metrics = Some(metrics);
@@ -646,6 +692,15 @@ impl<C> Kernel<C> {
     // We are very carefully ensuring the future does not contain the "self" reference to ensure no lifetime issues when spawning tasks
     pub fn poke(&self, wire: WireRepr, cause: NounSlab) -> impl Future<Output = Result<NounSlab>> {
         self.serf.poke(wire, cause)
+    }
+
+    pub fn poke_timeout(
+        &self,
+        wire: WireRepr,
+        cause: NounSlab,
+        timeout: Duration,
+    ) -> impl Future<Output = Result<NounSlab>> {
+        self.serf.poke_timeout(wire, cause, timeout)
     }
 
     pub fn poke_sync(&self, wire: WireRepr, cause: NounSlab) -> Result<NounSlab> {

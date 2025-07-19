@@ -57,7 +57,7 @@ pub struct MessageTracker {
     connections: BTreeMap<ConnectionId, PeerId>,
     // subset of connections: all inbound connections
     inbound_connections: BTreeMap<ConnectionId, PeerId>,
-    peer_connections: BTreeMap<PeerId, BTreeMap<ConnectionId, Multiaddr>>,
+    pub(crate) peer_connections: BTreeMap<PeerId, BTreeMap<ConnectionId, Multiaddr>>,
     request_counts_by_ip: BTreeMap<Ipv4Addr, u64>,
     pub seen_blocks: BTreeSet<String>,
     pub seen_txs: BTreeSet<String>,
@@ -117,7 +117,7 @@ impl MessageTracker {
         let _ = self.metrics.peer_count.swap(peer_count);
     }
 
-    pub(crate) fn lost_connection(&mut self, connection_id: ConnectionId) {
+    pub(crate) fn lost_connection(&mut self, connection_id: ConnectionId) -> usize {
         if let Some(peer_id) = self.connections.remove(&connection_id) {
             self.inbound_connections.remove(&connection_id);
             if let Some(c) = self.peer_connections.get_mut(&peer_id) {
@@ -128,8 +128,9 @@ impl MessageTracker {
                 }
             }
         }
-        let peer_count = self.peer_connections.len() as f64;
-        let _ = self.metrics.peer_count.swap(peer_count);
+        let peer_count = self.peer_connections.len();
+        let _ = self.metrics.peer_count.swap(peer_count as f64);
+        peer_count
     }
 
     pub(crate) fn prune_inbound_connections(
