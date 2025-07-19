@@ -325,20 +325,25 @@
       ``height.summary
     ::
         [%template ~]
-      ^-  (unit (unit [block-commitment:t @ @]))
-      =/  network-target=bignum:bignum:zeke
+      ^-  (unit (unit [?(%0 %1 %2) noun-digest:tip5:zeke bignum:bignum:zeke bignum:bignum:zeke @]))
+      ::
+      =/  target
         (~(got z-by targets.c.k) parent.candidate-block.m.k)
+      ::
+      =/  version=proof-version:sp
+        (height-to-proof-version:con height.candidate-block.m.k)
       ::
       =/  commit=block-commitment:t
         (block-commitment:page:t candidate-block.m.k)
       ::
-      :+  ~  ~
-      :+  commit
-        network-target=(merge:bignum:zeke network-target)
-      ::  this is obviously a placeholder!
-      ::  the idea is to have this be dynamic based on the
-      ::  network target minus some reasonable value
-      pool-target=100.000
+      =/  template  ::  second target is pool target, but right now we assume its the same as the network
+        ?-  version
+          %0  [%0 commit target target pow-len:t]
+          %1  [%1 commit target target pow-len:t]
+          %2  [%2 commit target target pow-len:t]
+        ==
+      ::
+      ``template
     ::
          [%blocks-summary ~]
       ^-  (unit (unit (list [block-id:t page:t])))

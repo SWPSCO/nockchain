@@ -9,27 +9,23 @@
   |%
   +$  kernel-state  [%state version=%1]
   ::
-  +$  pool-id    @tas
-  +$  user-id-1  @tas
-  +$  user-id-2  @tas
-  ::
   +$  cause
-    $:
-      version=?(%0 %1)
-      make-proof=?
-      commit=block-commitment:t
-      =pool-id
-      =user-id-1
-      =user-id-2
+    $%
+      $:
+        %template
+        version=?(%0 %1 %2)
+        commit=block-commitment:t
+        nonce=noun-digest:tip5
+        network-target=bignum:bignum
+        pool-target=bignum:bignum
+        pow-len=@        
+      ==
     ==
   ::
   +$  effect  
-    $:
-      %res
-      eny=@
-      commit=block-commitment:t
-      prf=proof:sp
-      dig=tip5-hash-atom
+    $%
+      [%invalid ~]
+      [%valid commit=block-commitment:t prf=proof:sp dig=tip5-hash-atom valid=?(%network %pool)]
     ==
   ::
   --
@@ -57,28 +53,24 @@
       ~>  %slog.[0 [%leaf "error: bad cause"]]
       `k
     ::
-    =/  cause  u.cause
-    ::
-    =+  nonce-seed=[pool-id.cause user-id-1.cause user-id-2.cause eny]
-    ::
-    =/  nonce=noun-digest:tip5
-      (hash-noun-varlen:tip5 nonce-seed)
-    ::
-    =/  commit  commit.cause
+    =/  c  u.cause
     ::
     =/  input=prover-input:sp
-      ?-  version.cause
-        %0  [%0 commit nonce pow-len]
-        %1  [%1 commit nonce pow-len]
+      ?-  version.c
+        %0  [%0 commit.c nonce.c pow-len.c]
+        %1  [%1 commit.c nonce.c pow-len.c]
+        %2  [%2 commit.c nonce.c pow-len.c]
       ==
     ::
     ~&  %generating-proof
     =/  [prf=proof:sp dig=tip5-hash-atom] 
-      ?:  make-proof.cause
-        (prove-block-inner:mine input)
-      [*proof:sp *tip5-hash-atom]
-    ~&  proof-done+dig
-    :_  k
-    ~[[%res eny commit prf dig]]
+      (prove-block-inner:mine input)
+    =;  eff  
+      :_  k  ~[eff]
+    ?.  (check-target:mine dig network-target.c)
+      ?.  (check-target:mine dig pool-target.c)
+        [%invalid ~]
+      [%valid commit.c prf dig %pool]
+    [%valid commit.c prf dig %network]
   --
 --
