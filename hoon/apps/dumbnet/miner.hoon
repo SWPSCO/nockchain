@@ -22,10 +22,17 @@
       ==
     ==
   ::
+  +$  success
+    $:  
+      commit=block-commitment:t
+      dig=tip5-hash-atom
+      prf=proof:sp
+    ==
   +$  effect  
     $%
-      [%invalid ~]
-      [%valid commit=block-commitment:t prf=proof:sp dig=tip5-hash-atom valid=?(%network %pool)]
+      [%miss hash=noun-digest:tip5]
+      [%pool success]
+      [%network success]
     ==
   ::
   --
@@ -53,7 +60,6 @@
       `k
     ::
     =/  c  u.cause
-    ~&  cause+c
     ::
     =/  input=prover-input:sp
       ?-  version.c
@@ -62,15 +68,14 @@
         %2  [%2 commit.c nonce.c pow-len.c]
       ==
     ::
-    ~&  %generating-proof
     =/  [prf=proof:sp dig=tip5-hash-atom] 
       (prove-block-inner:mine input)
     =;  eff  
       :_  k  ~[eff]
     ?.  (check-target:mine dig network-target.c)
       ?.  (check-target:mine dig pool-target.c)
-        [%invalid ~]
-      [%valid commit.c prf dig %pool]
-    [%valid commit.c prf dig %network]
+        [%miss (atom-to-digest:tip5 dig)]
+      [%pool commit.c dig prf]
+    [%network commit.c dig prf]
   --
 --

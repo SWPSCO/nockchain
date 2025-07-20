@@ -327,20 +327,24 @@
         [%template ~]
       ^-  (unit (unit [?(%0 %1 %2) noun-digest:tip5:zeke bignum:bignum:zeke bignum:bignum:zeke @]))
       ::
-      =/  target
+      =/  commit=block-commitment:t
+        (block-commitment:page:t candidate-block.m.k)
+      ::
+      =/  network-target
         (~(got z-by targets.c.k) parent.candidate-block.m.k)
+      ::
+      ::  temporarily ^2 
+      =/  pool-target
+        (chunk:bignum:zeke (pow (merge:bignum:zeke network-target) 2))
       ::
       =/  version=proof-version:sp
         (height-to-proof-version:con height.candidate-block.m.k)
       ::
-      =/  commit=block-commitment:t
-        (block-commitment:page:t candidate-block.m.k)
-      ::
       =/  template  ::  second target is pool target, but right now we assume its the same as the network
         ?-  version
-          %0  [%0 commit target target pow-len:t]
-          %1  [%1 commit target target pow-len:t]
-          %2  [%2 commit target target pow-len:t]
+          %0  [%0 commit network-target pool-target pow-len:t]
+          %1  [%1 commit network-target pool-target pow-len:t]
+          %2  [%2 commit network-target pool-target pow-len:t]
         ==
       ::
       ``template
