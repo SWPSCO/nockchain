@@ -16,7 +16,7 @@
 ::      .pow-len: the length of the powork puzzle. always 64 on livenet.
 +$  cause
   $%  $:  %share
-          share=[eny=@ commit=noun-digest:tip5 prf=proof dig=tip5-hash-atom]
+          share=[commit=noun-digest:tip5 prf=proof dig=tip5-hash-atom]
           target=@
           pow-len=@
   ==  ==
@@ -46,9 +46,7 @@
   ++  poke
     |=  [wir=wire eny=@ our=@ux now=@da dat=*]
     ^-  [(list effect) k=kernel-state]
-    ~&  "foo"
     ::
-    ~&  dat+dat
     =/  cause  ((soft cause) dat)
     ?~  cause
       ~>  %slog.[0 [%leaf "error: bad cause"]]
@@ -57,19 +55,30 @@
     ?>  ?=([%share *] cause)
     =/  prf=proof  prf.share.cause
     ::
+    ?:  =((lent objects.prf) 0)
+      :_  k
+      [%bad-share %invalid-proof]~
+    ::
+    =/  puzzle  (snag 0 objects.prf)
+    ?.  ?=([%puzzle *] puzzle)
+      :_  k
+      [%bad-share %invalid-type]~
+    ::
     ::  validate that the correct powork puzzle was solved
     =/  check-pow-puzzle=?
-      ?:  =((lent objects.prf) 0)  %.n
-      =/  puzzle  (snag 0 objects.prf)
-      ?.  ?=([%puzzle *] puzzle)  %.n
       =(pow-len.cause len.puzzle)
     ?.  check-pow-puzzle
       :_  k
       [%bad-share %wrong-pow-length]~
     ::
+    ::  validate block commitment
+    ?.  =(commit.share.cause commitment.puzzle)
+    :_  k
+     [%bad-share %wrong-commitment]~    ::
+    ::
     ::  validate the proof
     =/  valid=?
-      (verify:nv prf ~ eny.share.cause)
+      (verify:nv prf ~ eny)
     ?.  valid
       :_  k
       [%bad-share %bad-proof]~
