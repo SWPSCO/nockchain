@@ -1084,18 +1084,22 @@
       ++  do-pow
         ^-  [(list effect:dk) kernel-state:dk]
         ?>  ?=([%pow *] command)
+        ~&  %foo
         =/  commit=block-commitment:t
           (block-commitment:page:t candidate-block.m.k)
         ?.  =(bc.command commit)
           ~&  "mined for wrong (old) block commitment"
           [~ k]
+        ~&  %foo1
         ?:  %+  check-target:mine  dig.command
             (~(got z-by targets.c.k) parent.candidate-block.m.k)
+          ~&  %foo2
           =.  m.k  (set-pow:min prf.command)
           =.  m.k  set-digest:min
           =^  heard-block-effs  k  (heard-block /poke/miner now candidate-block.m.k eny)
           :_  k
           heard-block-effs
+        ~&  %foo3
         [~ k]
       ::
       ++  do-set-mining-key
