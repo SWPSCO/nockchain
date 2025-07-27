@@ -325,7 +325,7 @@
       ``height.summary
     ::
         [%template ~]
-      ^-  (unit (unit [?(%0 %1 %2) noun-digest:tip5:zeke bignum:bignum:zeke bignum:bignum:zeke @]))
+      ^-  (unit (unit [?(%0 %1 %2) noun-digest:tip5:zeke bignum:bignum:zeke bignum:bignum:zeke @ @]))
       ::
       =/  commit=block-commitment:t
         (block-commitment:page:t candidate-block.m.k)
@@ -337,14 +337,16 @@
       =/  pool-target
         (chunk:bignum:zeke (pow (merge:bignum:zeke network-target) 2))
       ::
+      =/  height  height.candidate-block.m.k
+      ::
       =/  version=proof-version:sp
-        (height-to-proof-version:con height.candidate-block.m.k)
+        (height-to-proof-version:con height)
       ::
       =/  template  ::  second target is pool target, but right now we assume its the same as the network
         ?-  version
-          %0  [%0 commit network-target pool-target pow-len:t]
-          %1  [%1 commit network-target pool-target pow-len:t]
-          %2  [%2 commit network-target pool-target pow-len:t]
+          %0  [%0 commit network-target pool-target height pow-len:t]
+          %1  [%1 commit network-target pool-target height pow-len:t]
+          %2  [%2 commit network-target pool-target height pow-len:t]
         ==
       ::
       ``template
