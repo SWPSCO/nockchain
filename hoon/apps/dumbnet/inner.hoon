@@ -324,6 +324,38 @@
       =+  summary=(to-page-summary:page:t (to-page:local-page:t u.heaviest-block))
       ``height.summary
     ::
+        [%commitment-at height=@ ~]
+      ^-  (unit (unit noun-digest:tip5:zeke))
+      =/  num=(unit page-number:t)
+        ((soft page-number:t) height.pole)
+      ?~  num
+        ~&  foo+0
+        ~
+      =/  id=(unit block-id:t)
+        (~(get z-by heaviest-chain.d.k) u.num)
+      ?~  id
+        ~&  foo+1
+        [~ ~]
+      =/  pag
+        (bind (~(get z-by blocks.c.k) u.id) to-page:local-page:t)
+      ?~  pag
+        ~&  foo+2
+        [~ ~]
+      ?~  pow.u.pag
+        ~&  foo+3
+        [~ ~]
+      =/  prf  u.pow.u.pag
+      ?:  =((lent objects.prf) 0)
+        ~&  foo+4
+        [~ ~]
+      =/  puzzle  (snag 0 objects.prf)
+      ?.  ?=([%puzzle *] puzzle)
+        ~&  foo+5
+        [~ ~]
+      ~&  foo+6
+      ~&  commitment+commitment.puzzle
+      ``commitment.puzzle
+    ::
         [%template ~]
       ^-  (unit (unit [?(%0 %1 %2) noun-digest:tip5:zeke bignum:bignum:zeke bignum:bignum:zeke @ @]))
       ::
