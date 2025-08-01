@@ -281,6 +281,12 @@ pub enum Commands {
         hardened: bool,
     },
 
+    // Compose an adanced transaction
+    AdvancedSpend {
+        #[command(subcommand)]
+        command: AdvancedSpendCommands,
+    },
+
     /// Create a transaction from a draft file
     SendTx {
         /// Draft file to create transaction from
@@ -312,6 +318,200 @@ pub enum Commands {
     ShowMasterPrivkey,
 }
 
+#[derive(Subcommand, Debug, Clone)]
+pub enum AdvancedSpendCommands {
+    /// Seed operations
+    #[command(subcommand)]
+    Seed(SeedCommands),
+    /// Input operations  
+    #[command(subcommand)]
+    Input(InputCommands),
+    /// Draft operations
+    #[command(subcommand)]
+    Draft(DraftCommands),
+}
+
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum SeedCommands {
+    /// Create a new seed
+    New {
+        /// Name for the seed
+        name: String,
+    },
+    /// Set seed name
+    SetName {
+        /// Current seed name
+        seed_name: String,
+        /// New name
+        new_name: String,
+    },
+    /// Set the source note for this seed
+    SetSource {
+        /// Seed name
+        seed_name: String,
+        /// Source hash (optional)
+        #[arg(long)]
+        hash: Option<String>,
+        /// Is coinbase
+        #[arg(long, default_value = "false")]
+        is_coinbase: bool,
+    },
+    /// Set the recipient for this seed
+    SetRecipient {
+        /// Seed name
+        seed_name: String,
+        /// Number of signatures required
+        #[arg(short, long)]
+        m: u64,
+        /// Public keys (comma-separated)
+        #[arg(long)]
+        pubkeys: String,
+    },
+    /// Set the gift amount for this seed
+    SetGift {
+        /// Seed name
+        seed_name: String,
+        /// Gift amount
+        gift: u64,
+    },
+    /// Set parent hash directly
+    SetParentHash {
+        /// Seed name
+        seed_name: String,
+        /// Parent hash
+        parent_hash: String,
+    },
+    /// Set parent hash from note name
+    SetParentHashFromName {
+        /// Seed name
+        seed_name: String,
+        /// Note name first part
+        first: String,
+        /// Note name second part
+        last: String,
+    },
+    /// Print seed status
+    PrintStatus {
+        /// Seed name
+        seed_name: String,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum InputCommands {
+    /// Create a new input
+    New {
+        /// Name for the input
+        name: String,
+    },
+    /// Set input name
+    SetName {
+        /// Current input name
+        input_name: String,
+        /// New name
+        new_name: String,
+    },
+    /// Add a seed to this input
+    AddSeed {
+        /// Input name
+        input_name: String,
+        /// Seed name to add
+        seed_name: String,
+    },
+    /// Set the transaction fee for this input
+    SetFee {
+        /// Input name
+        input_name: String,
+        /// Fee amount
+        fee: u64,
+    },
+    /// Set the note for this input using note name
+    SetNoteFromName {
+        /// Input name
+        input_name: String,
+        /// Note name first part
+        first: String,
+        /// Note name second part
+        last: String,
+    },
+    /// Set the note for this input using hash
+    SetNoteFromHash {
+        /// Input name
+        input_name: String,
+        /// Note hash
+        hash: String,
+    },
+    /// Derive note from seeds in this input
+    DeriveNoteFromSeeds {
+        /// Input name
+        input_name: String,
+    },
+    /// Remove a seed from this input
+    RemoveSeed {
+        /// Input name
+        input_name: String,
+        /// Seed name to remove
+        seed_name: String,
+    },
+    /// Remove a seed by hash
+    RemoveSeedByHash {
+        /// Input name
+        input_name: String,
+        /// Seed hash
+        hash: String,
+    },
+    /// Print input status
+    PrintStatus {
+        /// Input name
+        input_name: String,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum DraftCommands {
+    /// Create a new draft
+    New {
+        /// Name for the draft
+        name: String,
+    },
+    /// Set draft name
+    SetName {
+        /// Current draft name
+        draft_name: String,
+        /// New name
+        new_name: String,
+    },
+    /// Add an input to this draft
+    AddInput {
+        /// Draft name
+        draft_name: String,
+        /// Input name to add
+        input_name: String,
+    },
+    /// Remove an input from this draft
+    RemoveInput {
+        /// Draft name
+        draft_name: String,
+        /// Input name to remove
+        input_name: String,
+    },
+    /// Remove an input by note name
+    RemoveInputByName {
+        /// Draft name
+        draft_name: String,
+        /// Note name first part
+        first: String,
+        /// Note name second part
+        last: String,
+    },
+    /// Print draft status
+    PrintStatus {
+        /// Draft name
+        draft_name: String,
+    },
+}
+
 impl Commands {
     fn as_wire_tag(&self) -> &'static str {
         match self {
@@ -325,6 +525,7 @@ impl Commands {
             Commands::ListNotesByPubkey { .. } => "list-notes-by-pubkey",
             Commands::ListNotesByPubkeyCsv { .. } => "list-notes-by-pubkey-csv",
             Commands::SimpleSpend { .. } => "simple-spend",
+            Commands::AdvancedSpend { .. } => "advanced-spend",
             Commands::SendTx { .. } => "send-tx",
             Commands::UpdateBalance => "update-balance",
             Commands::ExportMasterPubkey => "export-master-pubkey",
@@ -948,6 +1149,206 @@ impl Wallet {
         let mut slab = NounSlab::new();
         Self::wallet("show-master-privkey", &[], Operation::Poke, &mut slab)
     }
+
+    fn advanced_spend_seed(command: &SeedCommands) -> CommandNoun<NounSlab> {
+      let mut slab = NounSlab::new();
+      
+      let (cmd_name, args) = match command {
+          SeedCommands::New { name } => {
+              let name_noun = make_tas(&mut slab, name).as_noun();
+              ("new", vec![name_noun])
+          },
+          SeedCommands::SetName { seed_name, new_name } => {
+              let seed_name_noun = make_tas(&mut slab, seed_name).as_noun();
+              let new_name_noun = make_tas(&mut slab, new_name).as_noun();
+              ("set-name", vec![seed_name_noun, new_name_noun])
+          },
+          SeedCommands::SetSource { seed_name, hash, is_coinbase } => {
+              let seed_name_noun = make_tas(&mut slab, seed_name).as_noun();
+              let source_noun = match hash {
+                  Some(h) => {
+                      let hash_noun = make_tas(&mut slab, h).as_noun();
+                      let coinbase_noun = if *is_coinbase { YES } else { NO };
+                      T(&mut slab, &[D(0), hash_noun, coinbase_noun])
+                  },
+                  None => D(0)
+              };
+              ("set-source", vec![seed_name_noun, source_noun])
+          },
+          SeedCommands::SetRecipient { seed_name, m, pubkeys } => {
+              let seed_name_noun = make_tas(&mut slab, seed_name).as_noun();
+              let m_noun = D(*m);
+              
+              // Parse comma-separated pubkeys
+              let pubkeys_list: Vec<&str> = pubkeys.split(',').map(|s| s.trim()).collect();
+              let pubkeys_noun = pubkeys_list.into_iter().rev().fold(D(0), |acc, pk| {
+                  let pk_noun = make_tas(&mut slab, pk).as_noun();
+                  Cell::new(&mut slab, pk_noun, acc).as_noun()
+              });
+              
+              let recipient_noun = T(&mut slab, &[m_noun, pubkeys_noun]);
+              ("set-recipient", vec![seed_name_noun, recipient_noun])
+          },
+          SeedCommands::SetGift { seed_name, gift } => {
+              let seed_name_noun = make_tas(&mut slab, seed_name).as_noun();
+              let gift_noun = D(*gift);
+              ("set-gift", vec![seed_name_noun, gift_noun])
+          },
+          SeedCommands::SetParentHash { seed_name, parent_hash } => {
+              let seed_name_noun = make_tas(&mut slab, seed_name).as_noun();
+              let hash_noun = make_tas(&mut slab, parent_hash).as_noun();
+              ("set-parent-hash", vec![seed_name_noun, hash_noun])
+          },
+          SeedCommands::SetParentHashFromName { seed_name, first, last } => {
+              let seed_name_noun = make_tas(&mut slab, seed_name).as_noun();
+              let first_noun = make_tas(&mut slab, first).as_noun();
+              let last_noun = make_tas(&mut slab, last).as_noun();
+              let name_noun = T(&mut slab, &[first_noun, last_noun]);
+              ("set-parent-hash-from-name", vec![seed_name_noun, name_noun])
+          },
+          SeedCommands::PrintStatus { seed_name } => {
+              let seed_name_noun = make_tas(&mut slab, seed_name).as_noun();
+              ("print-status", vec![seed_name_noun])
+          },
+      };
+
+      let seed_tag = make_tas(&mut slab, "seed").as_noun();
+      let cmd_tag = make_tas(&mut slab, cmd_name).as_noun();
+      
+      let args_noun = match args.len() {
+          0 => D(0),
+          1 => args[0],
+          _ => T(&mut slab, &args),
+      };
+      
+      let cmd_noun = T(&mut slab, &[cmd_tag, args_noun]);
+      let seed_cmd = T(&mut slab, &[seed_tag, cmd_noun]);
+      
+      Self::wallet("advanced-spend", &[seed_cmd], Operation::Poke, &mut slab)
+  }
+
+  /// Advanced spend input operations
+  fn advanced_spend_input(command: &InputCommands) -> CommandNoun<NounSlab> {
+      let mut slab = NounSlab::new();
+      
+      let (cmd_name, args) = match command {
+          InputCommands::New { name } => {
+              let name_noun = make_tas(&mut slab, name).as_noun();
+              ("new", vec![name_noun])
+          },
+          InputCommands::SetName { input_name, new_name } => {
+              let input_name_noun = make_tas(&mut slab, input_name).as_noun();
+              let new_name_noun = make_tas(&mut slab, new_name).as_noun();
+              ("set-name", vec![input_name_noun, new_name_noun])
+          },
+          InputCommands::AddSeed { input_name, seed_name } => {
+              let input_name_noun = make_tas(&mut slab, input_name).as_noun();
+              let seed_name_noun = make_tas(&mut slab, seed_name).as_noun();
+              ("add-seed", vec![input_name_noun, seed_name_noun])
+          },
+          InputCommands::SetFee { input_name, fee } => {
+              let input_name_noun = make_tas(&mut slab, input_name).as_noun();
+              let fee_noun = D(*fee);
+              ("set-fee", vec![input_name_noun, fee_noun])
+          },
+          InputCommands::SetNoteFromName { input_name, first, last } => {
+              let input_name_noun = make_tas(&mut slab, input_name).as_noun();
+              let first_noun = make_tas(&mut slab, first).as_noun();
+              let last_noun = make_tas(&mut slab, last).as_noun();
+              let name_noun = T(&mut slab, &[first_noun, last_noun]);
+              ("set-note-from-name", vec![input_name_noun, name_noun])
+          },
+          InputCommands::SetNoteFromHash { input_name, hash } => {
+              let input_name_noun = make_tas(&mut slab, input_name).as_noun();
+              let hash_noun = make_tas(&mut slab, hash).as_noun();
+              ("set-note-from-hash", vec![input_name_noun, hash_noun])
+          },
+          InputCommands::DeriveNoteFromSeeds { input_name } => {
+              let input_name_noun = make_tas(&mut slab, input_name).as_noun();
+              ("derive-note-from-seeds", vec![input_name_noun])
+          },
+          InputCommands::RemoveSeed { input_name, seed_name } => {
+              let input_name_noun = make_tas(&mut slab, input_name).as_noun();
+              let seed_name_noun = make_tas(&mut slab, seed_name).as_noun();
+              ("remove-seed", vec![input_name_noun, seed_name_noun])
+          },
+          InputCommands::RemoveSeedByHash { input_name, hash } => {
+              let input_name_noun = make_tas(&mut slab, input_name).as_noun();
+              let hash_noun = make_tas(&mut slab, hash).as_noun();
+              ("remove-seed-by-hash", vec![input_name_noun, hash_noun])
+          },
+          InputCommands::PrintStatus { input_name } => {
+              let input_name_noun = make_tas(&mut slab, input_name).as_noun();
+              ("print-status", vec![input_name_noun])
+          },
+      };
+
+      let input_tag = make_tas(&mut slab, "input").as_noun();
+      let cmd_tag = make_tas(&mut slab, cmd_name).as_noun();
+      
+      let args_noun = match args.len() {
+          0 => D(0),
+          1 => args[0],
+          _ => T(&mut slab, &args),
+      };
+      
+      let cmd_noun = T(&mut slab, &[cmd_tag, args_noun]);
+      let input_cmd = T(&mut slab, &[input_tag, cmd_noun]);
+      
+      Self::wallet("advanced-spend", &[input_cmd], Operation::Poke, &mut slab)
+  }
+
+  /// Advanced spend draft operations
+  fn advanced_spend_draft(command: &DraftCommands) -> CommandNoun<NounSlab> {
+      let mut slab = NounSlab::new();
+      
+      let (cmd_name, args) = match command {
+          DraftCommands::New { name } => {
+              let name_noun = make_tas(&mut slab, name).as_noun();
+              ("new", vec![name_noun])
+          },
+          DraftCommands::SetName { draft_name, new_name } => {
+              let draft_name_noun = make_tas(&mut slab, draft_name).as_noun();
+              let new_name_noun = make_tas(&mut slab, new_name).as_noun();
+              ("set-name", vec![draft_name_noun, new_name_noun])
+          },
+          DraftCommands::AddInput { draft_name, input_name } => {
+              let draft_name_noun = make_tas(&mut slab, draft_name).as_noun();
+              let input_name_noun = make_tas(&mut slab, input_name).as_noun();
+              ("add-input", vec![draft_name_noun, input_name_noun])
+          },
+          DraftCommands::RemoveInput { draft_name, input_name } => {
+              let draft_name_noun = make_tas(&mut slab, draft_name).as_noun();
+              let input_name_noun = make_tas(&mut slab, input_name).as_noun();
+              ("remove-input", vec![draft_name_noun, input_name_noun])
+          },
+          DraftCommands::RemoveInputByName { draft_name, first, last } => {
+              let draft_name_noun = make_tas(&mut slab, draft_name).as_noun();
+              let first_noun = make_tas(&mut slab, first).as_noun();
+              let last_noun = make_tas(&mut slab, last).as_noun();
+              let name_noun = T(&mut slab, &[first_noun, last_noun]);
+              ("remove-input-by-name", vec![draft_name_noun, name_noun])
+          },
+          DraftCommands::PrintStatus { draft_name } => {
+              let draft_name_noun = make_tas(&mut slab, draft_name).as_noun();
+              ("print-status", vec![draft_name_noun])
+          },
+      };
+
+      let draft_tag = make_tas(&mut slab, "draft").as_noun();
+      let cmd_tag = make_tas(&mut slab, cmd_name).as_noun();
+      
+      let args_noun = match args.len() {
+          0 => D(0),
+          1 => args[0],
+          _ => T(&mut slab, &args),
+      };
+      
+      let cmd_noun = T(&mut slab, &[cmd_tag, args_noun]);
+      let draft_cmd = T(&mut slab, &[draft_tag, cmd_noun]);
+      
+      Self::wallet("advanced-spend", &[draft_cmd], Operation::Poke, &mut slab)
+  }
 }
 
 pub async fn wallet_data_dir() -> Result<PathBuf, NockAppError> {
@@ -999,6 +1400,7 @@ async fn main() -> Result<(), NockAppError> {
         | Commands::ShowMasterPubkey
         | Commands::ShowMasterPrivkey
         | Commands::SimpleSpend { .. } => false,
+        | Commands::AdvancedSpend { .. } => false,
 
         // All other commands DO need sync
         _ => true,
@@ -1116,7 +1518,14 @@ async fn main() -> Result<(), NockAppError> {
                 *hardened,
                 vec![parsed_timelock_intent],
             )
-        }
+        },
+        Commands::AdvancedSpend { command } => {
+            match command {
+                AdvancedSpendCommands::Seed(seed_cmd) => Wallet::advanced_spend_seed(seed_cmd),
+                AdvancedSpendCommands::Input(input_cmd) => Wallet::advanced_spend_input(input_cmd),
+                AdvancedSpendCommands::Draft(draft_cmd) => Wallet::advanced_spend_draft(draft_cmd),
+            }
+        },
         Commands::SendTx { draft } => Wallet::send_tx(draft),
         Commands::UpdateBalance => Wallet::update_balance(),
         Commands::ExportMasterPubkey => Wallet::export_master_pubkey(),
