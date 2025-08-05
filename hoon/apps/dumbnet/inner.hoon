@@ -358,7 +358,7 @@
       =/  network-target
         (~(got z-by targets.c.k) parent.candidate-block.m.k)
       ::
-      =/  pool-target  (div max-tip5-atom (bex difficulty))
+      =/  pool-target  (chunk:bignum:zeke (div max-tip5-atom:tip5:zeke (bex difficulty.pole)))
       ::
       =/  height  height.candidate-block.m.k
       ::
