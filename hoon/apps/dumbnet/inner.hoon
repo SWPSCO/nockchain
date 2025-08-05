@@ -349,7 +349,7 @@
       ~&  commitment+commitment.puzzle
       ``commitment.puzzle
     ::
-        [%template ~]
+        [%template difficulty=@ ~]
       ^-  (unit (unit [?(%0 %1 %2) noun-digest:tip5:zeke bignum:bignum:zeke bignum:bignum:zeke @ @]))
       ::
       =/  commit=block-commitment:t
@@ -358,9 +358,7 @@
       =/  network-target
         (~(got z-by targets.c.k) parent.candidate-block.m.k)
       ::
-      ::  temporarily ^2 
-      =/  pool-target
-        (chunk:bignum:zeke (pow (merge:bignum:zeke network-target) 2))
+      =/  pool-target  (div max-tip5-atom (bex difficulty))
       ::
       =/  height  height.candidate-block.m.k
       ::
