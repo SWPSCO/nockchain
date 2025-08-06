@@ -47,36 +47,30 @@ jobs:
           echo 'git-fetch-with-cli = true' >> ~/.cargo/config.toml
       - name: Install build dependencies
         run: |
-          sudo apt-get update && sudo apt-get install -y build-essential musl-tools
+          sudo apt-get update && sudo apt-get install -y build-essential
           mkdir -p hoon
           mkdir -p assets
           rustup default stable
-          rustup target add x86_64-unknown-linux-musl
           cp .env_example .env
       - name: install choo
         run: |
-          cargo install --target x86_64-unknown-linux-musl --locked --force --path crates/hoonc --bin hoonc
+          cargo install --target x86_64-unknown-linux-gnu --locked --force --path crates/hoonc --bin hoonc
       - name: build hoon assets
         run: make build-hoon-all
       - name: build nockchain
         run: |
-          cargo install --target x86_64-unknown-linux-musl --locked --force --path crates/nockchain --bin nockchain
-      - name: build others
-        run: |
-          make build-trivial
-          make assets/dumb.jam
-          make assets/wal.jam
+          cargo install --target x86_64-unknown-linux-gnu --locked --force --path crates/nockchain --bin nockchain
       - name: build wallet
         run: |
-          cargo install --target x86_64-unknown-linux-musl --locked --force --path crates/nockchain-wallet --bin nockchain-wallet
+          cargo install --target x86_64-unknown-linux-gnu --locked --force --path crates/nockchain-wallet --bin nockchain-wallet
       - uses: actions/upload-artifact@v4
         with:
           name: linux-artifacts-x64
           path: |
             assets/*.jam
-            target/x86_64-unknown-linux-musl/release/nockchain
-            target/x86_64-unknown-linux-musl/release/hoonc
-            target/x86_64-unknown-linux-musl/release/nockchain-wallet
+            target/x86_64-unknown-linux-gnu/release/nockchain
+            target/x86_64-unknown-linux-gnu/release/hoonc
+            target/x86_64-unknown-linux-gnu/release/nockchain-wallet
 
   package:
     needs: [build-linux-x64]
@@ -91,7 +85,7 @@ jobs:
       - name: make zips
         run: |
           mkdir -p out/linux_x64 out/jams
-          cp linux_x64/target/x86_64-unknown-linux-musl/release/{nockchain,hoonc,nockchain-wallet} out/linux_x64/
+          cp linux_x64/target/x86_64-unknown-linux-gnu/release/{nockchain,hoonc,nockchain-wallet} out/linux_x64/
           chmod +x out/linux_x64/*
           cp linux_x64/assets/*.jam out/jams/
           (cd out/linux_x64 && zip -j ../nockchain_linux_x64.zip *)

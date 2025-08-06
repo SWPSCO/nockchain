@@ -49,33 +49,30 @@ jobs:
           echo 'git-fetch-with-cli = true' >> ~/.cargo/config.toml
       - name: Install build dependencies
         run: |
-          sudo apt-get update && sudo apt-get install -y build-essential musl-tools musl-tools g++-multilib musl-dev
-          echo "CC_x86_64_unknown_linux_musl=musl-gcc" >> $GITHUB_ENV
-          echo "CXX_x86_64_unknown_linux_musl=g++" >> $GITHUB_ENV
+          sudo apt-get update && sudo apt-get install -y build-essential
           mkdir -p hoon
           mkdir -p assets
           rustup default stable
-          rustup target add x86_64-unknown-linux-musl
           cp .env_example .env
       - name: install choo
         run: |
-          cargo install --target x86_64-unknown-linux-musl --locked --force --path crates/hoonc --bin hoonc
+          cargo install --target x86_64-unknown-linux-gnu --locked --force --path crates/hoonc --bin hoonc
       - name: build hoon assets
         run: make build-hoon-all
       - name: build nockchain
         run: |
-          cargo install --target x86_64-unknown-linux-musl --locked --force --path crates/nockchain --bin nockchain
+          cargo install --target x86_64-unknown-linux-gnu --locked --force --path crates/nockchain --bin nockchain
       - name: build wallet
         run: |
-          cargo install --target x86_64-unknown-linux-musl --locked --force --path crates/nockchain-wallet --bin nockchain-wallet
+          cargo install --target x86_64-unknown-linux-gnu --locked --force --path crates/nockchain-wallet --bin nockchain-wallet
       - uses: actions/upload-artifact@v4
         with:
           name: linux-artifacts-x64
           path: |
             assets/*.jam
-            target/x86_64-unknown-linux-musl/release/nockchain
-            target/x86_64-unknown-linux-musl/release/hoonc
-            target/x86_64-unknown-linux-musl/release/nockchain-wallet
+            target/x86_64-unknown-linux-gnu/release/nockchain
+            target/x86_64-unknown-linux-gnu/release/hoonc
+            target/x86_64-unknown-linux-gnu/release/nockchain-wallet
 
   build-macos:
     needs: vars
@@ -255,7 +252,7 @@ jobs:
       - name: make zips
         run: |
           mkdir -p out/linux_x64 out/jams
-          cp linux_x64/target/x86_64-unknown-linux-musl/release/{nockchain,hoonc,nockchain-wallet} out/linux_x64/
+          cp linux_x64/target/x86_64-unknown-linux-gnu/release/{nockchain,hoonc,nockchain-wallet} out/linux_x64/
           chmod +x out/linux_x64/*
           cp linux_x64/assets/*.jam out/jams/
           (cd out/linux_x64 && zip -j ../nockchain_linux_x64.zip *)
@@ -333,10 +330,6 @@ jobs:
           ## MacOS notes
           
           This only includes builds for aarch64 (Apple Silicon).
-          
-          ## Linux notes
-          
-          These binaries are statically linked musl builds for x64. They should run on any x64 linux machine.
           EOF
       - uses: softprops/action-gh-release@v2
         env:

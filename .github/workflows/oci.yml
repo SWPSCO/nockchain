@@ -67,19 +67,19 @@ jobs:
             && rm -rf /var/lib/apt/lists/*
         WORKDIR /build
         RUN git clone https://github.com/zorp-corp/nockchain.git .
-        RUN rustup target add x86_64-unknown-linux-musl
+        RUN rustup target add x86_64-unknown-linux-gnu
         RUN mkdir -p ~/.cargo && \
             echo '[net]' >> ~/.cargo/config.toml && \
             echo 'git-fetch-with-cli = true' >> ~/.cargo/config.toml
         RUN mkdir -p hoon assets
         RUN cp .env_example .env
-        RUN cargo install --target x86_64-unknown-linux-musl --locked --force --path crates/hoonc --bin hoonc
+        RUN cargo install --target x86_64-unknown-linux-gnu --locked --force --path crates/hoonc --bin hoonc
         RUN make build-hoon-all
-        RUN cargo install --target x86_64-unknown-linux-musl --locked --force --path crates/nockchain --bin nockchain
+        RUN cargo install --target x86_64-unknown-linux-gnu --locked --force --path crates/nockchain --bin nockchain
         FROM alpine:latest
         WORKDIR /nc
         RUN apk --no-cache add ca-certificates
-        COPY --from=builder /build/target/x86_64-unknown-linux-musl/release/nockchain /usr/local/bin/nockchain
+        COPY --from=builder /build/target/x86_64-unknown-linux-gnu/release/nockchain /usr/local/bin/nockchain
         ENTRYPOINT ["nockchain", "--help"]
         EOF
         
