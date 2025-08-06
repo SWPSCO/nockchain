@@ -75,7 +75,7 @@ jobs:
         RUN cp .env_example .env
         RUN cargo install --target x86_64-unknown-linux-gnu --locked --force --path crates/hoonc --bin hoonc
         RUN make build-hoon-all
-        RUN cargo install --target x86_64-unknown-linux-gnu --locked --force --path crates/nockchain --bin nockchain
+        RUN cargo build --release --target x86_64-unknown-linux-gnu --locked --force --path crates/nockchain --bin nockchain
         FROM alpine:latest
         WORKDIR /nc
         RUN apk --no-cache add ca-certificates

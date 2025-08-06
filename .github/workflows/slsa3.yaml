@@ -56,15 +56,16 @@ jobs:
           cp .env_example .env
       - name: install choo
         run: |
-          cargo install --target x86_64-unknown-linux-gnu --locked --force --path crates/hoonc --bin hoonc
+          cargo build --release --target x86_64-unknown-linux-gnu --locked --force --path crates/hoonc --bin hoonc
+          cp $(which hoonc) target/x86_64-unknown-linux-gnu/release/
       - name: build hoon assets
         run: make build-hoon-all
       - name: build nockchain
         run: |
-          cargo install --target x86_64-unknown-linux-gnu --locked --force --path crates/nockchain --bin nockchain
+          cargo build --release --target x86_64-unknown-linux-gnu --locked --force --path crates/nockchain --bin nockchain
       - name: build wallet
         run: |
-          cargo install --target x86_64-unknown-linux-gnu --locked --force --path crates/nockchain-wallet --bin nockchain-wallet
+          cargo build --release --target x86_64-unknown-linux-gnu --locked --force --path crates/nockchain-wallet --bin nockchain-wallet
       - uses: actions/upload-artifact@v4
         with:
           name: linux-artifacts-x64
