@@ -56,7 +56,7 @@ jobs:
           cp .env_example .env
       - name: install choo
         run: |
-          cargo install --release --target x86_64-unknown-linux-gnu --locked --force --path crates/hoonc --bin hoonc
+          cargo install --target x86_64-unknown-linux-gnu --locked --force --path crates/hoonc --bin hoonc
           cp $(which hoonc) target/x86_64-unknown-linux-gnu/release/
       - name: build hoon assets
         run: make build-hoon-all
