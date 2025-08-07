@@ -1,11 +1,10 @@
-use std::fs::{create_dir_all, File};
-use std::io::{Error, Write};
+use std::io::Error;
 use std::path::PathBuf;
+use std::ptr::NonNull;
 use std::result::Result;
 use std::time::Instant;
 
 use either::Either::*;
-use json::object;
 use nockvm_macros::tas;
 
 use crate::flog;
@@ -16,86 +15,100 @@ use crate::mem::NockStack;
 use crate::mug::met3_usize;
 use crate::noun::{Atom, DirectAtom, IndirectAtom, Noun};
 
+mod json;
+pub use json::*;
+
+mod tracing_backend;
+pub use tracing_backend::*;
+
+mod filter;
+pub use filter::*;
+
 crate::gdb!();
 
-pub struct TraceInfo {
-    pub file: File,
-    pub pid: u32,
-    pub process_start: Instant,
-}
+pub trait TraceBackend: Send {
+    fn append_trace(&mut self, stack: &mut NockStack, path: Noun);
 
-pub struct TraceStack {
-    pub start: Instant,
-    pub path: Noun,
-    pub next: *const TraceStack,
-}
+    unsafe fn write_nock_trace(
+        &mut self,
+        stack: &mut NockStack,
+        trace_stack: *const TraceStack,
+    ) -> Result<(), Error>;
 
-pub fn create_trace_file(pier_path: PathBuf) -> Result<TraceInfo, Error> {
-    let mut trace_dir_path = pier_path.clone();
-    trace_dir_path.push(".urb");
-    trace_dir_path.push("put");
-    trace_dir_path.push("trace");
-    create_dir_all(&trace_dir_path)?;
-
-    let trace_path: PathBuf;
-    let mut trace_idx = 0u32;
-    loop {
-        let mut prospective_path = trace_dir_path.clone();
-        prospective_path.push(format!("{}.json", trace_idx));
-
-        if prospective_path.exists() {
-            trace_idx += 1;
-        } else {
-            trace_path = prospective_path.clone();
-            break;
-        }
+    fn write_serf_trace(&mut self, _name: &str, _start: Instant) -> Result<(), Error> {
+        Ok(())
     }
 
-    let file = File::create(trace_path)?;
-    let process_start = Instant::now();
-    let pid = std::process::id();
+    fn write_metadata(&mut self) -> Result<(), Error> {
+        Ok(())
+    }
+}
 
-    Ok(TraceInfo {
-        file,
-        pid,
-        process_start,
-    })
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct TraceStack<T = ()> {
+    pub next: *const TraceStack<T>,
+    pub data: T,
+}
+
+impl<T> TraceStack<T> {
+    pub fn push_on_stack(stack: &mut NockStack, data: T) -> NonNull<TraceStack> {
+        unsafe {
+            let trace_stack = *(stack.local_noun_pointer(1) as *const *const Self);
+            let new_trace_entry = stack.struct_alloc(1);
+            *new_trace_entry = Self {
+                next: trace_stack,
+                data,
+            };
+            *(stack.local_noun_pointer(1) as *mut *mut Self) = new_trace_entry;
+            NonNull::new_unchecked(new_trace_entry as *mut TraceStack)
+        }
+    }
+}
+
+impl<T> core::ops::Deref for TraceStack<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.data
+    }
+}
+
+impl<T> core::ops::DerefMut for TraceStack<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.data
+    }
+}
+
+pub struct TraceInfo {
+    pub backend: Box<dyn TraceBackend>,
+    pub filter: Option<Box<dyn TraceFilter>>,
+}
+
+impl TraceInfo {
+    pub fn append_trace(&mut self, stack: &mut NockStack, path: Noun) {
+        if let Some(filter) = self.filter.as_mut() {
+            if !filter.should_trace(path) {
+                return;
+            }
+        }
+
+        self.backend.append_trace(stack, path);
+    }
+}
+
+impl From<JsonBackend> for TraceInfo {
+    fn from(backend: JsonBackend) -> Self {
+        Self {
+            backend: Box::new(backend),
+            filter: None,
+        }
+    }
 }
 
 /// Write metadata to trace file
 pub fn write_metadata(info: &mut TraceInfo) -> Result<(), Error> {
-    info.file.write_all("[ ".as_bytes())?;
-
-    (object! {
-        "name" => "process_name",
-        "ph" => "M",
-        "pid" => info.pid,
-        "args" => object! { "name" => "urbit", },
-    })
-    .write(&mut info.file)?;
-    info.file.write_all(",\n".as_bytes())?;
-
-    (object! {
-        "name" => "thread_name",
-        "ph" => "M",
-        "pid" => info.pid,
-        "tid" => 1,
-        "args" => object! { "name" => "Event Processing", },
-    })
-    .write(&mut info.file)?;
-    info.file.write_all(",\n".as_bytes())?;
-
-    (object! {
-        "name" => "thread_sort_index",
-        "ph" => "M",
-        "pid" => info.pid,
-        "tid" => 1,
-        "args" => object! { "sort_index" => 1, },
-    })
-    .write(&mut info.file)?;
-    info.file.write_all(",\n".as_bytes())?;
-
-    Ok(())
+    info.backend.write_metadata()
 }
 
 /// Abort writing to trace file if an error is encountered.
@@ -121,76 +134,15 @@ pub fn write_serf_trace_safe(context: &mut Context, name: &str, start: Instant) 
 }
 
 pub fn write_serf_trace(info: &mut TraceInfo, name: &str, start: Instant) -> Result<(), Error> {
-    let ts = start
-        .saturating_duration_since(info.process_start)
-        .as_micros() as f64;
-    let dur = Instant::now().saturating_duration_since(start).as_micros() as f64;
-
-    let obj = object! {
-        "cat" => "event",
-        "name" => name,
-        "ph" => "X",
-        "pid" => info.pid,
-        "tid" => 1,
-        "ts" => ts,
-        "dur" => dur,
-    };
-    let _ = obj.write(&mut info.file);
-    info.file.write_all(",\n".as_bytes())?;
-
-    Ok(())
+    info.backend.write_serf_trace(name, start)
 }
 
 pub unsafe fn write_nock_trace(
     stack: &mut NockStack,
     info: &mut TraceInfo,
-    mut trace_stack: *const TraceStack,
+    trace_stack: *const TraceStack,
 ) -> Result<(), Error> {
-    let now = Instant::now();
-
-    while !trace_stack.is_null() {
-        let ts = (*trace_stack)
-            .start
-            .saturating_duration_since(info.process_start)
-            .as_micros() as f64;
-        let dur = now
-            .saturating_duration_since((*trace_stack).start)
-            .as_micros() as f64;
-
-        // Don't write out traces less than 33us
-        // (same threshhold used in vere)
-        if dur < 33.0 {
-            trace_stack = (*trace_stack).next;
-            continue;
-        }
-
-        let pc = path_to_cord(stack, (*trace_stack).path);
-        let pc_len = met3_usize(pc);
-        let pc_bytes = &pc.as_ne_bytes()[0..pc_len];
-        let pc_str = match std::str::from_utf8(pc_bytes) {
-            Ok(valid) => valid,
-            Err(error) => {
-                let (valid, _) = pc_bytes.split_at(error.valid_up_to());
-                unsafe { std::str::from_utf8_unchecked(valid) }
-            }
-        };
-
-        let obj = object! {
-            "cat" => "nock",
-            "name" => pc_str,
-            "ph" => "X",
-            "pid" => info.pid,
-            "tid" => 1,
-            "ts" => ts,
-            "dur" => dur,
-        };
-        let _ = obj.write(&mut info.file);
-        info.file.write_all(",\n".as_bytes())?;
-
-        trace_stack = (*trace_stack).next;
-    }
-
-    Ok(())
+    info.backend.write_nock_trace(stack, trace_stack)
 }
 
 //  XX: Need Rust string interpolation helper that doesn't allocate

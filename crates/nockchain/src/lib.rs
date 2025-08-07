@@ -156,8 +156,8 @@ pub fn gen_keypair(keypair_path: &Path) -> Result<Keypair, Box<dyn Error>> {
     Ok(new_keypair)
 }
 
-fn load_keypair(keypair_path: &Path, force_new: bool) -> Result<Keypair, Box<dyn Error>> {
-    if keypair_path.try_exists()? && !force_new {
+fn load_keypair(keypair_path: &Path, force_old: bool) -> Result<Keypair, Box<dyn Error>> {
+    if keypair_path.try_exists()? && force_old {
         let keypair_bytes = std::fs::read(keypair_path)?;
         let keypair = libp2p::identity::Keypair::from_protobuf_encoding(&keypair_bytes[..])?;
         let peer_id = keypair.public().to_peer_id();
@@ -169,7 +169,7 @@ fn load_keypair(keypair_path: &Path, force_new: bool) -> Result<Keypair, Box<dyn
         info!("Loaded identity as peer {peer_id}");
         Ok(keypair)
     } else {
-        if force_new && keypair_path.try_exists()? {
+        if !force_old && keypair_path.try_exists()? {
             info!("Discarding existing peer ID and generating a new one");
             std::fs::remove_file(keypair_path)?;
         }
@@ -202,7 +202,7 @@ pub async fn init_with_kernel<J: Jammer + Send + 'static>(
         let keypair_path = Path::new(config::IDENTITY_PATH);
         load_keypair(
             keypair_path,
-            cli.as_ref().map(|c| c.new_peer_id).unwrap_or(false),
+            cli.as_ref().map(|c| c.no_new_peer_id).unwrap_or(false),
         )?
     };
     eprintln!(
@@ -474,7 +474,7 @@ pub async fn init_with_kernel<J: Jammer + Send + 'static>(
         crate::mining::create_mining_driver(mining_config, mine, threads, Some(mining_init_tx));
     nockapp.add_io_driver(mining_driver).await;
 
-    let libp2p_driver = nockchain_libp2p_io::nc::make_libp2p_driver(
+    let libp2p_driver = nockchain_libp2p_io::driver::make_libp2p_driver(
         keypair,
         bind_multiaddrs,
         allowed,

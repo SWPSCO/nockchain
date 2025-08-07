@@ -54,12 +54,12 @@ pub fn evaluate_deep_jet(context: &mut Context, subject: Noun) -> Result<Noun, J
     let trace_elems: Vec<Belt> = HoonList::try_from(trace_elems)?
         .into_iter()
         .map(|x| x.as_atom().unwrap().as_u64().unwrap())
-        .map(|x| Belt(x))
+        .map(Belt)
         .collect();
     let comp_elems: Vec<Belt> = HoonList::try_from(comp_elems)?
         .into_iter()
         .map(|x| x.as_atom().unwrap().as_u64().unwrap())
-        .map(|x| Belt(x))
+        .map(Belt)
         .collect();
     let num_comp_pieces = num_comp_pieces.as_atom()?.as_u64()?;
     let Ok(weights) = FPolySlice::try_from(weights) else {
@@ -81,7 +81,7 @@ pub fn evaluate_deep_jet(context: &mut Context, subject: Noun) -> Result<Noun, J
 
     //  TODO use g defined wherever it is
     let g = Felt::lift(Belt(7));
-    let omega_pow = fmul_(&fpow_(&omega, index as u64), &g);
+    let omega_pow = fmul_(&fpow_(omega, index as u64), &g);
 
     let mut acc = Felt::zero();
     let mut num = 0usize;
@@ -94,15 +94,15 @@ pub fn evaluate_deep_jet(context: &mut Context, subject: Noun) -> Result<Noun, J
         let current_trace_elems = &trace_elems[total_full_width..(total_full_width + full_width)];
 
         // Process first row trace columns
-        let denom = fsub_(&omega_pow, &deep_challenge);
+        let denom = fsub_(&omega_pow, deep_challenge);
         (acc, num) = process_belt(
-            current_trace_elems, &trace_evaluations.0, &weights.0, full_width, num, &denom, &acc,
+            current_trace_elems, trace_evaluations.0, weights.0, full_width, num, &denom, &acc,
         );
 
         // Process second row trace columns (shifted by omicron)
-        let denom = fsub_(&omega_pow, &fmul_(&deep_challenge, &omicron));
+        let denom = fsub_(&omega_pow, &fmul_(deep_challenge, &omicron));
         (acc, num) = process_belt(
-            current_trace_elems, &trace_evaluations.0, &weights.0, full_width, num, &denom, &acc,
+            current_trace_elems, trace_evaluations.0, weights.0, full_width, num, &denom, &acc,
         );
 
         total_full_width += full_width;
@@ -116,26 +116,26 @@ pub fn evaluate_deep_jet(context: &mut Context, subject: Noun) -> Result<Noun, J
         let current_trace_elems = &trace_elems[total_full_width..(total_full_width + full_width)];
 
         // Process first row trace columns with new_comp_eval
-        let denom = fsub_(&omega_pow, &new_comp_eval);
+        let denom = fsub_(&omega_pow, new_comp_eval);
         (acc, num) = process_belt(
-            current_trace_elems, &trace_evaluations.0, &weights.0, full_width, num, &denom, &acc,
+            current_trace_elems, trace_evaluations.0, weights.0, full_width, num, &denom, &acc,
         );
 
         // Process second row trace columns with new_comp_eval (shifted by omicron)
-        let denom = fsub_(&omega_pow, &fmul_(&new_comp_eval, &omicron));
+        let denom = fsub_(&omega_pow, &fmul_(new_comp_eval, &omicron));
         (acc, num) = process_belt(
-            current_trace_elems, &trace_evaluations.0, &weights.0, full_width, num, &denom, &acc,
+            current_trace_elems, trace_evaluations.0, weights.0, full_width, num, &denom, &acc,
         );
 
         total_full_width += full_width;
     }
 
     // Process composition elements
-    let denom = fsub_(&omega_pow, &fpow_(&deep_challenge, num_comp_pieces as u64));
+    let denom = fsub_(&omega_pow, &fpow_(deep_challenge, num_comp_pieces as u64));
 
     (acc, _) = process_belt(
         &comp_elems,
-        &comp_evaluations.0,
+        comp_evaluations.0,
         &weights.0[num..],
         num_comp_pieces as usize,
         0,

@@ -24,7 +24,7 @@ pub fn mp_substitute_mega_jet(context: &mut Context, subject: Noun) -> Result {
     let sam = slot(subject, 6)?;
     let stack = &mut context.stack;
 
-    let [p_noun, trace_evals_noun, height_noun, chal_map_noun, dyns_noun, com_map_noun] =
+    let [p_noun, trace_evals_noun, height_noun, chals_noun, dyns_noun, com_map_noun] =
         sam.uncell()?;
 
     let Ok(trace_evals) = BPolySlice::try_from(trace_evals_noun) else {
@@ -42,13 +42,10 @@ pub fn mp_substitute_mega_jet(context: &mut Context, subject: Noun) -> Result {
         return jet_err::<Noun>();
     };
 
-    let chal_map_opt: Option<HoonMap> = unsafe {
-        if chal_map_noun.raw_equals(&D(0)) {
-            None
-        } else {
-            HoonMap::try_from(chal_map_noun).ok()
-        }
+    let Ok(challenges) = BPolySlice::try_from(chals_noun) else {
+        return jet_err::<Noun>();
     };
+
     let com_map_opt: Option<HoonMap> = unsafe {
         if com_map_noun.raw_equals(&D(0)) {
             None
@@ -104,11 +101,7 @@ pub fn mp_substitute_mega_jet(context: &mut Context, subject: Noun) -> Result {
                     }
                 }
                 MegaTyp::Rnd => {
-                    let rnd_noun = chal_map_opt
-                        .as_ref()
-                        .and_then(|m| m.get(stack, D(idx as u64)))
-                        .ok_or_else(|| jet_err::<()>().unwrap_err())?;
-                    let Ok(rnd) = rnd_noun.as_belt() else {
+                    let Some(rnd) = challenges.0.get(idx) else {
                         return jet_err::<()>();
                     };
 

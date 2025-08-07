@@ -11,7 +11,7 @@ use crate::unifying_equality::unifying_equality;
 /// Return Err if the computation crashed or should punt to Nock
 pub(crate) type Result = std::result::Result<Noun, JetErr>;
 
-pub(crate) struct Site {
+pub struct Site {
     pub(crate) battery: Noun,            // battery
     pub(crate) context: Noun,            // context
     pub(crate) jet: Option<(Jet, bool)>, // jet driver
@@ -20,7 +20,7 @@ pub(crate) struct Site {
 
 impl Site {
     /// Prepare a locally cached gate to call repeatedly.
-    pub(crate) fn new(ctx: &mut Context, core: &mut Noun) -> Site {
+    pub fn new(ctx: &mut Context, core: &mut Noun) -> Site {
         let mut battery = slot(*core, 2).unwrap_or_else(|err| {
             panic!(
                 "Panicked with {err:?} at {}:{} (git sha: {:?})",
@@ -78,7 +78,7 @@ impl Site {
 }
 
 /// Slam a cached call site.
-pub(crate) fn site_slam(ctx: &mut Context, site: &Site, sample: Noun) -> Result {
+pub fn site_slam(ctx: &mut Context, site: &Site, sample: Noun) -> Result {
     let subject = T(&mut ctx.stack, &[site.battery, sample, site.context]);
     // TODO run test if necessary
     if let Some((jet, test)) = site.jet {

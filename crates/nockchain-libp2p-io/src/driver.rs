@@ -1,11 +1,12 @@
-use std::collections::HashMap;
-use std::mem::size_of;
+use std::error::Error;
+use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
 
 use bytes::Bytes;
 use either::{Either, Left, Right};
 use futures::{Future, StreamExt};
+use hickory_resolver::config::{ResolverConfig, ResolverOpts};
 use libp2p::identify::Event::Received;
 use libp2p::identity::Keypair;
 use libp2p::kad::NoKnownPeers;
@@ -13,12 +14,14 @@ use libp2p::multiaddr::Protocol;
 use libp2p::peer_store::Store;
 use libp2p::request_response::Event::*;
 use libp2p::request_response::Message::*;
-use libp2p::request_response::{self};
+use libp2p::request_response::{
+    ResponseChannel, {self},
+};
 use libp2p::swarm::{ConnectionId, DialError, ListenError, SwarmEvent};
 use libp2p::{
-    allow_block_list, connection_limits, memory_connection_limits, Multiaddr, PeerId, Swarm,
+    allow_block_list, connection_limits, memory_connection_limits, ping, Multiaddr, PeerId, Swarm,
 };
-use nockapp::driver::{IODriverFn, NockAppHandle, PokeResult};
+use nockapp::driver::{IODriverFn, PokeResult};
 use nockapp::noun::slab::NounSlab;
 use nockapp::noun::FromAtom;
 use nockapp::utils::make_tas;
@@ -28,20 +31,19 @@ use nockapp::{AtomExt, NockAppError, NounExt};
 use nockvm::noun::{Atom, Noun, D, T};
 use nockvm_macros::tas;
 use rand::seq::SliceRandom;
-use serde_bytes::ByteBuf;
 use tokio::sync::{mpsc, Mutex, MutexGuard};
-use tokio::task::{AbortHandle, JoinError, JoinSet};
 use tokio::time::{Duration, MissedTickBehavior};
 use tracing::{debug, error, info, instrument, trace, warn};
 
+use crate::behaviour::{NockchainBehaviour, NockchainEvent};
 use crate::config::LibP2PConfig;
+use crate::messages::{NockchainDataRequest, NockchainFact, NockchainRequest, NockchainResponse};
 use crate::metrics::NockchainP2PMetrics;
-use crate::p2p::*;
-use crate::p2p_util::{
-    log_fail2ban_ipv4, log_fail2ban_ipv6, CacheResponse, MessageTracker, NockchainDataRequest,
-    NockchainFact, PeerIdExt,
-};
+use crate::p2p_state::{CacheResponse, P2PState};
+use crate::p2p_util::{log_fail2ban_ipv4, log_fail2ban_ipv6, MultiaddrExt, PeerIdExt};
 use crate::tip5_util::tip5_hash_to_base58;
+use crate::tracked_join_set::TrackedJoinSet;
+use crate::traffic_cop;
 
 //TODO This wire is a placeholder for now. The libp2p driver is entangled with the other types of nockchain pokes
 //for historical reasons, and should be disentangled in the future.
@@ -106,9 +108,10 @@ impl EffectType {
         let Ok(atom) = head.as_atom() else {
             return EffectType::Unknown;
         };
-        let bytes = atom
-            .to_bytes_until_nul()
-            .expect("failed to strip null bytes");
+        let Ok(bytes) = atom.to_bytes_until_nul() else {
+            warn!("atom was not properly formatted: {:?}", atom);
+            return EffectType::Unknown;
+        };
 
         match bytes.as_slice() {
             b"gossip" => EffectType::Gossip,
@@ -122,41 +125,19 @@ impl EffectType {
     }
 }
 
-struct TrackedJoinSet<T> {
-    inner: JoinSet<T>,
-    tasks: HashMap<String, AbortHandle>,
-}
-
-impl<T: 'static> TrackedJoinSet<T> {
-    fn new() -> Self {
-        Self {
-            inner: JoinSet::new(),
-            tasks: HashMap::new(),
-        }
-    }
-
-    fn spawn(&mut self, name: String, task: impl Future<Output = T> + Send + 'static)
-    where
-        T: Send + 'static,
-    {
-        let handle = self.inner.spawn(task);
-        self.tasks.insert(name, handle);
-    }
-
-    async fn join_next(&mut self) -> Option<Result<T, JoinError>> {
-        let result = self.inner.join_next().await;
-        if result.is_some() {
-            // Remove the completed task from our tracking
-            self.tasks.retain(|_, v| !v.is_finished());
-        }
-        result
-    }
-
-    // Keep this around for debugging
-    #[allow(dead_code)]
-    fn get_running_tasks(&self) -> Vec<String> {
-        self.tasks.keys().cloned().collect()
-    }
+#[derive(Debug)]
+pub enum SwarmAction {
+    SendResponse {
+        channel: ResponseChannel<NockchainResponse>,
+        response: NockchainResponse,
+    },
+    SendRequest {
+        peer_id: PeerId,
+        request: NockchainRequest,
+    },
+    BlockPeer {
+        peer_id: PeerId,
+    },
 }
 
 #[instrument(skip(keypair, bind, allowed, limits, memory_limits, equix_builder))]
@@ -194,24 +175,24 @@ pub fn make_libp2p_driver(
             let seen_tx_clear_interval = libp2p_config.seen_tx_clear_interval();
             let min_peers = libp2p_config.min_peers();
             let poke_timeout = libp2p_config.poke_timeout();
-            let mut swarm = match crate::p2p::start_swarm(
-                libp2p_config, keypair, bind, allowed, limits, memory_limits,
-            ) {
-                Ok(swarm) => swarm,
-                Err(e) => {
-                    error!("Could not create swarm: {}", e);
-                    let (_, handle_clone) = handle.dup();
-                    tokio::spawn(async move {
-                        if let Err(e) = handle_clone.exit.exit(1).await {
-                            error!("Failed to send exit signal: {}", e);
-                        }
-                    });
-                    return Err(NockAppError::OtherError);
-                }
-            };
+            let failed_pings_before_close = libp2p_config.failed_pings_before_close();
+            let mut swarm =
+                match start_swarm(libp2p_config, keypair, bind, allowed, limits, memory_limits) {
+                    Ok(swarm) => swarm,
+                    Err(e) => {
+                        error!("Could not create swarm: {}", e);
+                        let (_, handle_clone) = handle.dup();
+                        tokio::spawn(async move {
+                            if let Err(e) = handle_clone.exit.exit(1).await {
+                                error!("Failed to send exit signal: {}", e);
+                            }
+                        });
+                        return Err(NockAppError::OtherError);
+                    }
+                };
             let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmAction>(1000); // number needs to be high enough to send gossips to peers
             let mut join_set = TrackedJoinSet::<Result<(), NockAppError>>::new();
-            let message_tracker = Arc::new(Mutex::new(MessageTracker::new(
+            let driver_state = Arc::new(Mutex::new(P2PState::new(
                 metrics.clone(),
                 seen_tx_clear_interval,
             )));
@@ -249,8 +230,8 @@ pub fn make_libp2p_driver(
                     _ = connectivity_interval.tick() => {
                         let peer_count = log_peer_status(&mut swarm, &metrics).await;
                         if peer_count < min_peers {
-                            let tracker = message_tracker.lock().await;
-                            dial_more_peers(&mut swarm, tracker);
+                            let state_guard = driver_state.lock().await;
+                            dial_more_peers(&mut swarm, state_guard);
                         }
                     },
                     Ok(noun_slab) = effect_handle.next_effect() => {
@@ -259,10 +240,10 @@ pub fn make_libp2p_driver(
                         let equix_builder_clone = equix_builder.clone();
                         let local_peer_id = *swarm.local_peer_id();
                         let connected_peers: Vec<PeerId> = swarm.connected_peers().cloned().collect();
-                        let message_tracker_clone = Arc::clone(&message_tracker); // Clone the Arc, not the MessageTracker
+                        let state_guard = Arc::clone(&driver_state); // Clone the Arc, not the P2P state
                         let metrics_clone = metrics.clone();
                         join_set.spawn("handle_effect".to_string(), async move {
-                            handle_effect(noun_slab, swarm_tx_clone, equix_builder_clone, local_peer_id, connected_peers, message_tracker_clone, metrics_clone).await
+                            handle_effect(noun_slab, swarm_tx_clone, equix_builder_clone, local_peer_id, connected_peers, state_guard, metrics_clone).await
                         });
                     },
                     Some(event) = swarm.next() => {
@@ -285,12 +266,12 @@ pub fn make_libp2p_driver(
                                 identify_received(&mut swarm, peer_id, info)?;
                             },
                             SwarmEvent::ConnectionEstablished { connection_id, peer_id, endpoint, .. } => {
-                                message_tracker.lock().await.track_connection(connection_id, peer_id, endpoint.get_remote_address(), endpoint.clone());
+                                driver_state.lock().await.track_connection(connection_id, peer_id, endpoint.get_remote_address(), endpoint.clone());
                                 debug!("SEvent: {peer_id} is new friend via: {endpoint:?}");
                             },
                             SwarmEvent::ConnectionClosed { connection_id, peer_id, endpoint, cause, .. } => {
-                                let mut message_tracker_lock = message_tracker.lock().await;
-                                let _ = message_tracker_lock.lost_connection(connection_id);
+                                let mut state_guard = driver_state.lock().await;
+                                let _ = state_guard.lost_connection(connection_id);
                                 if let Some(cause) = cause {
                                     debug!("SEvent: friendship ended with {peer_id} via: {endpoint:?}. cause: {cause:?}");
                                 } else {
@@ -307,7 +288,7 @@ pub fn make_libp2p_driver(
                                        metrics.incoming_connections_blocked_by_limits.increment();
                                        if let Some(prune_factor) = prune_inbound_size {
                                            if let Ok(_exceeded) = cause.downcast::<libp2p::connection_limits::Exceeded>() {
-                                               message_tracker.lock().await.prune_inbound_connections(metrics.clone(), &mut swarm, prune_factor);
+                                               driver_state.lock().await.prune_inbound_connections(metrics.clone(), &mut swarm, prune_factor);
                                            }
                                        }
                                    }
@@ -323,9 +304,9 @@ pub fn make_libp2p_driver(
                                 // We have to dup and move a handle back into `handle` to propitiate the borrow checker
                                 let traffic_clone = traffic_cop.clone();
                                 let metrics = metrics.clone();
-                                let message_tracker_clone = Arc::clone(&message_tracker); // Clone the Arc, not the MessageTracker
+                                let state_arc = Arc::clone(&driver_state); // Clone the Arc, not the MessageTracker
                                 join_set.spawn("handle_request_response".to_string(), async move {
-                                    handle_request_response(peer, connection_id, message, swarm_tx_clone, &mut equix_builder_clone, local_peer_id, traffic_clone, metrics.clone(), message_tracker_clone, request_high_threshold).await
+                                    handle_request_response(peer, connection_id, message, swarm_tx_clone, &mut equix_builder_clone, local_peer_id, traffic_clone, metrics.clone(), state_arc, request_high_threshold).await
                                 });
                             },
                             SwarmEvent::Behaviour(NockchainEvent::RequestResponse(OutboundFailure { peer, error, ..})) => {
@@ -333,6 +314,28 @@ pub fn make_libp2p_driver(
                             }
                             SwarmEvent::Behaviour(NockchainEvent::RequestResponse(InboundFailure { peer, error, .. })) => {
                                 log_inbound_failure(peer, error, metrics.clone());
+                            }
+                            SwarmEvent::Behaviour(NockchainEvent::Ping(ping::Event{peer, connection, result})) => {
+                                let mut state_guard = driver_state.lock().await;
+                                let connection_address = state_guard.connection_address(connection);
+                                match result {
+                                    Ok(duration) => {
+                                        state_guard.ping_succeeded(connection);
+                                        log_ping_success(peer, connection_address, duration);
+                                    }
+                                    Err(error) => {
+                                        let failures = state_guard.ping_failed(connection);
+                                        log_ping_failure(peer, connection_address.clone(), error);
+                                        if failures >= failed_pings_before_close {
+                                            if let Some(ip) = connection_address.and_then(|c| c.ip_addr()) {
+                                                info!("Closing connection to {peer} on {ip} after {failures} failed pings.");
+                                            } else {
+                                                info!("Closing connection to {peer} after {failures} failed pings.");
+                                            }
+                                            swarm.close_connection(connection);
+                                        }
+                                    }
+                                }
                             }
                             SwarmEvent::OutgoingConnectionError { error, .. } => {
                                 log_dial_error(error);
@@ -416,12 +419,12 @@ pub fn make_libp2p_driver(
                     },
                     _ = reset_request_counts.tick() => {
                         trace!("Resetting request counts");
-                        message_tracker.lock().await.reset_requests();
+                        driver_state.lock().await.reset_requests();
                     },
                     _ = reset_elders_debounce.tick() => {
                         trace!("Resetting elders debounce");
-                        let mut tracker = message_tracker.lock().await;
-                        tracker.seen_elders.clear();
+                        let mut state_guard = driver_state.lock().await;
+                        state_guard.seen_elders.clear();
                     },
                     Some(result) = join_set.join_next() => {
                         if let Err(e) = result {
@@ -432,124 +435,6 @@ pub fn make_libp2p_driver(
             }
         })
     })
-}
-
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-/// Network struct (in serde/CBOR) for requests
-pub enum NockchainRequest {
-    /// Request a block or TX from another node, carry PoW
-    Request {
-        pow: equix::SolutionByteArray,
-        nonce: u64,
-        message: ByteBuf,
-    },
-    /// Gossip a block or TX to another node
-    Gossip { message: ByteBuf },
-}
-
-impl NockchainRequest {
-    /// Make a new "request" which gossips a block or a TX
-    fn new_gossip(message: &NounSlab) -> NockchainRequest {
-        let message_bytes = ByteBuf::from(message.jam().as_ref());
-        NockchainRequest::Gossip {
-            message: message_bytes,
-        }
-    }
-
-    /// Make a new request for a block or a TX
-    fn new_request(
-        builder: &mut equix::EquiXBuilder,
-        local_peer_id: &libp2p::PeerId,
-        remote_peer_id: &libp2p::PeerId,
-        message: &NounSlab,
-    ) -> NockchainRequest {
-        let message_bytes = ByteBuf::from(message.jam().as_ref());
-        let local_peer_bytes = (*local_peer_id).to_bytes();
-        let remote_peer_bytes = (*remote_peer_id).to_bytes();
-        let mut pow_buf = Vec::with_capacity(
-            size_of::<u64>()
-                + local_peer_bytes.len()
-                + remote_peer_bytes.len()
-                + message_bytes.len(),
-        );
-        pow_buf.extend_from_slice(&[0; size_of::<u64>()][..]);
-        pow_buf.extend_from_slice(&local_peer_bytes[..]);
-        pow_buf.extend_from_slice(&remote_peer_bytes[..]);
-        pow_buf.extend_from_slice(&message_bytes[..]);
-
-        let mut nonce = 0u64;
-        let sol_bytes = loop {
-            {
-                let nonce_buf = &mut pow_buf[0..size_of::<u64>()];
-                nonce_buf.copy_from_slice(&nonce.to_le_bytes()[..]);
-            }
-            if let Ok(sols) = builder.solve(&pow_buf[..]) {
-                if !sols.is_empty() {
-                    break sols[0].to_bytes();
-                }
-            }
-            nonce += 1;
-        };
-
-        NockchainRequest::Request {
-            pow: sol_bytes,
-            nonce,
-            message: message_bytes,
-        }
-    }
-
-    /// Verify the EquiX PoW attached to a request
-    fn verify_pow(
-        &self,
-        builder: &mut equix::EquiXBuilder,
-        local_peer_id: &libp2p::PeerId,
-        remote_peer_id: &libp2p::PeerId,
-    ) -> Result<(), equix::Error> {
-        match self {
-            NockchainRequest::Request {
-                pow,
-                nonce,
-                message,
-            } => {
-                //  This looks backwards, but it's because which node is local and which is remote
-                //  is swapped between generation at the sender and verification at the receiver.
-                let local_peer_bytes = (*remote_peer_id).to_bytes();
-                let remote_peer_bytes = (*local_peer_id).to_bytes();
-                let nonce_bytes = nonce.to_le_bytes();
-                let mut pow_buf = Vec::with_capacity(
-                    size_of::<u64>()
-                        + local_peer_bytes.len()
-                        + remote_peer_bytes.len()
-                        + message.len(),
-                );
-                pow_buf.extend_from_slice(&nonce_bytes[..]);
-                pow_buf.extend_from_slice(&local_peer_bytes[..]);
-                pow_buf.extend_from_slice(&remote_peer_bytes[..]);
-                pow_buf.extend_from_slice(&message[..]);
-                builder.verify_bytes(&pow_buf[..], pow)
-            }
-            NockchainRequest::Gossip { message: _ } => Ok(()),
-        }
-    }
-}
-
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-/// Responses to Nockchain requests
-pub enum NockchainResponse {
-    /// The requested block or raw-tx
-    Result { message: ByteBuf },
-    /// If the request was a gossip, no actual response is needed
-    Ack,
-}
-
-impl NockchainResponse {
-    fn new_response_result(message: impl AsRef<[u8]>) -> NockchainResponse {
-        let message_bytes: &[u8] = message.as_ref();
-        let message_bytebuf = ByteBuf::from(message_bytes.to_vec());
-        NockchainResponse::Result {
-            message: message_bytebuf,
-        }
-    }
 }
 
 // fn emit_fail2ban(peer_ip: u128) -> Result<(), NockAppError> {
@@ -566,9 +451,11 @@ async fn send_timer_poke(
     let timer_noun = T(&mut slab, &[D(tas!(b"command")), D(tas!(b"timer")), D(0)]);
     slab.set_root(timer_noun);
     let wire = nockapp::drivers::timer::TimerWire::Tick.to_wire();
+    let enable_fut = Box::pin(async { true });
     let (timing, timing_rx) = tokio::sync::oneshot::channel();
-    let permit = traffic_cop.poke_high_priority_permit().await?;
-    permit.poke_high_priority(wire, slab, Some(timing)).await?;
+    traffic_cop
+        .poke_high_priority(None, wire, slab, enable_fut, Some(timing))
+        .await?;
     let elapsed = timing_rx.await?;
     let _ = metrics.timer_poke_time.add_timing(&elapsed);
     drop(guard);
@@ -581,7 +468,7 @@ async fn handle_effect(
     equix_builder: equix::EquiXBuilder,
     local_peer_id: PeerId,
     connected_peers: Vec<PeerId>,
-    message_tracker: Arc<Mutex<MessageTracker>>,
+    driver_state: Arc<Mutex<P2PState>>,
     metrics: Arc<NockchainP2PMetrics>,
 ) -> Result<(), NockAppError> {
     match EffectType::from_noun_slab(&noun_slab) {
@@ -600,10 +487,10 @@ async fn handle_effect(
             if let Ok(data_cell) = gossip_noun.as_cell() {
                 if data_cell.head().eq_bytes(b"heard-block") {
                     trace!("Gossip effect for heard-block, clearing block and elders cache");
-                    let mut tracker = message_tracker.lock().await;
-                    tracker.block_cache.clear();
-                    tracker.elders_cache.clear();
-                    tracker.elders_negative_cache.clear();
+                    let mut state_guard = driver_state.lock().await;
+                    state_guard.block_cache.clear();
+                    state_guard.elders_cache.clear();
+                    state_guard.elders_negative_cache.clear();
                 }
             }
 
@@ -653,8 +540,8 @@ async fn handle_effect(
                     if raw_tx_cell.head().eq_bytes(b"by-id") {
                         trace!("Requesting raw transaction by ID, removing ID from seen set");
                         let tx_id = tip5_hash_to_base58(raw_tx_cell.tail())?;
-                        let mut tracker_guard = message_tracker.clone().lock_owned().await;
-                        tracker_guard.seen_txs.remove(&tx_id);
+                        let mut state_guard = driver_state.clone().lock_owned().await;
+                        state_guard.seen_txs.remove(&tx_id);
                     }
                 }
             }
@@ -709,8 +596,8 @@ async fn handle_effect(
             let block_id = effect_cell.tail();
 
             // Add the bad block ID
-            let mut tracker = message_tracker.lock().await;
-            let peers_to_ban = tracker.process_bad_block_id(block_id)?;
+            let mut state_guard = driver_state.lock().await;
+            let peers_to_ban = state_guard.process_bad_block_id(block_id)?;
 
             // Ban each peer that sent this block
             for peer_id in peers_to_ban {
@@ -737,15 +624,15 @@ async fn handle_effect(
                 };
 
                 // Add to message tracker
-                let mut tracker = message_tracker.lock().await;
-                tracker.track_block_id_and_peer(block_id, peer_id)?;
+                let mut state_guard = driver_state.lock().await;
+                state_guard.track_block_id_and_peer(block_id, peer_id)?;
             } else if action.eq_bytes(b"remove") {
                 // Handle [%track %remove block-id]
                 let block_id = track_cell.tail();
 
                 // Remove from message tracker
-                let mut tracker = message_tracker.lock().await;
-                tracker.remove_block_id(block_id)?;
+                let mut state_guard = driver_state.lock().await;
+                state_guard.remove_block_id(block_id)?;
             } else {
                 return Err(NockAppError::IoError(std::io::Error::new(
                     std::io::ErrorKind::Other,
@@ -761,37 +648,41 @@ async fn handle_effect(
             if seen_type.eq_bytes(b"block") {
                 let seen_pq = seen_cell.tail().as_cell()?;
                 let block_id = seen_pq.head().as_cell()?;
-                let mut tracker = message_tracker.lock().await;
+                let mut state_guard = driver_state.lock().await;
                 let block_id_str = tip5_hash_to_base58(block_id.as_noun())
                     .expect("failed to convert block ID to base58");
                 trace!("seen block id: {:?}", &block_id_str);
-                tracker.seen_blocks.insert(block_id_str);
+                state_guard.seen_blocks.insert(block_id_str);
 
                 if let Ok(block_height_unit_cell) = seen_pq.tail().as_cell() {
                     let block_height = block_height_unit_cell.tail().as_atom()?.as_u64()?;
-                    if tracker.first_negative <= block_height {
+                    if state_guard.first_negative <= block_height {
                         metrics.highest_block_height_seen.swap(block_height as f64);
-                        tracker.first_negative = block_height + 1;
-                        trace!("Setting tracker.first_negative to {:?}", tracker.first_negative);
+                        state_guard.first_negative = block_height + 1;
+                        trace!(
+                            "Setting state_guard.first_negative to {:?}",
+                            state_guard.first_negative
+                        );
 
                         // Check if we should clear the tx cache
                         if block_height
-                            >= tracker.last_tx_cache_clear_height + tracker.seen_tx_clear_interval
+                            >= state_guard.last_tx_cache_clear_height
+                                + state_guard.seen_tx_clear_interval
                         {
                             debug!("Clearing seen_txs cache at block height {}", block_height);
-                            debug!("Cache before clearing: {:?}", tracker.seen_txs);
-                            tracker.seen_txs.clear();
-                            tracker.last_tx_cache_clear_height = block_height;
+                            debug!("Cache before clearing: {:?}", state_guard.seen_txs);
+                            state_guard.seen_txs.clear();
+                            state_guard.last_tx_cache_clear_height = block_height;
                         }
                     }
                 }
             } else if seen_type.eq_bytes(b"tx") {
                 let tx_id = seen_cell.tail().as_cell()?;
-                let mut tracker = message_tracker.lock().await;
+                let mut state_guard = driver_state.lock().await;
                 let tx_id_str = tip5_hash_to_base58(tx_id.as_noun())
                     .expect("failed to convert tx ID to base58");
                 trace!("seen tx id: {:?}", &tx_id_str);
-                tracker.seen_txs.insert(tx_id_str);
+                state_guard.seen_txs.insert(tx_id_str);
             }
         }
         EffectType::Unknown => {
@@ -813,7 +704,7 @@ async fn handle_request_response(
     local_peer_id: PeerId,
     traffic: traffic_cop::TrafficCop,
     metrics: Arc<NockchainP2PMetrics>,
-    message_tracker: Arc<Mutex<MessageTracker>>,
+    driver_state: Arc<Mutex<P2PState>>,
     request_high_threshold: u64,
 ) -> Result<(), NockAppError> {
     trace!("handle_request_response peer: {peer}");
@@ -830,33 +721,21 @@ async fn handle_request_response(
                 return Ok(());
             };
             trace!("handle_request_response: powork verified");
-            let addr = {
-                message_tracker
-                    .lock()
-                    .await
-                    .connection_address(connection_id)
-            };
+            let addr = { driver_state.lock().await.connection_address(connection_id) };
             if let Some(addr) = addr {
                 let addr_str = addr.to_string();
                 debug!("Request received from peer at address {addr_str} with id {peer}");
-                let mut ip4_addr = None;
-                for proto in addr.iter() {
-                    if let Protocol::Ip4(ip4) = proto {
-                        ip4_addr = Some(ip4);
-                    }
-                    break;
-                }
-                if let Some(ip4) = ip4_addr {
-                    let threshold_exceeded = message_tracker
+                if let Some(ip) = addr.ip_addr() {
+                    let threshold_exceeded = driver_state
                         .lock()
                         .await
-                        .requested(ip4, request_high_threshold);
+                        .requested(ip, request_high_threshold);
                     if let Some(count) = threshold_exceeded {
-                        warn!("IP address {ip4} exceeded the request-per-interval threshold with {count} requests");
+                        warn!("IP address {ip} exceeded the request-per-interval threshold with {count} requests");
                     }
                 }
             } else {
-                debug!("Request received but connection not tracked. Bug?");
+                warn!("Request received but connection not tracked. Please inform the developers.");
             }
             let mut request_slab = NounSlab::new();
             match request {
@@ -873,8 +752,10 @@ async fn handle_request_response(
 
                     let cached = {
                         let cache_result = {
-                            let mut tracker = message_tracker.lock().await;
-                            tracker.check_cache(data_request.clone(), &metrics).await
+                            let mut state_guard = driver_state.lock().await;
+                            state_guard
+                                .check_cache(data_request.clone(), &metrics)
+                                .await
                         };
                         match cache_result {
                             Ok(CacheResponse::Cached(slab)) => {
@@ -883,7 +764,15 @@ async fn handle_request_response(
                             }
                             Ok(CacheResponse::NegativeCached) => {
                                 trace!("Negative-cached response for request");
-                                return Ok(()); // short-circuit
+                                // short-circuit
+                                swarm_tx
+                                    .send(SwarmAction::SendResponse {
+                                        channel,
+                                        response: NockchainResponse::Ack { acked: true },
+                                    })
+                                    .await
+                                    .map_err(|_| NockAppError::OtherError)?;
+                                return Ok(());
                             }
                             Ok(CacheResponse::NotCached) => None,
                             Err(e) => {
@@ -898,7 +787,7 @@ async fn handle_request_response(
                         (cache_result, true)
                     } else {
                         let scry_slab = request_to_scry_slab(data_request.clone())?;
-                        let Some(scry_res_slab) = (match traffic.peek(scry_slab).await {
+                        let Some(scry_res_slab) = (match traffic.peek(Some(peer), scry_slab).await {
                             Ok(Some(res_slab)) => {
                                 metrics.requests_peeked_some.increment();
                                 Some(res_slab)
@@ -938,6 +827,13 @@ async fn handle_request_response(
                                 Err(err)?
                             }
                         }) else {
+                            swarm_tx
+                                .send(SwarmAction::SendResponse {
+                                    channel,
+                                    response: NockchainResponse::Ack { acked: true },
+                                })
+                                .await
+                                .map_err(|_| NockAppError::OtherError)?;
                             return Ok(());
                         };
                         (scry_res_slab, false)
@@ -950,12 +846,14 @@ async fn handle_request_response(
                             match create_scry_response(scry_res, "heard-block", &mut res_slab) {
                                 Left(()) => {
                                     trace!("No data found for incoming block by-height request");
-                                    return Ok(());
+                                    NockchainResponse::Ack { acked: true }
                                 }
                                 Right(result) => {
                                     if !cache_hit {
-                                        let mut tracker = message_tracker.lock().await;
-                                        tracker.block_cache.insert(height, scry_res_slab.clone());
+                                        let mut state_guard = driver_state.lock().await;
+                                        state_guard
+                                            .block_cache
+                                            .insert(height, scry_res_slab.clone());
                                     }
                                     result?
                                 }
@@ -966,14 +864,14 @@ async fn handle_request_response(
                             match create_scry_response(scry_res, "heard-elders", &mut res_slab) {
                                 Left(()) => {
                                     trace!("No data found for incoming elders request");
-                                    let mut tracker = message_tracker.lock().await;
-                                    tracker.elders_negative_cache.insert(id.clone());
-                                    return Ok(());
+                                    let mut state_guard = driver_state.lock().await;
+                                    state_guard.elders_negative_cache.insert(id.clone());
+                                    NockchainResponse::Ack { acked: true }
                                 }
                                 Right(result) => {
                                     if !cache_hit {
-                                        let mut tracker = message_tracker.lock().await;
-                                        tracker.elders_cache.insert(id, scry_res_slab.clone());
+                                        let mut state_guard = driver_state.lock().await;
+                                        state_guard.elders_cache.insert(id, scry_res_slab.clone());
                                     }
                                     result?
                                 }
@@ -984,13 +882,15 @@ async fn handle_request_response(
                             match create_scry_response(scry_res, "heard-tx", &mut res_slab) {
                                 Left(()) => {
                                     trace!("No data found for incoming raw-tx request");
-                                    return Ok(());
+                                    NockchainResponse::Ack { acked: true }
                                 }
                                 Right(result) => {
                                     if !cache_hit {
-                                        let mut tracker = message_tracker.lock().await;
+                                        let mut state_guard = driver_state.lock().await;
                                         trace!("cacheing tx request by id={:?}", id);
-                                        tracker.tx_cache.insert(id.clone(), scry_res_slab.clone());
+                                        state_guard
+                                            .tx_cache
+                                            .insert(id.clone(), scry_res_slab.clone());
                                     }
                                     result?
                                 }
@@ -1011,7 +911,7 @@ async fn handle_request_response(
 
                     let send_response: tokio::task::JoinHandle<Result<(), NockAppError>> =
                         tokio::spawn(async move {
-                            let response = NockchainResponse::Ack;
+                            let response = NockchainResponse::Ack { acked: true };
                             swarm_tx
                                 .send(SwarmAction::SendResponse { channel, response })
                                 .await
@@ -1020,36 +920,47 @@ async fn handle_request_response(
                         });
 
                     let poke_kernel = tokio::task::spawn(async move {
-                        let permit = traffic.poke_high_priority_permit().await?;
                         let gossip = NockchainFact::from_noun_slab(&request_slab)?;
-                        match gossip {
+                        let state_arc = driver_state.clone();
+                        let metrics_arc = metrics.clone();
+                        let enable_fut: Pin<Box<dyn Future<Output = bool> + Send>> = match gossip {
                             NockchainFact::HeardBlock(ref id, _) => {
-                                let tracker = message_tracker.lock().await;
-                                if tracker.seen_blocks.contains(id) {
-                                    trace!("Block already seen, not processing: {:?}", id);
-                                    metrics.block_seen_cache_hits.increment();
-                                    return Ok(());
-                                } else {
-                                    trace!("block not seen, processing: {:?}", id);
-                                    metrics.block_seen_cache_misses.increment();
-                                }
+                                let block_id = id.clone();
+                                Box::pin(async move {
+                                    let state_guard = state_arc.lock().await;
+                                    if state_guard.seen_blocks.contains(&block_id) {
+                                        trace!(
+                                            "Block already seen, not processing: {:?}", &block_id
+                                        );
+                                        metrics_arc.block_seen_cache_hits.increment();
+                                        false
+                                    } else {
+                                        trace!("block not seen, processing: {:?}", &block_id);
+                                        metrics_arc.block_seen_cache_misses.increment();
+                                        true
+                                    }
+                                })
                             }
                             NockchainFact::HeardTx(ref id, _) => {
-                                let tracker = message_tracker.lock().await;
-                                if tracker.seen_txs.contains(id) {
-                                    trace!("Tx already seen, not processing: {:?}", id);
-                                    metrics.tx_seen_cache_hits.increment();
-                                    return Ok(());
-                                } else {
-                                    trace!("tx not seen, processing: {:?}", id);
-                                    metrics.tx_seen_cache_misses.increment();
-                                }
+                                let tx_id = id.clone();
+                                Box::pin(async move {
+                                    let state_guard = state_arc.lock().await;
+                                    if state_guard.seen_txs.contains(&tx_id) {
+                                        trace!("Tx already seen, not processing: {:?}", tx_id);
+                                        metrics_arc.tx_seen_cache_hits.increment();
+                                        false
+                                    } else {
+                                        trace!("tx not seen, processing: {:?}", tx_id);
+                                        metrics_arc.tx_seen_cache_misses.increment();
+                                        true
+                                    }
+                                })
                             }
                             NockchainFact::HeardElders(..) => {
                                 warn!("Heard elders over gossip, should not happen!");
-                                return Ok(());
+                                Box::pin(async { true })
                             }
-                        }
+                        };
 
                         let wire = Libp2pWire::Gossip(peer);
 
@@ -1061,8 +972,14 @@ async fn handle_request_response(
 
                         let poke = gossip.fact_poke();
                         let (timing, timing_rx) = tokio::sync::oneshot::channel();
-                        let poke_result = permit
-                            .poke_high_priority(wire.to_wire(), poke.clone(), Some(timing))
+                        let poke_result = traffic
+                            .poke_high_priority(
+                                Some(peer),
+                                wire.to_wire(),
+                                poke.clone(),
+                                enable_fut,
+                                Some(timing),
+                            )
                             .await;
                         let elapsed = timing_rx.await?;
                         match gossip {
@@ -1152,28 +1069,11 @@ async fn handle_request_response(
         }
         Response { response, .. } => match response {
             NockchainResponse::Result { message } => {
-                let permit = traffic.poke_high_priority_permit().await?;
                 trace!("handle_request_response: Response result received");
                 let mut response_slab = NounSlab::new();
                 let message_bytes = Bytes::from(message.to_vec());
                 let response_noun = response_slab.cue_into(message_bytes)?;
                 response_slab.set_root(response_noun);
-
-                trace!("Received response from peer");
-
-                let response_cell = response_noun.as_cell()?;
-                if response_cell.head().eq_bytes(b"heard-elders") {
-                    let elders_p_cell = response_cell.tail().as_cell()?;
-                    let elders_list_cell = elders_p_cell.tail().as_cell()?;
-                    let top_block_id = tip5_hash_to_base58(elders_list_cell.head())?;
-
-                    let mut tracker = message_tracker.lock().await;
-                    if tracker.seen_elders.contains(&top_block_id) {
-                        return Ok(());
-                    } else {
-                        tracker.seen_elders.insert(top_block_id);
-                    }
-                }
 
                 trace!(
                     "Response noun: {:?}",
@@ -1181,28 +1081,69 @@ async fn handle_request_response(
                 );
 
                 let response = NockchainFact::from_noun_slab(&response_slab)?;
-                match response {
+                let response_cell = unsafe { response_slab.root().as_cell() }?;
+                let state_arc = driver_state.clone();
+                let metrics_arc = metrics.clone();
+                let enable: Pin<Box<dyn Future<Output = bool> + Send>> = match response {
                     NockchainFact::HeardBlock(ref id, _) => {
-                        let tracker = message_tracker.lock().await;
-                        if tracker.seen_blocks.contains(id) {
-                            trace!("Block already seen, not processing: {:?}", id);
-                            metrics.block_seen_cache_hits.increment();
-                            return Ok(());
+                        let block_id = id.clone();
+                        Box::pin(async move {
+                            let state_guard = state_arc.lock().await;
+                            if state_guard.seen_blocks.contains(&block_id) {
+                                trace!("Block already seen, not processing: {:?}", block_id);
+                                false
+                            } else {
+                                trace!("block not seen, processing: {:?}", block_id);
+                                metrics_arc.block_seen_cache_misses.increment();
+                                true
+                            }
+                        })
+                    }
+                    NockchainFact::HeardTx(ref id, ..) => {
+                        let tx_id = id.clone();
+                        Box::pin(async move {
+                            let state_guard = state_arc.lock().await;
+                            if state_guard.seen_blocks.contains(&tx_id) {
+                                trace!("Block already seen, not processing: {:?}", tx_id);
+                                false
+                            } else {
+                                trace!("block not seen, processing: {:?}", tx_id);
+                                metrics_arc.block_seen_cache_misses.increment();
+                                true
+                            }
+                        })
+                    }
+                    NockchainFact::HeardElders(_, ref elders, _) => {
+                        if let Some(elders_head) = elders.first().cloned() {
+                            Box::pin(async move {
+                                let mut state_guard = state_arc.lock().await;
+                                if state_guard.seen_elders.contains(&elders_head) {
+                                    trace!("Elder already seen, not processing: {:?}", elders_head);
+                                    false
+                                } else {
+                                    trace!("Elder not seen, processing: {:?}", elders_head);
+                                    state_guard.seen_elders.insert(elders_head);
+                                    true
+                                }
+                            })
                         } else {
-                            trace!("block not seen, processing: {:?}", id);
-                            metrics.block_seen_cache_misses.increment();
+                            Box::pin(async { true })
                         }
                     }
-                    NockchainFact::HeardTx(..) => {}
-                    NockchainFact::HeardElders(..) => {}
-                }
+                };
 
                 let wire = Libp2pWire::Response(peer);
                 let poke_slab = response.fact_poke();
 
                 let (timing, timing_rx) = tokio::sync::oneshot::channel();
-                let poke_result = permit
-                    .poke_high_priority(wire.to_wire(), poke_slab.clone(), Some(timing))
+                let poke_result = traffic
+                    .poke_high_priority(
+                        Some(peer),
+                        wire.to_wire(),
+                        poke_slab.clone(),
+                        enable,
+                        Some(timing),
+                    )
                     .await;
                 let elapsed = timing_rx.await?;
 
@@ -1278,8 +1219,11 @@ async fn handle_request_response(
                 }
                 trace!("handle_request_response: Poke successful");
             }
-            NockchainResponse::Ack => {
+            NockchainResponse::Ack { acked } => {
                 trace!("Received acknowledgement from peer {}", peer);
+                if !acked {
+                    warn!("Peer {} did not acknowledge the response", peer);
+                }
             }
         },
     }
@@ -1457,6 +1401,7 @@ mod tests {
     use nockapp::noun::slab::NounSlab;
     use nockvm::noun::{D, T};
     use nockvm_macros::tas;
+    use serde_bytes::ByteBuf;
 
     use super::*;
 
@@ -1788,7 +1733,7 @@ mod tests {
             EquiXBuilder::new(),
             PeerId::random(), // local peer ID (not relevant for this test)
             vec![],           // connected peers (not relevant for this test)
-            Arc::new(Mutex::new(MessageTracker::new(
+            Arc::new(Mutex::new(P2PState::new(
                 metrics.clone(),
                 LIBP2P_CONFIG.seen_tx_clear_interval,
             ))),
@@ -1846,7 +1791,7 @@ mod tests {
             NockchainP2PMetrics::register(gnort::global_metrics_registry())
                 .expect("Could not register metrics"),
         );
-        let message_tracker = Arc::new(Mutex::new(MessageTracker::new(
+        let state_arc = Arc::new(Mutex::new(P2PState::new(
             metrics.clone(),
             LIBP2P_CONFIG.seen_tx_clear_interval,
         )));
@@ -1858,7 +1803,7 @@ mod tests {
             EquiXBuilder::new(),
             PeerId::random(), // local peer ID (not relevant for this test)
             vec![],           // connected peers (not relevant for this test)
-            message_tracker.clone(),
+            state_arc.clone(),
             metrics,
         )
         .await;
@@ -1877,17 +1822,17 @@ mod tests {
         });
 
         // Verify the message tracker state
-        let tracker = message_tracker.lock().await;
+        let state_guard = state_arc.lock().await;
 
         // Check block_id_to_peers mapping
-        let peers = tracker.get_peers_for_block_id(block_id_tuple);
+        let peers = state_guard.get_peers_for_block_id(block_id_tuple);
         assert!(
             peers.contains(&peer_id),
             "Peer ID should be associated with block ID"
         );
 
         // Check peer_to_block_ids mapping
-        let block_ids = tracker.get_block_ids_for_peer(peer_id);
+        let block_ids = state_guard.get_block_ids_for_peer(peer_id);
         assert!(
             block_ids.contains(&block_id_str),
             "Block ID should be associated with peer ID"
@@ -1908,7 +1853,7 @@ mod tests {
                 .expect("Could not register metrics"),
         );
         // Create a message tracker and add an entry that we'll later remove
-        let message_tracker = Arc::new(Mutex::new(MessageTracker::new(
+        let state_arc = Arc::new(Mutex::new(P2PState::new(
             metrics.clone(),
             LIBP2P_CONFIG.seen_tx_clear_interval,
         )));
@@ -1918,8 +1863,8 @@ mod tests {
         let block_id_tuple = T(&mut setup_slab, &[D(1), D(2), D(3), D(4), D(5)]);
 
         {
-            let mut tracker = message_tracker.lock().await;
-            tracker
+            let mut state_guard = state_arc.lock().await;
+            state_guard
                 .track_block_id_and_peer(block_id_tuple, peer_id)
                 .unwrap_or_else(|_| {
                     panic!(
@@ -1931,8 +1876,8 @@ mod tests {
                 });
 
             // Verify it was added correctly
-            assert!(tracker.is_tracking_block_id(block_id_tuple));
-            assert!(tracker.is_tracking_peer(peer_id));
+            assert!(state_guard.is_tracking_block_id(block_id_tuple));
+            assert!(state_guard.is_tracking_peer(peer_id));
         }
 
         // Now create the track remove effect noun
@@ -1966,7 +1911,7 @@ mod tests {
             EquiXBuilder::new(),
             PeerId::random(), // local peer ID (not relevant for this test)
             vec![],           // connected peers (not relevant for this test)
-            message_tracker.clone(),
+            state_arc.clone(),
             metrics,
         )
         .await;
@@ -1975,18 +1920,18 @@ mod tests {
         assert!(result.is_ok(), "handle_effect should succeed");
 
         // Verify the message tracker state after removal
-        let tracker = message_tracker.lock().await;
+        let state_guard = state_arc.lock().await;
 
         // Check that the block ID was removed from block_id_to_peers
         assert!(
-            !tracker.is_tracking_block_id(block_id_tuple),
+            !state_guard.is_tracking_block_id(block_id_tuple),
             "Block ID should be removed"
         );
 
         // Check that the peer's entry in peer_to_block_ids is also removed
         // (since this was the only block ID associated with the peer)
         assert!(
-            !tracker.is_tracking_peer(peer_id),
+            !state_guard.is_tracking_peer(peer_id),
             "Peer ID should be removed since it has no more block IDs"
         );
     }
@@ -2013,7 +1958,7 @@ mod tests {
                 .expect("Could not register metrics"),
         );
         // Create a message tracker and add entries
-        let message_tracker = Arc::new(Mutex::new(MessageTracker::new(
+        let state_arc = Arc::new(Mutex::new(P2PState::new(
             metrics.clone(),
             LIBP2P_CONFIG.seen_tx_clear_interval,
         )));
@@ -2027,11 +1972,11 @@ mod tests {
         println!("Created block_ids");
 
         {
-            let mut tracker = message_tracker.lock().await;
+            let mut state_guard = state_arc.lock().await;
             println!("Tracking block_ids and peers");
 
             // Associate bad_peer1 with the bad block
-            tracker
+            state_guard
                 .track_block_id_and_peer(bad_block_id, bad_peer1)
                 .unwrap_or_else(|_| {
                     panic!(
@@ -2043,7 +1988,7 @@ mod tests {
                 });
 
             // Associate bad_peer2 with the bad block
-            tracker
+            state_guard
                 .add_peer_if_tracking_block_id(bad_block_id, bad_peer2)
                 .unwrap_or_else(|_| {
                     panic!(
@@ -2055,7 +2000,7 @@ mod tests {
                 });
 
             // Associate good_peer with a different block
-            tracker
+            state_guard
                 .track_block_id_and_peer(good_block_id, good_peer)
                 .unwrap_or_else(|_| {
                     panic!(
@@ -2067,11 +2012,11 @@ mod tests {
                 });
 
             // Verify tracking is working
-            assert!(tracker.is_tracking_block_id(bad_block_id));
-            assert!(tracker.is_tracking_block_id(good_block_id));
-            assert!(tracker.is_tracking_peer(bad_peer1));
-            assert!(tracker.is_tracking_peer(bad_peer2));
-            assert!(tracker.is_tracking_peer(good_peer));
+            assert!(state_guard.is_tracking_block_id(bad_block_id));
+            assert!(state_guard.is_tracking_block_id(good_block_id));
+            assert!(state_guard.is_tracking_peer(bad_peer1));
+            assert!(state_guard.is_tracking_peer(bad_peer2));
+            assert!(state_guard.is_tracking_peer(good_peer));
             println!("Verified tracking is working");
         }
 
@@ -2108,7 +2053,7 @@ mod tests {
             EquiXBuilder::new(),
             PeerId::random(), // local peer ID (not relevant for this test)
             vec![],           // connected peers (not relevant for this test)
-            message_tracker.clone(),
+            state_arc.clone(),
             metrics,
         )
         .await;
@@ -2156,33 +2101,33 @@ mod tests {
 
         // Verify the bad block ID was removed from the tracker
         {
-            let tracker = message_tracker.lock().await;
+            let state_guard = state_arc.lock().await;
 
             // Bad block should be removed
             assert!(
-                !tracker.is_tracking_block_id(bad_block_id),
+                !state_guard.is_tracking_block_id(bad_block_id),
                 "Bad block ID should be removed"
             );
 
             // Good block should still be tracked
             assert!(
-                tracker.is_tracking_block_id(good_block_id),
+                state_guard.is_tracking_block_id(good_block_id),
                 "Good block ID should still be tracked"
             );
 
             // Bad peers should be removed
             assert!(
-                !tracker.is_tracking_peer(bad_peer1),
+                !state_guard.is_tracking_peer(bad_peer1),
                 "bad_peer1 should be removed from tracker"
             );
             assert!(
-                !tracker.is_tracking_peer(bad_peer2),
+                !state_guard.is_tracking_peer(bad_peer2),
                 "bad_peer2 should be removed from tracker"
             );
 
             // Good peer should still be tracked
             assert!(
-                tracker.is_tracking_peer(good_peer),
+                state_guard.is_tracking_peer(good_peer),
                 "good_peer should still be tracked"
             );
 
@@ -2220,18 +2165,18 @@ mod tests {
                 .expect("Could not register metrics"),
         );
 
-        let message_tracker = Arc::new(Mutex::new(MessageTracker::new(
+        let state_arc = Arc::new(Mutex::new(P2PState::new(
             metrics.clone(),
             LIBP2P_CONFIG.seen_tx_clear_interval,
         )));
-        let message_tracker_clone = Arc::clone(&message_tracker); // Clone the Arc, not the MessageTracker
+        let state_arc_clone = Arc::clone(&state_arc); // Clone the Arc, not the MessageTracker
         let result = handle_effect(
             effect_slab,
             swarm_tx,
             EquiXBuilder::new(),
             PeerId::random(), // local peer ID (not relevant for this test)
             vec![],           // connected peers (not relevant for this test)
-            message_tracker_clone,
+            state_arc_clone,
             metrics,
         )
         .await;
@@ -2239,8 +2184,8 @@ mod tests {
         assert!(result.is_ok(), "handle_effect should succeed");
 
         // Verify that the block id was added to the seen_blocks set
-        let tracker = message_tracker.lock().await;
-        let contains = tracker.seen_blocks.contains(&block_id_str);
+        let state_guard = state_arc.lock().await;
+        let contains = state_guard.seen_blocks.contains(&block_id_str);
         assert!(contains, "Block ID should be marked as seen");
     }
 
@@ -2270,18 +2215,18 @@ mod tests {
                 .expect("Could not register metrics"),
         );
 
-        let message_tracker = Arc::new(Mutex::new(MessageTracker::new(
+        let state_arc = Arc::new(Mutex::new(P2PState::new(
             metrics.clone(),
             LIBP2P_CONFIG.seen_tx_clear_interval,
         )));
-        let message_tracker_clone = Arc::clone(&message_tracker); // Clone the Arc, not the MessageTracker
+        let state_arc_clone = Arc::clone(&state_arc); // Clone the Arc, not the MessageTracker
         let result = handle_effect(
             effect_slab,
             swarm_tx,
             EquiXBuilder::new(),
             PeerId::random(), // local peer ID (not relevant for this test)
             vec![],           // connected peers (not relevant for this test)
-            message_tracker_clone,
+            state_arc_clone,
             metrics,
         )
         .await;
@@ -2289,8 +2234,8 @@ mod tests {
         assert!(result.is_ok(), "handle_effect should succeed");
 
         // Verify that the tx id was added to the seen_blocks set
-        let tracker = message_tracker.lock().await;
-        let contains = tracker.seen_txs.contains(&tx_id_str);
+        let state_guard = state_arc.lock().await;
+        let contains = state_guard.seen_txs.contains(&tx_id_str);
         assert!(contains, "tx ID should be marked as seen");
     }
 }
@@ -2310,184 +2255,6 @@ fn dial_peers(
         let _ = swarm.dial(peer.clone()).map_err(log_dial_error);
     }
     Ok(())
-}
-
-mod traffic_cop {
-    use std::time::Instant;
-
-    use tokio::select;
-    use tokio::sync::oneshot;
-
-    use super::*;
-
-    const TRAFFIC_COP_BUFFER_SIZE: usize = 50;
-
-    pub(crate) struct HighPriorityPermit<'a> {
-        permit: mpsc::Permit<'a, TrafficCopPoke>,
-    }
-
-    impl<'a> HighPriorityPermit<'a> {
-        pub(crate) async fn poke_high_priority(
-            self,
-            wire: WireRepr,
-            cause: NounSlab,
-            timing: Option<oneshot::Sender<Duration>>,
-        ) -> Result<PokeResult, NockAppError> {
-            let (result_tx, result_rx) = oneshot::channel();
-            let poke = TrafficCopPoke {
-                wire,
-                cause,
-                timing,
-                result: result_tx,
-            };
-            self.permit.send(poke);
-            result_rx.await?
-        }
-    }
-
-    enum TrafficCopAction {
-        Poke(TrafficCopPoke),
-        Peek {
-            path: NounSlab,
-            result: oneshot::Sender<Result<Option<NounSlab>, NockAppError>>,
-        },
-    }
-
-    struct TrafficCopPoke {
-        wire: WireRepr,
-        cause: NounSlab,
-        timing: Option<oneshot::Sender<Duration>>,
-        result: oneshot::Sender<Result<PokeResult, NockAppError>>,
-    }
-
-    #[derive(Clone)]
-    pub(crate) struct TrafficCop {
-        high_priority_pokes: mpsc::Sender<TrafficCopPoke>,
-        low_priority: mpsc::Sender<TrafficCopAction>,
-    }
-
-    impl TrafficCop {
-        pub(crate) fn new(
-            handle: NockAppHandle,
-            join_set: &mut TrackedJoinSet<Result<(), NockAppError>>,
-            poke_timeout: Duration,
-        ) -> Self {
-            let (high_priority_pokes, high) = mpsc::channel(1);
-            let (low_priority, low) = mpsc::channel(TRAFFIC_COP_BUFFER_SIZE);
-            join_set.spawn(
-                "traffic_cop".to_string(),
-                traffic_cop_task(handle, high, low, poke_timeout),
-            );
-            Self {
-                high_priority_pokes,
-                low_priority,
-            }
-        }
-
-        pub(crate) async fn poke_high_priority_permit(
-            &self,
-        ) -> Result<HighPriorityPermit, NockAppError> {
-            let permit = self
-                .high_priority_pokes
-                .reserve()
-                .await
-                .map_err(|_| NockAppError::ChannelClosedError)?;
-            Ok(HighPriorityPermit { permit })
-        }
-
-        #[allow(dead_code)]
-        pub(crate) async fn poke_low_priority(
-            &self,
-            wire: WireRepr,
-            cause: NounSlab,
-            timing: Option<oneshot::Sender<std::time::Duration>>,
-        ) -> Result<PokeResult, NockAppError> {
-            let (result_tx, result_rx) = oneshot::channel();
-            let action = TrafficCopAction::Poke(TrafficCopPoke {
-                wire,
-                cause,
-                timing,
-                result: result_tx,
-            });
-            self.low_priority.try_send(action).map_err(|e| match e {
-                mpsc::error::TrySendError::Full(_) => NockAppError::IoError(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "dropping poke: queue full",
-                )),
-                mpsc::error::TrySendError::Closed(_) => NockAppError::ChannelClosedError,
-            })?;
-            result_rx.await?
-        }
-
-        pub(crate) async fn peek(&self, path: NounSlab) -> Result<Option<NounSlab>, NockAppError> {
-            let (result_tx, result_rx) = oneshot::channel();
-            let action = TrafficCopAction::Peek {
-                path,
-                result: result_tx,
-            };
-            self.low_priority.try_send(action).map_err(|e| match e {
-                mpsc::error::TrySendError::Full(_) => NockAppError::IoError(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "dropping peek: queue full",
-                )),
-                mpsc::error::TrySendError::Closed(_) => NockAppError::ChannelClosedError,
-            })?;
-            result_rx.await?
-        }
-    }
-
-    async fn traffic_cop_task(
-        handle: NockAppHandle,
-        mut high: mpsc::Receiver<TrafficCopPoke>,
-        mut low: mpsc::Receiver<TrafficCopAction>,
-        poke_timeout: Duration,
-    ) -> Result<(), NockAppError> {
-        loop {
-            select! { biased;
-                high_priority_poke = high.recv() => match high_priority_poke {
-                    Some(TrafficCopPoke { wire, cause, result, timing }) => {
-                        let now = Instant::now();
-                        let res = handle.poke_timeout(wire, cause, poke_timeout).await;
-                        timing.map(|c| c.send(now.elapsed()));
-                        let _ = result.send(res).map_err(|e| {
-                            error!("Failed to send high priority poke result");
-                            e
-                        });
-                    }
-                    None => {
-                        error!("High priority channel closed");
-                        break Err(NockAppError::ChannelClosedError);
-                    }
-                },
-                low_priority_action = low.recv() => match low_priority_action {
-                    Some(TrafficCopAction::Poke(TrafficCopPoke { wire, cause, result, timing })) => {
-                        let now = Instant::now();
-                        let res = handle.poke_timeout(wire, cause, poke_timeout).await;
-                        let elapsed = now.elapsed();
-                        timing.map(|c| c.send(elapsed));
-                        let _ = result.send(res).map_err(|e| {
-                            error!("Failed to send low priority poke result");
-                            e
-                        });
-                    }
-                    Some(TrafficCopAction::Peek { path, result }) => {
-                        let res = handle.peek(path).await;
-                        let _ = result.send(res).map_err(|e| {
-                            error!("Failed to send low priority peek result");
-                            e
-                        });
-                    }
-                    None => {
-                        error!("Low priority channel closed");
-                        break Err(NockAppError::ChannelClosedError);
-                    }
-                },
-                _ = handle.next_effect() => {
-                    // We have to do this to prevent the broadcast channel from lagging
-                }
-            }
-        }
-    }
 }
 
 fn log_dial_error(error: DialError) {
@@ -2565,11 +2332,11 @@ fn log_inbound_failure(
     };
 }
 
-fn dial_more_peers(swarm: &mut Swarm<NockchainBehaviour>, tracker: MutexGuard<MessageTracker>) {
+fn dial_more_peers(swarm: &mut Swarm<NockchainBehaviour>, state_guard: MutexGuard<P2PState>) {
     let mut addresses_to_dial = Vec::new();
     for bucket in swarm.behaviour_mut().kad.kbuckets() {
         for peer in bucket.iter() {
-            if tracker
+            if state_guard
                 .peer_connections
                 .contains_key(&peer.node.key.into_preimage())
             {
@@ -2594,4 +2361,101 @@ fn dial_more_peers(swarm: &mut Swarm<NockchainBehaviour>, tracker: MutexGuard<Me
             log_dial_error(err);
         };
     }
+}
+
+/// # Create a swarm and set it to listen
+///
+/// This function initializes a libp2p swarm with the provided keypair and binding addresses.
+/// It configures the swarm to listen on specified multiaddresses and sets up the behavior for network interactions.
+///
+/// # Arguments
+/// * `keypair` - The keypair for the node's identity
+/// * `bind` - A vector of multiaddresses specifying the network interfaces to bind to
+///
+/// # Returns
+/// A Result containing the Swarm instance or an error if any operation fails
+pub(crate) fn start_swarm(
+    libp2p_config: LibP2PConfig,
+    keypair: Keypair,
+    bind: Vec<Multiaddr>,
+    allowed: Option<allow_block_list::Behaviour<allow_block_list::AllowedPeers>>,
+    limits: connection_limits::ConnectionLimits,
+    memory_limits: Option<memory_connection_limits::Behaviour>,
+) -> Result<Swarm<NockchainBehaviour>, Box<dyn Error>> {
+    let (resolver_config, resolver_opts) =
+        if let Ok(sys) = hickory_resolver::system_conf::read_system_conf() {
+            debug!("resolver configs and opts: {:?}", sys);
+            sys
+        } else {
+            (ResolverConfig::cloudflare(), ResolverOpts::default())
+        };
+
+    let max_idle_timeout_millisecs = libp2p_config.max_idle_timeout_millisecs();
+    let keep_alive_interval = libp2p_config.keep_alive_interval();
+    let handshake_timeout = libp2p_config.handshake_timeout();
+    let connection_timeout = libp2p_config.connection_timeout();
+    let swarm_idle_timeout = libp2p_config.swarm_idle_timeout();
+    let mut swarm = libp2p::SwarmBuilder::with_existing_identity(keypair)
+        .with_tokio()
+        .with_quic_config(|mut cfg| {
+            cfg.max_idle_timeout = max_idle_timeout_millisecs;
+            cfg.keep_alive_interval = keep_alive_interval;
+            cfg.handshake_timeout = handshake_timeout;
+            cfg
+        })
+        .with_dns_config(resolver_config, resolver_opts)
+        .with_behaviour(NockchainBehaviour::pre_new(
+            libp2p_config, allowed, limits, memory_limits,
+        ))?
+        .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(swarm_idle_timeout))
+        .with_connection_timeout(connection_timeout)
+        .build();
+
+    for bind_addr in bind {
+        swarm.listen_on(bind_addr.clone()).map_err(|e| {
+            error!("Failed to listen on {bind_addr:?}: {e}");
+            e
+        })?;
+    }
+    Ok(swarm)
+}
+
+///** Handler for "identify" messages */
+//#[instrument(skip(swarm))]
+pub(crate) fn identify_received(
+    swarm: &mut Swarm<NockchainBehaviour>,
+    peer_id: PeerId,
+    info: libp2p::identify::Info,
+) -> Result<(), NockAppError> {
+    swarm.add_external_address(info.observed_addr.clone());
+    let us = *swarm.local_peer_id();
+    let kad = &mut swarm.behaviour_mut().kad;
+    trace!("identify received for peer {}", peer_id);
+    trace!("Adding address {} for us: {}", info.observed_addr, us);
+    kad.add_address(&us, info.observed_addr);
+    for addr in info.listen_addrs {
+        if let Some(Protocol::Dnsaddr(_)) = addr.iter().next() {
+            continue;
+        }
+        trace!("Adding address {} for peer {}", addr, peer_id);
+        kad.add_address(&peer_id, addr);
+    }
+    Ok(())
+}
+
+fn log_ping_success(peer: PeerId, connection_address: Option<Multiaddr>, duration: Duration) {
+    let Some(connection_address) = connection_address else {
+        warn!("Untracked connection to {peer}, please report this to the developers");
+        return;
+    };
+    let ms = duration.as_millis();
+    debug!("Ping to {peer} via {connection_address} succeeded in {ms}ms");
+}
+
+fn log_ping_failure(peer: PeerId, connection_address: Option<Multiaddr>, error: ping::Failure) {
+    let Some(connection_address) = connection_address else {
+        warn!("Untracked connection to {peer}, please report this to the developers");
+        return;
+    };
+    debug!("Ping to {peer} via {connection_address} failed: {error}");
 }

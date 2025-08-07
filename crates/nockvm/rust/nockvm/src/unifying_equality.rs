@@ -103,7 +103,7 @@ pub unsafe fn unifying_equality(stack: &mut NockStack, a: *mut Noun, b: *mut Nou
                         ) == 0
                     {
                         let (_senior, junior) = senior_pointer_first(stack, x_as_ptr, y_as_ptr);
-                        if x_as_ptr == junior {
+                        if std::ptr::eq(x_as_ptr, junior) {
                             *x = *y;
                         } else {
                             *y = *x;
@@ -121,7 +121,7 @@ pub unsafe fn unifying_equality(stack: &mut NockStack, a: *mut Noun, b: *mut Nou
                         && x_cell.tail().raw_equals(&y_cell.tail())
                     {
                         let (_senior, junior) = senior_pointer_first(stack, x_as_ptr, y_as_ptr);
-                        if x_as_ptr == junior {
+                        if std::ptr::eq(x_as_ptr, junior) {
                             *x = *y;
                         } else {
                             *y = *x;

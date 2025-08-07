@@ -22,7 +22,7 @@ pub(crate) struct F6lt(pub [Belt; 6]);
 
 #[inline(always)]
 pub(crate) fn make_n_belt<A: NounAllocator>(stack: &mut A, arr: &[Belt]) -> Noun {
-    assert!(arr.len() > 0);
+    assert!(!arr.is_empty());
     let n = arr.len();
     let mut res_cell = Atom::new(stack, arr[n - 1].0).as_noun();
     for i in (0..n - 1).rev() {
@@ -203,9 +203,9 @@ fn f6_sub(f1: &F6lt, f2: &F6lt) -> F6lt {
 fn ch_double_unsafe(x: &F6lt, y: &F6lt) -> Result<CheetahPoint, JetErr> {
     let slope = f6_div(
         &f6_add(&f6_scal(Belt(3), &f6_square(x)), &F6_ONE),
-        &f6_scal(Belt(2), &y),
+        &f6_scal(Belt(2), y),
     )?;
-    let x_out = f6_sub(&f6_square(&slope), &f6_scal(Belt(2), &x));
+    let x_out = f6_sub(&f6_square(&slope), &f6_scal(Belt(2), x));
     let y_out = f6_sub(&f6_mul(&slope, &f6_sub(x, &x_out)), y);
     Ok(CheetahPoint {
         x: x_out,
@@ -273,7 +273,7 @@ fn ch_add(p: &CheetahPoint, q: &CheetahPoint) -> Result<CheetahPoint, JetErr> {
 
 #[inline(always)]
 pub(crate) fn ch_scal(n: u64, p: &CheetahPoint) -> Result<CheetahPoint, JetErr> {
-    let mut n = n.clone();
+    let mut n = n;
     let mut p_copy = *p;
     let mut acc = A_ID;
     while n > 0 {

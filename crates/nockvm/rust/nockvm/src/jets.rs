@@ -367,7 +367,7 @@ pub mod util {
 
         pub fn assert_noun_eq(stack: &mut NockStack, mut a: Noun, mut b: Noun) {
             let eq = unsafe { unifying_equality(stack, &mut a, &mut b) };
-            assert!(eq, "got: {:?}, need: {:?}", a, b);
+            assert!(eq, "got: {a:?}, need: {b:?}");
         }
 
         pub fn assert_jet(context: &mut Context, jet: Jet, sam: Noun, res: Noun) {
@@ -431,17 +431,13 @@ pub mod util {
                         },
                         _ => {
                             panic!(
-                                "with sample: {:?}, expected err: {:?}, got: {:?}",
-                                sam, expected_err, actual_err
+                                "with sample: {sam:?}, expected err: {expected_err:?}, got: {actual_err:?}"
                             );
                         }
                     }
                 }
                 _ => {
-                    panic!(
-                        "with sample: {:?}, expected err: {:?}, got: {:?}",
-                        sam, err, jet_err
-                    );
+                    panic!("with sample: {sam:?}, expected err: {err:?}, got: {jet_err:?}");
                 }
             }
         }
@@ -468,7 +464,7 @@ pub mod util {
                     )
                 })
                 .size();
-            assert!(siz == res_siz, "got: {}, need: {}", res_siz, siz);
+            assert!(siz == res_siz, "got: {res_siz}, need: {siz}");
         }
 
         pub fn assert_common_jet(

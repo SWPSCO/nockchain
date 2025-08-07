@@ -13,7 +13,6 @@
       [%puzzle commitment=noun-digest:tip5 nonce=noun-digest:tip5 len=@ p=*]
       [%codeword p=fpoly]
       [%terms p=bpoly]  :: terminals
-      [%m-paths a=proof-path b=proof-path c=proof-path]
       [%m-path p=proof-path]   ::  merk-path
       [%m-pathbf p=proof-path-bf]  ::  merk-path-bf
       [%comp-m p=noun-digest:tip5 num=@]  ::  composition-merk
@@ -124,15 +123,6 @@
     :-  leaf+%m-mpath
     :-  (hashable-fpoly:tip5 leaf.p.pd)
     (hashable-noun-digests:tip5 path.p.pd)
-  ::
-      %m-paths
-    :-  leaf+%m-mpaths
-    :+  :-  (hashable-fpoly:tip5 leaf.a.pd)
-        (hashable-noun-digests:tip5 path.a.pd)
-      :-  (hashable-fpoly:tip5 leaf.b.pd)
-      (hashable-noun-digests:tip5 path.b.pd)
-    :-  (hashable-fpoly:tip5 leaf.c.pd)
-    (hashable-noun-digests:tip5 path.c.pd)
   ==
 ::
 ++  hash-proof-data

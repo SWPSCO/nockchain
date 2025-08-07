@@ -1,4 +1,4 @@
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use futures::FutureExt;
 use hoonc::*;
 use nockapp::kernel::boot;
@@ -6,7 +6,14 @@ use nockvm::mem::{AllocationError, NewStackError};
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
-    let cli = ChooCli::parse();
+    let matches = ChooCli::command().get_matches();
+    let mut cli = ChooCli::parse();
+
+    //  If the save interval was not provided by the user,
+    //  set it to the default value.
+    if let None = matches.get_one::<u64>("save-interval") {
+        cli.boot.save_interval = hoonc::default_save_interval();
+    }
 
     boot::init_default_tracing(&cli.boot.clone());
     // use tracing_subscriber::layer::SubscriberExt;

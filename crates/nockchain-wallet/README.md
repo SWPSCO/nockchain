@@ -18,10 +18,19 @@ The wallet supports importing and exporting keys:
 nockchain-wallet export-keys
 
 # Import keys from the exported file
-nockchain-wallet import-keys --input keys.export
+nockchain-wallet import-keys --file keys.export
 
-# Import a master public key and chain code
-nockchain-wallet import-master-pubkey --key <base58-key> --chain-code <base58-chain-code>
+# Import an extended key string
+nockchain-wallet import-keys --key "zprv..."
+
+# Generate master private key from seed phrase
+nockchain-wallet import-keys --seedphrase "your seed phrase here"
+
+# Generate master public key from private key and chain code
+nockchain-wallet import-keys --master-privkey <private-key> --chain-code <chain-code>
+
+# Import a master public key from exported file
+nockchain-wallet import-master-pubkey keys.export
 ```
 
 The exported keys file contains all wallet keys as a `jam` file that can be imported on another instance.
@@ -46,27 +55,16 @@ Note: Make sure nockchain is running and the socket path matches your nockchain 
 
 # Advanced Options
 
-
-### Generate Master Private Key from Seed Phrase
-
-```bash
-nockchain-wallet gen-master-privkey --seedphrase "your seed phrase here"
-```
-
-Creates a master private key deterministically from a BIP39-style seed phrase.
-
-### Generate Master Public Key from Private Key
-
-```bash
-nockchain-wallet gen-master-pubkey --master-privkey <private-key>
-```
-
-Derives the master public key from a master private key.
-
 ### Derive Child Key
 
 ```bash
-nockchain-wallet derive-child --key-type <pub|priv> --index <0-255>
+# Derive child key with index as positional argument
+nockchain-wallet derive-child <0-2147483647> --hardened --label <label>
+
+# Examples:
+nockchain-wallet derive-child 42
+nockchain-wallet derive-child 42 --hardened
+nockchain-wallet derive-child 42 --hardened --label "my-key"
 ```
 
 Derives a child public or private key at the given index from the current master key.
@@ -87,10 +85,18 @@ Displays all notes (UTXOs) currently managed by the wallet, sorted by assets.
 ### List Notes by Public Key
 
 ```bash
-nockchain-wallet list-notes-by-pubkey --pubkey <public-key>
+nockchain-wallet list-notes-by-pubkey <public-key>
 ```
 
 Shows only the notes associated with the specified public key. Useful for filtering wallet contents by address or for multisig scenarios.
+
+### List Notes by Public Key (CSV format)
+
+```bash
+nockchain-wallet list-notes-by-pubkey-csv <public-key>
+```
+
+Outputs matching notes in CSV format suitable for analysis or reporting.
 
 
 ## Transaction Creation
@@ -99,33 +105,66 @@ Shows only the notes associated with the specified public key. Useful for filter
 
 1. **Seeds**: Define where funds are going and how much
 2. **Inputs**: Specify which notes (UTXOs) to spend
-3. **Draft**: Combine inputs into a complete transaction
+3. **Transaction**: Combine inputs into a complete transaction
 4. **Sign**: Authorize the transaction with private keys
-5. **Make Transaction**: Create the final transaction for broadcasting
+5. **Send Transaction**: Send the final transaction for broadcasting
 
-### What is a draft?
+### Create a Transaction
 
-A draft represents a transaction that is being prepared for submission to the network. It is a collection of partially assembled `seeds` and `inputs` that can be persisted to disk and later signed and submitted.
+The spend command supports two modes: single recipient and multiple recipients.
 
-### Create a Draft
+#### Single Recipient Transaction
 
 ```bash
-# Create a draft using simple-spend
-nockchain-wallet simple-spend \
+# Send to a single recipient
+nockchain-wallet spend \
+  --names "[first1 last1]" \
+  --recipient "[1 pk1]" \
+  --gift 100 \
+  --fee 10
+```
+
+For single recipient transactions:
+- `--recipient` specifies one recipient as `[<num-of-signatures> <public-key-1>,<public-key-2>,...]`
+- `--gift` specifies the amount to send to that recipient
+- Multiple names can still be provided to use funds from multiple notes
+
+#### Multiple Recipients Transaction
+
+```bash
+# Send to multiple recipients
+nockchain-wallet spend \
   --names "[first1 last1],[first2 last2]" \
   --recipients "[1 pk1],[2 pk2,pk3]" \
   --gifts "100,200" \
   --fee 10
 ```
 
-### Make Transaction from Draft
+For multiple recipient transactions:
+- `--recipients` specifies a list of recipients, each as `[<num-of-signatures> <public-key-1>,<public-key-2>,...]`
+- `--gifts` specifies a list of amounts, one for each recipient (must match the number of recipients)
+
+#### Common Parameters
+
+- The number of signatures required is specified as the first number in each recipient specification
+- The `names` argument is a list of `[first-name last-name]` pairs specifying funding notes
+- The `fee` argument is the transaction fee to pay
+- For multisig recipients, list multiple public keys after the signature count
+
+### Make Transaction from Transaction File
 
 ```bash
 # Sign the transaction
-nockchain-wallet sign-tx --draft path/to/draft.draft
+nockchain-wallet sign-tx txs/transaction.tx
+
+# Optionally specify a key index for signing
+nockchain-wallet sign-tx txs/transaction.tx --index 5
+
+# Display transaction contents
+nockchain-wallet show-tx txs/transaction.tx
 
 # Make and broadcast the signed transaction
-nockchain-wallet send-tx --draft path/to/draft.draft
+nockchain-wallet send-tx txs/transaction.tx
 ```
 
-Note: The draft file will be saved in `./drafts/` directory with a `.draft` extension.
+Note: The transaction file will be saved in `./txs/` directory with a `.tx` extension.

@@ -19,6 +19,9 @@ use walkdir::{DirEntry, WalkDir};
 
 pub const OUT_JAM_NAME: &str = "out.jam";
 
+// save interval in milliseconds
+const DEFAULT_SAVE_INTERVAL: u64 = 600000;
+
 pub type Error = Box<dyn std::error::Error>;
 
 static KERNEL_JAM: &[u8] = include_bytes!("../bootstrap/hoonc.jam");
@@ -48,6 +51,10 @@ pub struct ChooCli {
 
     #[arg(long, help = "Output file path", default_value = None)]
     pub output: Option<std::path::PathBuf>,
+}
+
+pub fn default_save_interval() -> u64 {
+    DEFAULT_SAVE_INTERVAL
 }
 
 pub async fn hoonc_data_dir() -> PathBuf {

@@ -1759,7 +1759,6 @@
     +$  sk  t8
     +$  sig  t8
     +$  chal  t8
-    ::
     ++  based
       |=  =t8
       ^-  ?
@@ -1773,7 +1772,6 @@
           (^based g)
           (^based h)
       ==
-    ::
     ::
     ++  atom-to-t8
       |=  a=@ux

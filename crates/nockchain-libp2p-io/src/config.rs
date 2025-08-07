@@ -9,50 +9,45 @@ use serde::Deserialize;
 const KADEMLIA_BOOTSTRAP_INTERVAL: Duration = Duration::from_secs(300);
 
 // If the --force-peer cli arg is passed, we will force dial it every FORCE_PEER_BOOT_INTERVAL
-const FORCE_PEER_DIAL_INTERVAL: Duration = Duration::from_secs(600);
+const FORCE_PEER_DIAL_INTERVAL: Duration = Duration::from_secs(1200);
 
 /** How long we should keep a peer connection alive with no traffic */
-const SWARM_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+const SWARM_IDLE_TIMEOUT: Duration = Duration::from_secs(180);
 
 // Core protocol (QUIC/ping/etc) constants
 /** How many times we should retry dialing our initial peers if we can't get Kademlia initialized */
 // TODO: Make command-line configurable
 const INITIAL_PEER_RETRIES: u32 = 5;
 /** How often we should send a keep-alive message to a peer */
-const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(15);
-/** How long should we wait before timing out the connection */
-// const CONNECTION_TIMEOUT: Duration = SWARM_IDLE_TIMEOUT;
+const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(12);
 /** How long should we wait before timing out the handshake */
-const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
-/** How long QUIC should wait before timing out an idle connection */
-// const MAX_IDLE_TIMEOUT_MILLISECS: u32 = CONNECTION_TIMEOUT.as_millis() as u32;
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(20);
 /** How often we should send an identify message to a peer */
 const IDENTIFY_INTERVAL: Duration = Duration::from_secs(120);
 
 /** Maximum number of established *incoming* connections */
-const MAX_ESTABLISHED_INCOMING_CONNECTIONS: u32 = 96;
+const MAX_ESTABLISHED_INCOMING_CONNECTIONS: u32 = 256;
 
 /** Maximum number of established *incoming* connections */
 const MAX_ESTABLISHED_OUTGOING_CONNECTIONS: u32 = 32;
 
 /** Maximum number of established connections */
-const MAX_ESTABLISHED_CONNECTIONS: u32 = 128;
+const MAX_ESTABLISHED_CONNECTIONS: u32 = 288;
 
 /** Maximum number of established connections with a single peer ID */
 const MAX_ESTABLISHED_CONNECTIONS_PER_PEER: u32 = 2;
 
 /** Maximum pending incoming connections */
-const MAX_PENDING_INCOMING_CONNECTIONS: u32 = 16;
+const MAX_PENDING_INCOMING_CONNECTIONS: u32 = 64;
 
 /** Maximum pending outcoing connections */
-const MAX_PENDING_OUTGOING_CONNECTIONS: u32 = 16;
+const MAX_PENDING_OUTGOING_CONNECTIONS: u32 = 32;
 
 /** Minimum number of peers */
 const MIN_PEERS: usize = 8;
 
 // Request/response constants
-// const REQUEST_RESPONSE_MAX_CONCURRENT_STREAMS: usize = MAX_ESTABLISHED_CONNECTIONS as usize * 2;
-const REQUEST_RESPONSE_TIMEOUT: Duration = Duration::from_secs(20);
+const REQUEST_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
 const REQUEST_HIGH_THRESHOLD: u64 = 60;
 const REQUEST_HIGH_RESET: Duration = Duration::from_secs(60);
 
@@ -68,6 +63,12 @@ const KAD_PROTOCOL_VERSION: &str = "/nockchain-1-kad";
 const IDENTIFY_PROTOCOL_VERSION: &str = "/nockchain-1-identify";
 
 const PEER_STORE_RECORD_CAPACITY: usize = 1024;
+
+// Default timeout for network-originating pokes
+const POKE_TIMEOUT_SECS: u64 = 60;
+
+// Default max failed pings before closing connection
+const FAILED_PINGS_BEFORE_CLOSE: u64 = 4;
 
 /// Configuration struct that allows overriding default constants from environment variables
 #[derive(Debug, Deserialize, Clone)]
@@ -148,10 +149,9 @@ pub struct LibP2PConfig {
     // /// Kademlia protocol version
     // #[serde(default = "default_kad_protocol_version")]
     // pub kad_protocol_version: String,
-    /// Identify protocol version
-    #[serde(default = "default_identify_protocol_version")]
-    pub identify_protocol_version: String,
-
+    ///// Identify protocol version
+    //#[serde(default = "default_identify_protocol_version")]
+    //pub identify_protocol_version: String,
     /// Peer store record capacity
     /// This is the maximum number of records that can be stored in the peer store.
     #[serde(default = "default_peer_store_record_capacity")]
@@ -175,6 +175,10 @@ pub struct LibP2PConfig {
     /// Timeout for pokes
     #[serde(default = "default_poke_timeout_secs")]
     pub poke_timeout_secs: u64,
+
+    /// Number of failed pings before closing connection
+    #[serde(default = "default_failed_pings_before_close")]
+    pub failed_pings_before_close: u64,
 }
 
 // Default value functions
@@ -230,10 +234,6 @@ fn default_request_high_reset_secs() -> u64 {
     REQUEST_HIGH_RESET.as_secs()
 }
 
-fn default_identify_protocol_version() -> String {
-    IDENTIFY_PROTOCOL_VERSION.to_string()
-}
-
 fn default_peer_store_record_capacity() -> NonZero<usize> {
     PEER_STORE_RECORD_CAPACITY
         .try_into()
@@ -253,7 +253,11 @@ fn default_seen_tx_clear_interval() -> u64 {
 }
 
 fn default_poke_timeout_secs() -> u64 {
-    10 // Timeout for pokes
+    POKE_TIMEOUT_SECS // Timeout for pokes
+}
+
+fn default_failed_pings_before_close() -> u64 {
+    FAILED_PINGS_BEFORE_CLOSE // Number of failed pings before closing connection
 }
 
 // Do _not_ use this default implementation in production code. It's just a fallback.
@@ -278,12 +282,12 @@ impl Default for LibP2PConfig {
             request_response_timeout_secs: default_request_response_timeout_secs(),
             request_high_threshold: default_request_high_threshold(),
             request_high_reset_secs: default_request_high_reset_secs(),
-            identify_protocol_version: default_identify_protocol_version(),
             peer_store_record_capacity: default_peer_store_record_capacity(),
             peer_status_interval_secs: default_peer_status_interval_secs(),
             elders_debounce_reset_secs: default_elders_debounce_reset_secs(),
             seen_tx_clear_interval: default_seen_tx_clear_interval(),
             poke_timeout_secs: default_poke_timeout_secs(),
+            failed_pings_before_close: default_failed_pings_before_close(),
         }
     }
 }
@@ -309,6 +313,10 @@ impl LibP2PConfig {
 
     pub fn req_res_protocol_version() -> &'static str {
         REQ_RES_PROTOCOL_VERSION
+    }
+
+    pub fn identify_protocol_version() -> &'static str {
+        IDENTIFY_PROTOCOL_VERSION
     }
 
     /// Get kademlia bootstrap interval as Duration
@@ -363,7 +371,7 @@ impl LibP2PConfig {
 
     /// Get request response max concurrent streams
     pub fn request_response_max_concurrent_streams(&self) -> usize {
-        self.max_established_connections as usize * 2
+        self.max_established_connections as usize * 8
     }
 
     pub fn peer_status_interval_secs(&self) -> std::time::Duration {
@@ -388,5 +396,9 @@ impl LibP2PConfig {
 
     pub fn poke_timeout(&self) -> Duration {
         Duration::from_secs(self.poke_timeout_secs)
+    }
+
+    pub fn failed_pings_before_close(&self) -> u64 {
+        self.failed_pings_before_close
     }
 }

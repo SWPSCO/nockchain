@@ -25,7 +25,7 @@ use tokio::select;
 use tokio::sync::{broadcast, mpsc, Mutex, OwnedMutexGuard};
 use tokio::time::{interval, Duration, Interval};
 use tokio_util::task::TaskTracker;
-use tracing::{debug, error, info, instrument, trace, warn};
+use tracing::{debug, error, instrument, trace, warn};
 use wire::WireRepr;
 
 use crate::kernel::form::Kernel;
@@ -688,7 +688,7 @@ impl<J: Jammer + Send + 'static> NockApp<J> {
         };
 
         // Force an immediate save to ensure we have the latest state
-        info!(
+        debug!(
             "Exit signal received with code {}, forcing immediate save",
             code
         );

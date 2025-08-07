@@ -125,21 +125,21 @@ HOON_SRCS := $(find hoon -type file -name '*.hoon')
 assets/dumb.jam: ensure-dirs hoon/apps/dumbnet/outer.hoon $(HOON_SRCS)
 	$(call show_env_vars)
 	rm -f assets/dumb.jam
-	RUST_LOG=trace hoonc hoon/apps/dumbnet/outer.hoon hoon
+	hoonc hoon/apps/dumbnet/outer.hoon hoon
 	mv out.jam assets/dumb.jam
 
 ## Build wal.jam with hoonc
 assets/wal.jam: ensure-dirs hoon/apps/wallet/wallet.hoon $(HOON_SRCS)
 	$(call show_env_vars)
 	rm -f assets/wal.jam
-	RUST_LOG=trace hoonc hoon/apps/wallet/wallet.hoon hoon
+	hoonc hoon/apps/wallet/wallet.hoon hoon
 	mv out.jam assets/wal.jam
 
 ## Build mining.jam with hoonc
 assets/miner.jam: ensure-dirs hoon/apps/dumbnet/miner.hoon $(HOON_SRCS)
 	$(call show_env_vars)
 	rm -f assets/miner.jam
-	RUST_LOG=trace hoonc hoon/apps/dumbnet/miner.hoon hoon
+	hoonc hoon/apps/dumbnet/miner.hoon hoon
 	mv out.jam assets/miner.jam
 
 ## Build verifier.jam with hoonc

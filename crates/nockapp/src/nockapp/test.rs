@@ -23,7 +23,8 @@ pub async fn setup_nockapp(jam: &str) -> (TempDir, NockApp) {
         .find_map(|path| fs::read(path).ok())
         .unwrap_or_else(|| panic!("Failed to read {} file from any known location", jam));
 
-    let kernel_f = async |checkpoint| Kernel::load(&jam_bytes, checkpoint, vec![], false).await;
+    let kernel_f =
+        async |checkpoint| Kernel::load(&jam_bytes, checkpoint, vec![], Default::default()).await;
     (
         temp_dir,
         NockApp::new(kernel_f, &temp_dir_path, std::time::Duration::from_secs(1))

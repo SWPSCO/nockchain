@@ -103,7 +103,7 @@ impl NounExt for Noun {
                 Ok(c.head())
             }
         });
-        if let Some(e) = ret.iter_mut().filter(|v| v.is_err()).next() {
+        if let Some(e) = ret.iter_mut().find(|v| v.is_err()) {
             let n = core::mem::replace(e, Ok(D(0)));
             return Err(n.unwrap_err());
         }

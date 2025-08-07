@@ -90,7 +90,7 @@ impl<T: ToBytes, const SIZE: usize> ToBytes for [T; SIZE] {
 
 impl ToBytes for String {
     fn to_bytes(&self) -> Result<Vec<u8>> {
-        Ok(self.bytes().chain(std::iter::once(0)).collect())
+        Ok(self.bytes().collect())
     }
 }
 

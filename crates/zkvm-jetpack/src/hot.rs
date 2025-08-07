@@ -1280,17 +1280,33 @@ pub const CURVE_JETS: &[HotEntry] = &[(
     ch_scal_jet,
 )];
 
-pub const CUSTOM_LIST_JETS: &[HotEntry] = &[(
-    &[
-        K_138,
-        Left(b"one"),
-        Left(b"two"),
-        Left(b"tri"),
-        Left(b"qua"),
-        Left(b"pen"),
-        Left(b"zeke"),
-        Left(b"range"),
-    ],
-    1,
-    range_jet,
-)];
+pub const CUSTOM_LIST_JETS: &[HotEntry] = &[
+    (
+        &[
+            K_138,
+            Left(b"one"),
+            Left(b"two"),
+            Left(b"tri"),
+            Left(b"qua"),
+            Left(b"pen"),
+            Left(b"zeke"),
+            Left(b"range"),
+        ],
+        1,
+        range_jet,
+    ),
+    (
+        &[
+            K_138,
+            Left(b"one"),
+            Left(b"two"),
+            Left(b"tri"),
+            Left(b"qua"),
+            Left(b"pen"),
+            Left(b"zeke"),
+            Left(b"zip-roll"),
+        ],
+        1,
+        zip_roll_jet,
+    ),
+];

@@ -91,16 +91,18 @@ impl Iterator for WarmEntry {
     }
 }
 
+#[derive(Default)]
 pub enum JetLookupResult {
-    Run { jet: Jet, path: Noun },
-    Test { jet: Jet, path: Noun },
+    Run {
+        jet: Jet,
+        path: Noun,
+    },
+    Test {
+        jet: Jet,
+        path: Noun,
+    },
+    #[default]
     NoJet,
-}
-
-impl Default for JetLookupResult {
-    fn default() -> Self {
-        JetLookupResult::NoJet
-    }
 }
 
 impl Iterator for JetLookupResult {

@@ -9,7 +9,6 @@
 /=  dumb  /apps/dumbnet/lib/types
 /=  *   /common/zose
 /=  *  /common/wrapper
-::
 =>
 =|  bug=_&
 |%
@@ -33,7 +32,17 @@
 ::  .key:  public or private key
 ::  .cc: associated entropy (chain code)
 ::
-+$  coil  [%coil =key =cc]
+++  coil
+  =<  form
+  |%
+    +$  form  [%coil =key =cc]
+    ::
+    ++  to-b58
+      |=  =form
+      ^-  [key-b58=@t cc-b58=@t]
+      :-  (crip (en:base58:wrap p.key.form))
+      (crip (en:base58:wrap cc.form))
+  --
 ::
 ::    $meta: stored metadata for a key
 +$  meta
@@ -74,27 +83,27 @@
 ::
 +$  keys  $+(keys-axal (axal meta))
 ::
-::    $draft-tree: structured tree of draft, input, and seed data
+::    $transaction-tree: structured tree of transaction, input, and seed data
 ::
-::  we use the axal structure to track the relationship between drafts,
+::  we use the axal structure to track the relationship between transactions,
 ::  inputs, and seeds. this allows us to navigate the tree and maintain
 ::  all the relationships without duplicating data.
 ::
-::  paths in the draft-tree follow these conventions:
+::  paths in the transaction-tree follow these conventions:
 ::
-::  /draft/[draft-name]                    :: draft node
-::  /draft/[draft-name]/input/[input-name] :: input in a draft
+::  /transaction/[transaction-name]                    :: transaction node
+::  /transaction/[transaction-name]/input/[input-name] :: input in a transaction
 ::  /input/[input-name]                    :: input node
 ::  /input/[input-name]/seed/[seed-name]   :: seed in an input
 ::  /seed/[seed-name]                      :: seed node
 ::
-+$  draft-tree
-  $+  wallet-draft-tree
-  (axal draft-entity)
-::    $draft-entity: entities stored in the draft tree
++$  transaction-tree
+  $+  wallet-transaction-tree
+  (axal transaction-entity)
+::    $transaction-entity: entities stored in the transaction tree
 ::
-+$  draft-entity
-  $%  [%draft =draft-name =draft]
++$  transaction-entity
+  $%  [%transaction =transaction-name =transaction]
       [%input =input-name =preinput]
       [%seed =seed-name =preseed]
   ==
@@ -130,38 +139,49 @@
       gifts=coins:transact
       =timelock-intent:transact
   ==
-::  $state: wallet state
+::  $versioned-state: wallet state
 ::
-+$  state
-  $:  %0
-      =balance
-      hash-to-name=(z-map:zo hash:transact nname:transact)  ::  hash of note -> name of note (TODO: deprecated)
-      name-to-hash=(z-map:zo nname:transact hash:transact)  ::  name of note -> hash of note (TODO: deprecated)
-      receive-address=lock:transact
-      =master
-      =keys
-      transactions=$+(transactions (map * transaction))
-      last-block=(unit block-id:transact)
-      peek-requests=$+(peek-requests (map @ud ?(%balance %block)))
-      active-draft=(unit draft-name)
-      active-input=(unit input-name)
-      active-seed=(unit seed-name)             ::  currently selected seed
-      draft-tree=draft-tree                    ::  structured tree of drafts, inputs, and seeds
-      pending-commands=(z-map:zo @ud [phase=?(%block %balance %ready) wrapped=cause])  ::  commands waiting for sync
++$  versioned-state
+  $%
+    $:  %0
+        =balance
+        hash-to-name=(z-map:zo hash:transact nname:transact)  ::  hash of note -> name of note
+        name-to-hash=(z-map:zo nname:transact hash:transact)  ::  name of note -> hash of note
+        receive-address=lock:transact
+        =master
+        =keys
+        transactions=$+(transactions (map * transaction))
+        last-block=(unit block-id:transact)
+        peek-requests=$+(peek-requests (map @ud ?(%balance %block)))
+        active-transaction=(unit transaction-name)
+        active-input=(unit input-name)
+        active-seed=(unit seed-name)             ::  currently selected seed
+        transaction-tree=transaction-tree                    ::  structured tree of transactions, inputs, and seeds
+        pending-commands=(z-map:zo @ud [phase=?(%block %balance %ready) wrapped=cause])  ::  commands waiting for sync
+    ==
+    ::
+    $:  %1
+        =balance
+        =master
+        =keys
+        last-block=(unit block-id:transact)
+        peek-requests=$+(peek-requests (map @ud ?(%balance %block)))
+        active-transaction=(unit transaction-name)
+        active-input=(unit input-name)
+        active-seed=(unit seed-name)             ::  currently selected seed
+        transaction-tree=transaction-tree                    ::  structured tree of transactions, inputs, and seeds
+        pending-commands=(z-map:zo @ud [phase=?(%block %balance %ready) wrapped=cause])  ::  commands waiting for sync
+    ==
   ==
+::
++$  state  $>(%1 versioned-state)
+::
 +$  seed-name   $~('default-seed' @t)
 ::
-+$  draft-name  $~('default-draft' @t)
++$  transaction-name  $~('default-transaction' @t)
 ::
 +$  input-name  $~('default-input' @t)
 ::
-::  $transaction: TODO
-::
-+$  transaction
-  $:  recipient=@ux
-      amount=@ud
-      status=?(%unsigned %signed %sent)
-  ==
 ::
 +$  cause
   $%  
@@ -170,20 +190,25 @@
       [%keygen entropy=byts salt=byts]
       [%derive-child i=@ hardened=? label=(unit @tas)]
       [%import-keys keys=(list (pair trek meta))]
+      [%import-extended extended-key=@t]                ::  extended key string
       [%export-keys ~]
       [%export-master-pubkey ~]
-      [%import-master-pubkey =coil]                    ::  base58-encoded pubkey + chain code
-      [%send-tx dat=draft]
-      [%list-notes-by-pubkey pubkey=@t]                ::  base58-encoded pubkey
-      [%list-notes-by-pubkey-csv pubkey=@t]            ::  base58-encoded pubkey, CSV format
-      $:  %simple-spend
-          names=(list [first=@t last=@t])              ::  base58-encoded name hashes
-          recipients=(list [m=@ pks=(list @t)])        ::  base58-encoded locks
-          gifts=(list coins:transact)                  ::  number of coins to spend
-          fee=coins:transact                           ::  fee
-          index=(unit @ud)                             ::  index of child key to spend from
-          =timelock-intent:transact                    ::  timelock constraint
+      [%import-master-pubkey =coil]                     ::  base58-encoded pubkey + chain code
+      [%send-tx dat=transaction]
+      [%show-tx dat=transaction]
+      [%list-notes-by-pubkey pubkey=@t]                 ::  base58-encoded pubkey
+      [%list-notes-by-pubkey-csv pubkey=@t]             ::  base58-encoded pubkey, CSV format
+      $:  %spend
+          names=(list [first=@t last=@t])               ::  base58-encoded name hashes
+          $=  order
+          $%  [%multiple recipients=(list [m=@ pks=(list @t)]) gifts=(list coins:transact)]
+              [%single recipient=[m=@ pks=(list @t)] gift=coins:transact]
+          ==
+          fee=coins:transact                            ::  fee
+          sign-key=(unit [child-index=@ud hardened=?])  ::  child key information to sign from
+          =timelock-intent:transact                     ::  timelock constraint
       ==
+<<<<<<< HEAD
       $:  %aeroe-spend
           names=(list [first=@t last=@t])              ::  base58-encoded name hashes
           recipients=(list [m=@ pks=(list @t)])        ::  base58-encoded locks
@@ -193,6 +218,9 @@
       ==
       [%sign-tx dat=draft index=(unit @ud) entropy=@]
       [%sign-aeroe-tx dat=draft index=(unit @ud) file-path=@t entropy=@]
+=======
+      [%sign-tx dat=transaction sign-key=(unit [child-index=@ud hardened=?]) entropy=@]
+>>>>>>> upstream/master
       [%list-pubkeys ~]
       [%list-notes ~]
       [%show-seedphrase ~]
@@ -218,11 +246,11 @@
 +$  advanced-spend
   $%  [%seed advanced-spend-seed]
       [%input advanced-spend-input]
-      [%draft advanced-spend-draft]
+      [%transaction advanced-spend-transaction]
   ==
 ::
 +$  advanced-spend-seed
-  $%  [%new name=@t]                          ::  new empty seed in draft
+  $%  [%new name=@t]                          ::  new empty seed in transaction
       $:  %set-name
           seed-name=@t
           new-name=@t
@@ -327,27 +355,27 @@
 ::
 +$  preinput  [name=@t (pair input:transact input-mask)]
 ::
-+$  draft  [name=@t p=inputs:transact]
++$  transaction  [name=@t p=inputs:transact]
 ::
-+$  advanced-spend-draft
-  $%  [%new name=@t]                                    ::  new input draft
++$  advanced-spend-transaction
+  $%  [%new name=@t]                                    ::  new input transaction
       $:  %set-name
-          draft-name=@t
+          transaction-name=@t
           new-name=@t
       ==
       $:  %add-input
-          draft-name=@t
+          transaction-name=@t
           input-name=@t
       ==
       $:  %remove-input
-          draft-name=@t
+          transaction-name=@t
           input-name=@t
       ==
       $:  %remove-input-by-name
-          draft-name=@t
+          transaction-name=@t
           name=[first=@t last=@t]
       ==
-      [%print-status =draft-name]                            ::  print draft status
+      [%print-status =transaction-name]                            ::  print transaction status
   ==
 ::
 +$  npc-cause
@@ -444,9 +472,9 @@
     ?~  active-input.state
       %-  (debug "no active input set!")
       *preinput
-    =/  input-result  (~(get-input plan draft-tree.state) u.active-input.state)
+    =/  input-result  (~(get-input plan transaction-tree.state) u.active-input.state)
     ?~  input-result
-      ~|("active input not found in draft-tree" !!)
+      ~|("active input not found in transaction-tree" !!)
     u.input-result
   ::    +add-seed: add a seed to the input
   ::
@@ -476,13 +504,13 @@
     =.  active-input.state  (some name.pre)
     ::
     =/  input-name=input-name  (need active-input.state)
-    =.  draft-tree.state
-      (~(add-input plan draft-tree.state) input-name preinput)
+    =.  transaction-tree.state
+      (~(add-input plan transaction-tree.state) input-name preinput)
     ::  if active-seed is set, link it to this input
-    =.  draft-tree.state
+    =.  transaction-tree.state
       ?:  ?=(^ active-seed.state)
-        (~(link-seed-to-input plan draft-tree.state) input-name u.active-seed.state)
-      draft-tree.state
+        (~(link-seed-to-input plan transaction-tree.state) input-name u.active-seed.state)
+      transaction-tree.state
     `state
   ::
   ++  remove-seed
@@ -503,33 +531,33 @@
     =.  seeds.spend.p.pre
       %.  seed
       ~(del z-in:zo seeds.spend.p.pre)
-    =.  draft-tree.state
+    =.  transaction-tree.state
       =/  input-name=input-name  (need active-input.state)
-      (~(add-input plan draft-tree.state) input-name pre)
+      (~(add-input plan transaction-tree.state) input-name pre)
     `state
   --
 ::
-::  +draw: modify drafts
+::  +draw: modify transactions
 ++  draw
   |_  =state
-  +*  df
-    ^-  draft
-    ?>  ?=(^ active-draft.state)
-    =/  draft-result  (~(get-draft plan draft-tree.state) u.active-draft.state)
-    ?~  draft-result
-      *draft
-    u.draft-result
-  ::    +add-input: add an input to the draft
+  +*  tx
+    ^-  transaction
+    ?>  ?=(^ active-transaction.state)
+    =/  transaction-result  (~(get-transaction plan transaction-tree.state) u.active-transaction.state)
+    ?~  transaction-result
+      *transaction
+    u.transaction-result
+  ::    +add-input: add an input to the transaction
   ::
   ++  add-input
     |=  =input:transact
     ^-  [(list effect) ^state]
-    =/  =draft  df
+    =/  =transaction  tx
     =/  =input-name
       =+  (to-b58:nname:transact name.note.input)
       %-  crip
       "{<first>}-{<last>}"
-    ?:  (~(has z-by:zo p.df) name.note.input)
+    ?:  (~(has z-by:zo p.tx) name.note.input)
       :_  state
       %-  print
       %-  need
@@ -538,31 +566,31 @@
       """
       ##  add-input
 
-      **input already exists in .draft**
+      **input already exists in .transaction**
 
-      draft already has input with note name: {<input-name>}
+      transaction already has input with note name: {<input-name>}
       """
-    =/  active-draft=draft-name  (need active-draft.state)
-    =.  p.draft
-      %-  ~(put z-by:zo p.draft)
+    =/  active-transaction=transaction-name  (need active-transaction.state)
+    =.  p.transaction
+      %-  ~(put z-by:zo p.transaction)
       :-  name.note.input
       input
-    =.  draft-tree.state
-      %.  [active-draft draft]
-      ~(add-draft plan draft-tree.state)
-    =.  draft-tree.state
-      %.  [active-draft input-name]
-      ~(link-input-to-draft plan draft-tree.state)
-    write-draft
+    =.  transaction-tree.state
+      %.  [active-transaction transaction]
+      ~(add-transaction plan transaction-tree.state)
+    =.  transaction-tree.state
+      %.  [active-transaction input-name]
+      ~(link-input-to-transaction plan transaction-tree.state)
+    write-transaction
   ::
-  ++  write-draft
+  ++  write-transaction
     ^-  [(list effect) ^state]
-    =?  active-draft.state  ?=(~ active-draft.state)  (some *draft-name)
-    ?>  ?=(^ active-draft.state)
-    =/  =draft  df
-    =.  draft-tree.state  (~(add-draft plan draft-tree.state) u.active-draft.state draft)
-    =/  dat-jam  (jam draft)
-    =/  path=@t  (crip "drafts/{(trip u.active-draft.state)}.draft")
+    =?  active-transaction.state  ?=(~ active-transaction.state)  (some *transaction-name)
+    ?>  ?=(^ active-transaction.state)
+    =/  =transaction  tx
+    =.  transaction-tree.state  (~(add-transaction plan transaction-tree.state) u.active-transaction.state transaction)
+    =/  dat-jam  (jam transaction)
+    =/  path=@t  (crip "txs/{(trip u.active-transaction.state)}.tx")
     =/  effect  [%file %write path dat-jam]
     :_  state
     ~[effect [%exit 0]]
@@ -613,6 +641,10 @@
       =>  [cor=(from-private [p.key cc]:parent) i=i]
       (derive:cor i)
     ==
+  ::
+  ++  from-extended-key
+    |=  key=@t
+    (from-extended-key:slip10 key)
   --
 ::
 ++  vault
@@ -624,23 +656,6 @@
   ::
   ++  seed-path  ^-  trek
     (welp base-path /seed)
-  ::
-  ++  set-receive-address
-    ^-  ^state
-    ?~  master.state
-      state
-    =/  master-coil=coil  (public:master master.state)
-    ?>  ?=(%pub -.key.master-coil)
-    =/  pubkey=schnorr-pubkey:transact
-      pub:(from-public:s10 [p.key cc]:master-coil)
-    =/  =lock:transact  (new:lock:transact pubkey)
-    state(receive-address lock)
-  ::
-  ++  assert-receive-address
-    ^-  lock:transact
-    ?:  =(receive-address.state *lock:transact)
-      ~|("receive-address not set - this is a bug" !!)
-    receive-address.state
   ::
   ++  has
     |_  key-type=?(%pub %prv)
@@ -658,13 +673,22 @@
     ++  key-path  ^-  trek
       (welp base-path ~[key-type])
     ::
+    ::
     ++  master
       ^-  coil
       =/  =trek  (welp key-path /m)
       =/  =meta  (~(got of keys.state) trek)
+      :: check if private key matches public key
       ?>  ?=(%coil -.meta)
+      ?:  ?=(%prv key-type)
+        =/  public-key=@
+          public-key:(from-private:s10 [p.key cc]:meta)
+        ?:  =(public-key p.key:(public:^master master.state))
+          meta
+        ~|("private key does not match public key" !!)
       meta
     ::
+<<<<<<< HEAD
     ++  labels
       =/  label-meta=(list meta)
         %+  murn  (gulf 0 255)
@@ -673,6 +697,21 @@
           :(welp base-path /[key-type] /[ud/index] /label)
         (~(get of keys.state) trek)
       (turn label-meta |=(=meta `*`+.meta))
+=======
+    ++  sign-key
+      |=  key=(unit [child-index=@ hardened=?])
+      ^-  schnorr-seckey:transact
+      =.  key-type  %prv
+      =/  sender=coil
+        ?~  key  master
+        =/  [child-index=@ hardened=?]  u.key
+        =/  absolute-index=@
+          ?.(hardened child-index (add child-index (bex 31)))
+        =/  key-at-index=meta  (by-index absolute-index)
+        ?>  ?=(%coil -.key-at-index)
+        key-at-index
+      (from-atom:schnorr-seckey:transact p.key.sender)
+>>>>>>> upstream/master
     ::
     ++  by-index
       |=  index=@ud
@@ -774,25 +813,72 @@
     =/  next-pid=@ud  +(max-pid)
     ?:  =(next-pid 0)  `1  :: handle wraparound
     `next-pid
+  ::
+  ::  +derive-child: derives the i-th hardened/unhardened child key(s)
+  ::
+  ::    derives the i-th child from the master key. for hardened keys,
+  ::    (bex 31) should be already added to `i`.
+  ::
+  ++  derive-child
+    |=  i=@u
+    ^-  (set coil)
+    ?:  (gte i (bex 32))
+      ~|("Child index {<i>} out of range. Child indices are capped to values between [0, 2^32)" !!)
+    ?~  master.state
+      ~|("No master keys available for derivation" !!)
+    =;  coils=(list coil)
+      (silt coils)
+    =/  hardened  (gte i (bex 31))
+    ::
+    ::  Grab the prv master key if it exists (cold wallet)
+    ::  otherwise grab the pub master key (hot wallet).
+    =/  parent=coil
+      ?:  ~(master has %prv)
+        ~(master get %prv)
+      ~(master get %pub)
+    ?:  hardened
+      ?>  ?=(%prv -.key.parent)
+      ::
+      =>  (derive:s10 parent i)
+      :~  [%coil [%prv private-key] chain-code]
+          [%coil [%pub public-key] chain-code]
+      ==
+    ::
+    ::  if unhardened, we just assert that they are within the valid range
+    ?:  (gte i (bex 31))
+      ~|("Unhardened child index {<i>} out of range. Indices are capped to values between [0, 2^31)" !!)
+    ?-    -.key.parent
+     ::  if the parent is a private key, we can derive the unhardened prv and pub child
+        %prv
+      =>  (derive:s10 parent i)
+      :~  [%coil [%prv private-key] chain-code]
+          [%coil [%pub public-key] chain-code]
+      ==
+    ::
+     ::  if the parent is a public key, we can only derive the unhardened pub child
+        %pub
+      =>  (derive:s10 parent i)
+      ~[[%coil [%pub public-key] chain-code]]
+    ==
   --
-::    +plan: core for managing draft relationships
+::    +plan: core for managing transaction relationships
 ::
-::  provides methods for adding, removing, and navigating the draft tree.
-::  uses the axal structure to maintain relationships between drafts, inputs,
+::  provides methods for adding, removing, and navigating the transaction tree.
+::  uses the axal structure to maintain relationships between transactions, inputs,
 ::  and seeds.
 ::
 ++  plan
-  |_  tree=draft-tree
+  |_  tree=transaction-tree
   ::
-  ::  +get-draft: retrieve a draft by name
+  ::  +get-transaction: retrieve a transaction by name
   ::
-  ++  get-draft
-    |=  name=draft-name
-    ^-  (unit draft)
-    =/  res  (~(get of tree) /draft/[name])
+  ++  get-transaction
+    |=  name=transaction-name
+    ^-  (unit transaction)
+    =/  res  (~(get of tree) /transaction/[name])
     ?~  res  ~
-    ?.  ?=(%draft -.u.res)  ~
-    `draft.u.res
+    ?.  ?=(%transaction -.u.res)  ~
+    `transaction.u.res
   ::    +get-input: retrieve an input by name
   ::
   ++  get-input
@@ -811,63 +897,63 @@
     ?~  res  ~
     ?.  ?=(%seed -.u.res)  ~
     `preseed.u.res
-  ::    +add-draft: add a new draft
+  ::    +add-transaction: add a new transaction
   ::
-  ++  add-draft
-    |=  [name=draft-name =draft]
-    ^-  draft-tree
-    =/  entity  [%draft name draft]
-    (~(put of tree) /draft/[name] entity)
+  ++  add-transaction
+    |=  [name=transaction-name =transaction]
+    ^-  transaction-tree
+    =/  entity  [%transaction name transaction]
+    (~(put of tree) /transaction/[name] entity)
   ::    +add-input: add a new input
   ::
   ++  add-input
     |=  [name=input-name =preinput]
-    ^-  draft-tree
+    ^-  transaction-tree
     =/  entity  [%input name preinput]
     (~(put of tree) /input/[name] entity)
   ::    +add-seed: add a new seed
   ::
   ++  add-seed
     |=  [name=seed-name =preseed]
-    ^-  draft-tree
+    ^-  transaction-tree
     =/  entity  [%seed name preseed]
     (~(put of tree) /seed/[name] entity)
-  ::    +link-input-to-draft: link an input to a draft
+  ::    +link-input-to-transaction: link an input to a transaction
   ::
-  ++  link-input-to-draft
-    |=  [draft-name=draft-name input-name=input-name]
-    ^-  draft-tree
+  ++  link-input-to-transaction
+    |=  [transaction-name=transaction-name input-name=input-name]
+    ^-  transaction-tree
     =/  input-entity  (~(get of tree) /input/[input-name])
     ?~  input-entity  tree
     ?.  ?=(%input -.u.input-entity)  tree
-    (~(put of tree) /draft/[draft-name]/input/[input-name] u.input-entity)
+    (~(put of tree) /transaction/[transaction-name]/input/[input-name] u.input-entity)
   ::    +link-seed-to-input: link a seed to an input
   ::
   ++  link-seed-to-input
     |=  [input-name=input-name seed-name=seed-name]
-    ^-  draft-tree
+    ^-  transaction-tree
     =/  seed-entity  (~(get of tree) /seed/[seed-name])
     ?~  seed-entity  tree
     ?.  ?=(%seed -.u.seed-entity)  tree
     (~(put of tree) /input/[input-name]/seed/[seed-name] u.seed-entity)
-  ::    +unlink-input-from-draft: remove an input from a draft
+  ::    +unlink-input-from-transaction: remove an input from a transaction
   ::
-  ++  unlink-input-from-draft
-    |=  [draft-name=draft-name input-name=input-name]
-    ^-  draft-tree
-    (~(del of tree) /draft/[draft-name]/input/[input-name])
+  ++  unlink-input-from-transaction
+    |=  [transaction-name=transaction-name input-name=input-name]
+    ^-  transaction-tree
+    (~(del of tree) /transaction/[transaction-name]/input/[input-name])
   ::    +unlink-seed-from-input: remove a seed from an input
   ::
   ++  unlink-seed-from-input
     |=  [input-name=input-name seed-name=seed-name]
-    ^-  draft-tree
+    ^-  transaction-tree
     (~(del of tree) /input/[input-name]/seed/[seed-name])
-  ::    +list-draft-inputs: list all inputs in a draft
+  ::    +list-transaction-inputs: list all inputs in a transaction
   ::
-  ++  list-draft-inputs
-    |=  name=draft-name
+  ++  list-transaction-inputs
+    |=  name=transaction-name
     ^-  (list input-name)
-    =/  kids  (~(kid of tree) /draft/[name])
+    =/  kids  (~(kid of tree) /transaction/[name])
     %+  murn  ~(tap in ~(key by kids))
     |=  pax=pith
     ^-  (unit input-name)
@@ -888,14 +974,14 @@
     ?:  &(?=([%seed *] pax) ?=(^ t.pax))
       `i.t.pax
     ~
-  ::    +list-all-drafts: list all draft names
+  ::    +list-all-transactions: list all transaction names
   ::
-  ++  list-all-drafts
-    ^-  (list draft-name)
-    =/  kids  (~(kid of tree) /draft)
+  ++  list-all-transactions
+    ^-  (list transaction-name)
+    =/  kids  (~(kid of tree) /transaction)
     %+  murn  ~(tap in ~(key by kids))
     |=  pax=pith
-    ^-  (unit draft-name)
+    ^-  (unit transaction-name)
     =/  pax=path  (pout pax)
     ?:  ?=(^ pax)
       `i.pax
@@ -924,23 +1010,23 @@
     ?:  &(?=([%seed *] pax) ?=(^ t.pax))
       `i.pax
     ~
-  ::    +remove-draft: completely remove a draft and its associations
+  ::    +remove-transaction: completely remove a transaction and its associations
   ::
-  ++  remove-draft
-    |=  name=draft-name
-    ^-  draft-tree
-    (~(lop of tree) /draft/[name])
+  ++  remove-transaction
+    |=  name=transaction-name
+    ^-  transaction-tree
+    (~(lop of tree) /transaction/[name])
   ::    +remove-input: completely remove an input and its associations
   ::
   ++  remove-input
     |=  name=input-name
-    ^-  draft-tree
+    ^-  transaction-tree
     (~(lop of tree) /input/[name])
   ::    +remove-seed: completely remove a seed and its associations
   ::
   ++  remove-seed
     |=  name=seed-name
-    ^-  draft-tree
+    ^-  transaction-tree
     (~(lop of tree) /seed/[name])
   --
 ::
@@ -961,29 +1047,72 @@
   """
   (make-markdown-effect nodes)
 ::
+++  display-transaction-cord
+  |=  [name=@t p=inputs:transact]
+  ^-  @t
+  =/  inputs  `(list [nname:transact input:transact])`~(tap z-by:zo p)
+  =/  by-addrs
+    %+  roll  inputs
+    |=  [[name=nname:transact input=input:transact] acc=_`(z-map:zo lock:transact coins:transact)`~]
+    =/  seeds  ~(tap z-in:zo seeds:spend:input)
+    %+  roll  seeds
+    |=  [seed=seed:transact acc=_acc]
+    =/  lock  recipient:seed
+    =/  cur  (~(gut z-by:zo acc) lock 0)
+    =/  gift  gift:seed
+    =/  new-bal  (add cur gift)
+    (~(put z-by:zo acc) lock new-bal)
+  %+  roll  ~(tap z-by:zo by-addrs)
+  =/  acc=@t
+    %-  crip
+    """
+    ## Transaction
+    Name: {(trip name)}
+    Inputs:
+    """
+  |=  [[recipient=lock:transact amt=coins:transact] acc=_acc]
+  =/  r58  (to-b58:lock:transact recipient)
+  =/  amtdiv  (dvr amt 65.536)
+  %^  cat  3
+    ;:  (cury cat 3)
+      acc
+      '\0a\0a- Assets: '
+      (rsh [3 2] (scot %ui amt))
+      '\0a  - Nocks: '
+      (rsh [3 2] (scot %ui p.amtdiv))
+      '\0a  - Nicks: '
+      (rsh [3 2] (scot %ui q.amtdiv))
+      '\0a- Required Signatures: '
+      (rsh [3 2] (scot %ui m.recipient))
+      '\0a- Signers: '
+    ==
+  %-  crip
+  %+  join  ' '
+  (serialize-lock recipient)
+::
 ++  display-note-cord
   |=  note=nnote:transact
   ^-  @t
   %^  cat  3
    ;:  (cury cat 3)
       '''
-
-      ## details
+      \0a
+      ## Details
 
       '''
-      '- name: '
+      '- Name: '
       =+  (to-b58:nname:transact name.note)
       :((cury cat 3) '[' first ' ' last ']')
-      '\0a- assets: '
-      (scot %ui assets.note)
-      '\0a- block height: '
-      (scot %ui origin-page.note)
-      '\0a- source: '
+      '\0a- Assets: '
+      (format-ui assets.note)
+      '\0a- Block Height: '
+      (format-ui origin-page.note)
+      '\0a- Source: '
       (to-b58:hash:transact p.source.note)
-      '\0a## lock'
-      '\0a- m: '
-      (scot %ui m.lock.note)
-      '\0a- signers: '
+      '\0a## Lock'
+      '\0a- Required Signatures: '
+      (format-ui m.lock.note)
+      '\0a- Signers: '
     ==
   %-  crip
   %+  join  ' '
@@ -1002,6 +1131,11 @@
   %-  de:md
   (display-note-cord note)
 ::
+++  format-ui
+  |=  @
+  ^-  @t
+  (rsh [3 2] (scot %ui +<))
+::
 ++  show
   |=  [=state =path]
   ^-  [(list effect) ^state]
@@ -1009,10 +1143,6 @@
   ?+    path  !!
       [%balance ~]
     :-  ~[(display-balance balance.state)]
-    state
-  ::
-      [%receive-address ~]
-    :-  (display-receive-address receive-address.state)
     state
   ::
       [%state ~]
@@ -1032,19 +1162,6 @@
     """
     (make-markdown-effect nodes)
   ::
-  ++  display-receive-address
-    |=  address=lock:transact
-    ^-  (list effect)
-    =/  nodes=markdown:m
-    %-  need
-    %-  de:md
-    %-  crip
-    """
-    ## receive address
-    {<address>}
-    """
-    ~[(make-markdown-effect nodes)]
-  ::
   ++  display-state
     ^-  (list effect)
     =/  nodes=markdown:m
@@ -1057,12 +1174,12 @@
     """
     ~[(make-markdown-effect nodes)]
   --
-  ::
-  ++  ui-to-tape
-    |=  @
-    ^-  tape
-    %-  trip
-    (rsh [3 2] (scot %ui +<))
+::
+++  ui-to-tape
+  |=  @
+  ^-  tape
+  %-  trip
+  (rsh [3 2] (scot %ui +<))
 --
 ::
 %-  (moat &)
@@ -1071,13 +1188,33 @@
 +*  v  ~(. vault state)
     d  ~(. draw state)
     e  ~(. edit state)
-    p  ~(. plan draft-tree.state)
+    p  ~(. plan transaction-tree.state)
 ::
 ++  load
-  |=  arg=^state
+  |=  old=versioned-state
   ^-  ^state
-  =.  arg  set-receive-address:~(. vault arg)
-  arg
+  |^
+  ?-  -.old
+    %0  state-0-1
+    %1  old
+  ==
+  ::
+  ++  state-0-1
+    ^-  ^state
+    ?>  ?=(%0 -.old)
+    :*  %1
+        balance.old
+        master.old
+        keys.old
+        last-block.old
+        peek-requests.old
+        active-transaction.old
+        active-input.old
+        active-seed.old
+        transaction-tree.old
+        pending-commands.old
+    ==
+  --
 ::
 ++  peek
   |=  =path
@@ -1102,6 +1239,7 @@
       assets.nnote
     ``(roll list-coins add)
     ::
+<<<<<<< HEAD
       [%receive-address ~]
     ``receive-address.state
     ::
@@ -1158,23 +1296,25 @@
       :(weld "\{" first last assets "}")
     ``(crip :(weld "[" `tape`(zing (join "," note-objects)) "]"))
   ::
+=======
+      [%state ~]
+    ``state
+>>>>>>> upstream/master
   ==
 ::
 ++  poke
   |=  =ovum:moat
   |^
   ^-  [(list effect) ^state]
-  %-  (warn "debug printing may expose sensitive information")
   =/  =wire  wire.ovum
   =+  [@ src=@ta ver=@ rest=*]=wire.ovum
   %-  (debug "wire: {<[src ver `path`rest]>}")
   =/  cause=(unit cause)
     %-  (soft cause)
     cause.input.ovum
-  =/  success  [%exit 0]
-  =/  failure  [%exit 1]
+  =/  failure=effect  [%markdown '## Poke failed']
   ?~  cause
-    %-  (debug "input does not have a proper cause: {<cause.input.ovum>}")
+    %-  (warn "input does not have a proper cause: {<cause.input.ovum>}")
     [~[failure] state]
   =/  cause  u.cause
   %-  (debug "cause: {<-.cause>}")
@@ -1182,7 +1322,8 @@
     =^  effs  state  process
     ::  check for pending balance commands and execute them
     =^  pending-effs  state  handle-pending-commands
-    [(weld effs pending-effs) state]
+    :_  state
+    (weld effs pending-effs)
   ?-  -.cause
       %nothing               (do-nothing cause)
       %update-state          (do-update-state cause)
@@ -1196,17 +1337,23 @@
       %list-notes            (do-list-notes cause)
       %list-notes-by-pubkey  (do-list-notes-by-pubkey cause)
       %list-notes-by-pubkey-csv  (do-list-notes-by-pubkey-csv cause)
+<<<<<<< HEAD
       %simple-spend          (do-simple-spend cause)
       %aeroe-spend           (do-aeroe-spend cause)
+=======
+      %spend                 (do-spend cause)
+>>>>>>> upstream/master
       %update-balance        (do-update-balance cause)
       %update-block          (do-update-block cause)
       %import-keys           (do-import-keys cause)
+      %import-extended       (do-import-extended cause)
       %export-keys           (do-export-keys cause)
       %export-master-pubkey  (do-export-master-pubkey cause)
       %import-master-pubkey  (do-import-master-pubkey cause)
       %gen-master-privkey    (do-gen-master-privkey cause)
       %gen-master-pubkey     (do-gen-master-pubkey cause)
       %send-tx               (do-send-tx cause)
+      %show-tx               (do-show-tx cause)
       %list-pubkeys          (do-list-pubkeys cause)
       %sync-run              (do-sync-run cause)
       %show-seedphrase       (do-show-seedphrase cause)
@@ -1217,12 +1364,11 @@
     ?-  +<.cause
       %seed   (do-advanced-spend-seed +>.cause)
       %input  (do-advanced-spend-input +>.cause)
-      %draft  (do-advanced-spend-draft +>.cause)
+      %transaction  (do-advanced-spend-transaction +>.cause)
     ==
     ::
       %file
     ?>  ?=(%write +<.cause)
-    ~&  >  "%file %write: {<cause>}"
     [[%exit 0]~ state]
   ==
   ::
@@ -1459,17 +1605,120 @@
       %+  murn  ~(tap of new-keys)
       |=  [t=trek m=meta]
       ^-  (unit tape)
-      ?:  ?=(%coil -.m)
-        `(en:base58:wrap p.key.m)
-      ~
+      ?.  ?=(%coil -.m)  ~
+      =/  key-type=tape  ?:(?=(%pub -.key.m) "Public Key" "Private Key")
+      =/  key=@t  (slav %t (snag 1 (pout t)))
+      =+  (to-b58:coil m)
+      %-  some
+      """
+      - {key-type}: {(trip key-b58)}
+      - Parent Key: {(trip key)}
+      ---
+
+      """
     =.  master.state  `master-key
     :_  state(keys new-keys)
     :~  :-  %markdown
         %-  crip
         """
-        ## imported keys
+        ## Imported Keys
 
-        {<key-list>}
+        {(zing key-list)}
+        """
+        [%exit 0]
+    ==
+  ::
+  ++  do-import-extended
+    |=  =cause
+    ?>  ?=(%import-extended -.cause)
+    %-  (debug "import-extended: {<extended-key.cause>}")
+    =/  core  (from-extended-key:s10 extended-key.cause)
+    =/  is-private=?  !=(0 prv:core)
+    =/  key-type=?(%pub %prv)  ?:(is-private %prv %pub)
+    =/  coil-key=key
+      ?:  is-private
+        [%prv private-key:core]
+      [%pub public-key:core]
+    =/  imported-coil=coil  [%coil coil-key chain-code:core]
+    =/  public-coil=coil  [%coil [%pub public-key] chain-code]:core
+    =/  key-label=@t
+      ?:  is-private
+        (crip "imported-private-{<(end [3 4] public-key:core)>}")
+      (crip "imported-public-{<(end [3 4] public-key:core)>}")
+    ::  if this is a master key (no parent), set as master
+    ?:  =(0 dep:core)
+      =.  master.state  (some public-coil)
+
+      =.  keys.state  (key:put:v imported-coil ~ `key-label)
+      =.  keys.state  (key:put:v public-coil ~ `key-label)
+      =/  extended-type=tape  ?:(is-private "private" "public")
+      :_  state
+      :~  :-  %markdown
+          %-  crip
+          """
+          ## imported import {extended-type} key
+
+          - import key: {(trip extended-key.cause)}
+          - label: {(trip key-label)}
+          - set as master key
+          """
+          [%exit 0]
+      ==
+    ::  otherwise, import as derived key
+    ::  first validate that this key is actually a child of the current master
+    ?~  master.state
+      :_  state
+      :~  :-  %markdown
+          %-  crip
+          """
+          ## import failed
+
+          cannot import derived key: no master key set
+          """
+          [%exit 1]
+      ==
+    =/  master-pubkey-coil=coil  (public:master master.state)
+    =/  expected-children=(set coil)
+      (derive-child:v ind:core)
+    =/  imported-pubkey=@  public-key:core
+    ::  find the public key coil from the derived children set
+    =/  expected-pubkey-coil=(unit coil)
+      %-  ~(rep in expected-children)
+      |=  [=coil acc=(unit coil)]
+      ?^  acc  acc
+      ?:  ?=(%pub -.key.coil)
+        `coil
+      ~
+    ?~  expected-pubkey-coil
+      ~|("no public key found in derived children - this should not happen" !!)
+    =/  expected-pubkey=@  p.key.u.expected-pubkey-coil
+    ?.  =(imported-pubkey expected-pubkey)
+      :_  state
+      :~  :-  %markdown
+          %-  crip
+          """
+          ## Import Failed
+
+          Imported key at index {<ind:core>} does not match expected child of master key
+
+          - Imported Public Key: {<imported-pubkey>}
+          - Expected Public Key: {<expected-pubkey>}
+          """
+          [%exit 1]
+      ==
+    ::  key is valid, proceed with import
+    =.  keys.state  (key:put:v imported-coil `ind:core `key-label)
+    =/  extended-type=tape  ?:(is-private "private" "public")
+    :_  state
+    :~  :-  %markdown
+        %-  crip
+        """
+        ## Imported {extended-type} Key
+
+        - Import Key: {(trip extended-key.cause)}
+        - Label: {(trip key-label)}
+        - Index: {<ind:core>}
+        - Verified as child of master key
         """
         [%exit 0]
     ==
@@ -1487,9 +1736,9 @@
         :-  %markdown
         %-  crip
         """
-        ## exported keys
+        ## Exported Keys
 
-        - path: {<path>}
+        - Path: {<path>}
         """
         [%exit 0]
     ==
@@ -1497,29 +1746,34 @@
   ++  do-export-master-pubkey
     |=  =cause
     ?>  ?=(%export-master-pubkey -.cause)
-    %-  (debug "import-master-pubkey")
+    %-  (debug "export-master-pubkey")
     ?~  master.state
-      ~&  "wallet warning: no master keys available for export"
+      %-  (warn "wallet: no master keys available for export")
       [[%exit 0]~ state]
     =/  master-coil=coil  ~(master get:v %pub)
     ?.  ?=(%pub -.key.master-coil)
-      ~&  "wallet fatal: master pubkey malformed"
+      %-  (warn "wallet: fatal: master pubkey malformed")
       [[%exit 0]~ state]
     =/  dat-jam=@  (jam master-coil)
     =/  key-b58=tape  (en:base58:wrap p.key.master-coil)
     =/  cc-b58=tape  (en:base58:wrap cc.master-coil)
+    =/  extended-key=@t
+      =/  core  (from-public:s10 [p.key cc]:master-coil)
+      extended-public-key:core
+    =/  file-path=@t  'master-pubkey.export'
     :_  state
     :~  :-  %markdown
         %-  crip
         """
-        ## exported master public key:
+        ## Exported Master Public Key
 
-        - pubkey: {key-b58}
-        - chaincode: {cc-b58}
-
+        - Import Key: {(trip extended-key)}
+        - Public Key: {key-b58}
+        - Chain Code: {cc-b58}
+        - File: {(trip file-path)}
         """
         [%exit 0]
-        [%file %write 'master-pubkey.export' dat-jam]
+        [%file %write file-path dat-jam]
     ==
   ::
   ++  do-import-master-pubkey
@@ -1528,7 +1782,6 @@
     %-  (debug "import-master-pubkey: {<coil.cause>}")
     =/  master-pubkey-coil=coil  coil.cause
     =.  master.state  (some master-pubkey-coil)
-    =.  state  set-receive-address:v
     =/  label  `(crip "master-public-{<(end [3 4] p.key.master-pubkey-coil)>}")
     =.  keys.state  (key:put:v master-pubkey-coil ~ label)
     =/  key-b58=tape  (en:base58:wrap p.key.master-pubkey-coil)
@@ -1537,10 +1790,10 @@
     :~  :-  %markdown
         %-  crip
         """
-        ## imported master public key:
+        ## Imported Master Public Key
 
-            - pubkey: {key-b58}
-            - chaincode: {cc-b58}
+        - Public Key: {key-b58}
+        - Chain Code: {cc-b58}
         """
         [%exit 0]
     ==
@@ -1555,14 +1808,25 @@
     =/  master-pubkey-coil=coil  [%coil [%pub public-key] chain-code]:cor
     =/  master-privkey-coil=coil  [%coil [%prv private-key] chain-code]:cor
     =.  master.state  (some master-pubkey-coil)
-    =.  state  set-receive-address:v
     =/  public-label  `(crip "master-public-{<(end [3 4] public-key:cor)>}")
     =/  private-label  `(crip "master-private-{<(end [3 4] public-key:cor)>}")
     =.  keys.state  (key:put:v master-privkey-coil ~ private-label)
     =.  keys.state  (key:put:v master-pubkey-coil ~ public-label)
     =.  keys.state  (seed:put:v seedphrase.cause)
     %-  (debug "master.state: {<master.state>}")
-    [[%exit 0]~ state]
+    :_  state
+    :~  :-  %markdown
+        %-  crip
+        """
+        ## Master Key (Imported)
+
+        - Seed Phrase: {<seedphrase.cause>}
+        - Master Public Key: {(en:base58:wrap p.key.master-pubkey-coil)}
+        - Master Private Key: {(en:base58:wrap p.key.master-privkey-coil)}
+        - Chain Code: {(en:base58:wrap cc.master-privkey-coil)}
+        """
+        [%exit 0]
+    ==
   ::
   ++  do-gen-master-pubkey
     |=  =cause
@@ -1579,17 +1843,21 @@
     =/  public-label  `(crip "master-public-{<(end [3 4] public-key:cor)>}")
     =/  private-label  `(crip "master-private-{<(end [3 4] public-key:cor)>}")
     =.  master.state  (some master-pubkey-coil)
-    =.  state  set-receive-address:v
+
     =.  keys.state  (key:put:v master-privkey-coil ~ private-label)
     =.  keys.state  (key:put:v master-pubkey-coil ~ public-label)
     %-  (debug "master.state: {<master.state>}")
+    =/  extended-key=@t  extended-public-key:cor
     :_  state
     :~  :-  %markdown
         %-  crip
         """
-        ## master public key
+        ## Master Public Key (Imported)
 
-        {<public-key:cor>}
+        - Import Key: {(trip extended-key)}
+        - Public Key: {(en:base58:wrap p.key.master-pubkey-coil)}
+        - Private Key: {(en:base58:wrap p.key.master-privkey-coil)}
+        - Chain Code: {(en:base58:wrap cc.master-pubkey-coil)}
         """
         [%exit 0]
     ==
@@ -1610,6 +1878,20 @@
       [%exit 0]
     ==
   ::
+  ++  do-show-tx
+    |=  =cause
+    ?>  ?=(%show-tx -.cause)
+    %-  (debug "show-tx: displaying transaction")
+    =/  =transaction  dat.cause
+    =/  transaction-name=@t  name.transaction
+    =/  ins-transaction=inputs:transact  p.transaction
+    =/  markdown-text=@t  (display-transaction-cord transaction-name ins-transaction)
+    :_  state
+    :~
+      [%markdown markdown-text]
+      [%exit 0]
+    ==
+  ::
   ++  do-list-pubkeys
     |=  =cause
     ?>  ?=(%list-pubkeys -.cause)
@@ -1617,16 +1899,20 @@
     =/  base58-keys=(list tape)
       %+  turn  pubkeys
       |=  =coil
-      =/  pubkey=schnorr-pubkey:transact  pub:(from-public:s10 [p.key cc]:coil)
-      %-  trip
-      (to-b58:schnorr-pubkey:transact pubkey)
+      =/  [key-b58=@t cc-b58=@t]  (to-b58:^coil coil)
+      """
+      - Public Key: {<key-b58>}
+      - Chain Code: {<cc-b58>}
+      ---
+
+      """
     :_  state
     :~  :-  %markdown
         %-  crip
         """
-        ## pubkeys
+        ## Public Keys
 
-        {<base58-keys>}
+        {?~(base58-keys "No pubkeys found" (zing base58-keys))}
         """
         [%exit 0]
     ==
@@ -1645,7 +1931,7 @@
     :~  :-  %markdown
         %-  crip
         """
-        ## seedphrase
+        ## Seed Phrase
 
         {<seedphrase>}
         """
@@ -1658,13 +1944,18 @@
     %-  (debug "show-master-pubkey")
     =/  =meta  ~(master get:v %pub)
     ?>  ?=(%coil -.meta)
+    =/  extended-key=@t
+      =/  core  (from-public:s10 [p.key cc]:meta)
+      extended-public-key:core
     :_  state
     :~  :-  %markdown
         %-  crip
         """
-        ## master public key
+        ## Master Public Key
 
-          {(en:base58:wrap p.key.meta)}
+        - Import Key: {<extended-key>}
+        - Public Key: {(en:base58:wrap p.key.meta)}
+        - Chain Code: {(en:base58:wrap cc.meta)}
         """
         [%exit 0]
     ==
@@ -1675,16 +1966,24 @@
     %-  (debug "show-master-privkey")
     =/  =meta  ~(master get:v %prv)
     ?>  ?=(%coil -.meta)
+    =/  extended-key=@t
+      =/  core  (from-private:s10 [p.key cc]:meta)
+      extended-private-key:core
+    =/  key-b58=tape  (en:base58:wrap p.key.meta)
+    =/  cc-b58=tape  (en:base58:wrap cc.meta)
     :_  state
     :~  :-  %markdown
         %-  crip
         """
-        ## master private key
+        ## Master Private Key
 
-        {(en:base58:wrap p.key.meta)}
+        - Import Key: {<extended-key>}
+        - Private Key: {(en:base58:wrap p.key.meta)}
+        - Chain Code: {(en:base58:wrap cc.meta)}
         """
         [%exit 0]
     ==
+  ::
   ++  do-scan
     |=  =cause
     ?>  ?=(%scan -.cause)
@@ -1778,9 +2077,10 @@
       %-  crip
       %+  welp
       """
-      ## wallet notes
+      ## Wallet Notes
 
       """
+      =-  ?:  =("" -)  "No notes found"  -
       %-  zing
       %+  turn  ~(val z-by:zo balance.state)
       |=  =nnote:transact
@@ -1804,9 +2104,10 @@
         %-  crip
         %+  welp
           """
-          ## wallet notes for pubkey {<(to-b58:schnorr-pubkey:transact target-pubkey)>}
+          ## Wallet Notes for Public Key {<(to-b58:schnorr-pubkey:transact target-pubkey)>}
 
           """
+        =-  ?:  =("" -)  "No notes found"  -
         %-  zing
         %+  turn  matching-notes
         |=  [* =nnote:transact]
@@ -1854,155 +2155,339 @@
         [%exit 0]
     ==
   ::
-  ++  do-simple-spend
+  ++  do-spend
     |=  =cause
-    ?>  ?=(%simple-spend -.cause)
-    %-  (debug "simple-spend: {<names.cause>}")
-    ::  for now, each input corresponds to a single name and recipient. all
-    ::  assets associated with the name are transferred to the recipient.
+    ?>  ?=(%spend -.cause)
+    |^
+    %-  (debug "spend: {<names.cause>}")
+    =/  names=(list nname:transact)  (parse-names names.cause)
+    =/  initial-ledger=ledger  (build-ledger names -.order.cause)
+    =/  ins=(list input:transact)  (create-inputs initial-ledger names -.order.cause)
+    (save-transaction ins)
     ::
-    ::  thus there is one recipient per name, and one seed per recipient.
-    ::
-    =/  names=(list nname:transact)
-      %+  turn  names.cause
+    ++  parse-names
+      |=  raw-names=(list [first=@t last=@t])
+      ^-  (list nname:transact)
+      %+  turn  raw-names
       |=  [first=@t last=@t]
       (from-b58:nname:transact [first last])
-    =/  recipients=(list lock:transact)
-      %+  turn  recipients.cause
-      |=  [m=@ pks=(list @t)]
-      %+  m-of-n:new:lock:transact  m
-      %-  ~(gas z-in:zo *(z-set:zo schnorr-pubkey:transact))
-      %+  turn  pks
-      |=  pk=@t
-      (from-b58:schnorr-pubkey:transact pk)
     ::
-    =/  gifts=(list coins:transact)  gifts.cause
+    ++  build-ledger
+      |=  [names=(list nname:transact) mode=?(%multiple %single)]
+      ^-  ledger
+      ?-  mode
+          %multiple
+        (build-multiple-ledger names)
+          %single
+        (build-single-ledger names)
+      ==
     ::
-    ?.  ?&  =((lent names) (lent recipients))
-            =((lent names) (lent gifts))
-        ==
-      ~|("different number of names/recipients/gifts" !!)
-    =|  =ledger
-    =.  ledger
+    ++  build-multiple-ledger
+      |=  names=(list nname:transact)
+      ^-  ledger
+      ?>  ?=(%multiple -.order.cause)
+      =/  recipients=(list lock:transact)  (parse-recipients recipients.order.cause)
+      =/  gifts=(list coins:transact)  gifts.order.cause
+      ?.  ?&  =((lent names) (lent recipients))
+              =((lent names) (lent gifts))
+          ==
+        ~|("different number of names/recipients/gifts" !!)
+      =|  result=ledger
       |-
-      ?~  names  ledger
-      ::  since we assert they are equal in length above, this is just to get
-      ::  the i face
-      ?~  gifts  ledger
-      ?~  recipients  ledger
+      ?~  names  result
+      ?~  gifts  result
+      ?~  recipients  result
       %=  $
-        ledger      [[i.names i.recipients i.gifts timelock-intent.cause] ledger]
+        result      [[i.names i.recipients i.gifts timelock-intent.cause] result]
         names       t.names
         gifts       t.gifts
         recipients  t.recipients
       ==
     ::
-    ::  the fee is subtracted from the first note that permits doing so without overspending
-    =/  fee=coins:transact  fee.cause
-    ::  get private key at specified index, or first derived key if no index
-    =/  sender=coil
-      ?~  index.cause  ~(master get:v %prv)
-      =/  key-at-index=meta  (~(by-index get:v %prv) u.index.cause)
-      ?>  ?=(%coil -.key-at-index)
-      key-at-index
-    =/  sender-key=schnorr-seckey:transact
-      (from-atom:schnorr-seckey:transact p.key.sender)
-    ::  for each name, create an input from the corresponding note in sender's
-    ::  balance at the current block. the fee will be subtracted entirely from
-    ::  the first note that has sufficient assets for both the fee and the gift.
-    ::  the refund is sent to receive-address.state
-    =/  [ins=(list input:transact) spent-fee=?]
-      %^  spin  ledger  `?`%.n
-      |=  $:  $:  name=nname:transact
-                  recipient=lock:transact
-                  gift=coins:transact
-                  =timelock-intent:transact
-              ==
-            spent-fee=?
-          ==
-      =/  note=nnote:transact  (get-note:v name)
-      ?:  (gth gift assets.note)
-        ~|  "gift {<gift>} larger than assets {<assets.note>} for recipient {<recipient>}"
-        !!
-      ?:  ?&  !spent-fee
-              (lte (add gift fee) assets.note)
-          ==
-        ::  we can subtract the fee from this note
-        :_  %.y
-        =/  gift-seed=seed:transact
-          %-  new:seed:transact
-          :*  *(unit source:transact)      :: output-source
-              recipient                    :: recipient
-              timelock-intent              :: timelock-intent
-              gift                         :: gift
-              (hash:nnote:transact note)   :: parent-hash
-          ==
-        =/  refund=coins:transact  (sub assets.note (add gift fee))
-        =/  refund-seed=seed:transact
-          %-  new:seed:transact
-          :*  *(unit source:transact)
-              assert-receive-address:v
-              *timelock-intent:transact    :: no timelock on refund
-              refund
-              (hash:nnote:transact note)
-          ==
+    ++  build-single-ledger
+      |=  names=(list nname:transact)
+      ^-  ledger
+      ?>  ?=(%single -.order.cause)
+      =/  recipient=lock:transact  (parse-recipient recipient.order.cause)
+      =/  gift=coins:transact  gift.order.cause
+      ::  validate sufficient funds
+      =/  total-assets=coins:transact
+        %+  roll  names
+        |=  [name=nname:transact acc=coins:transact]
+        (add acc assets:(get-note:v name))
+      ?.  (gte total-assets (add gift fee.cause))
+        ~|("insufficient funds: need {<(add gift fee.cause)>}, have {<total-assets>}" !!)
+      ::  create single ledger entry
+      ~[[-.names recipient gift timelock-intent.cause]]
+    ::
+    ++  parse-recipients
+      |=  raw-recipients=(list [m=@ pks=(list @t)])
+      ^-  (list lock:transact)
+      %+  turn  raw-recipients
+      |=  [m=@ pks=(list @t)]
+      =/  lk=lock:transact
+        %+  m-of-n:new:lock:transact  m
+        %-  ~(gas z-in:zo *(z-set:zo schnorr-pubkey:transact))
+        %+  turn  pks
+        |=  pk=@t
+        (from-b58:schnorr-pubkey:transact pk)
+      ?.  (spendable:lock:transact lk)
+        ~|("recipient {<(to-b58:lock:transact lk)>} is not spendable" !!)
+      lk
+    ::
+    ++  parse-recipient
+      |=  raw-recipient=[m=@ pks=(list @t)]
+      ^-  lock:transact
+      =/  lk=lock:transact
+        %+  m-of-n:new:lock:transact  m.raw-recipient
+        %-  ~(gas z-in:zo *(z-set:zo schnorr-pubkey:transact))
+        %+  turn  pks.raw-recipient
+        |=  pk=@t
+        (from-b58:schnorr-pubkey:transact pk)
+      ?.  (spendable:lock:transact lk)
+        ~|("recipient {<(to-b58:lock:transact lk)>} is not spendable" !!)
+      lk
+    ::
+    ++  create-inputs
+      |=  [=ledger names=(list nname:transact) mode=?(%multiple %single)]
+      ^-  (list input:transact)
+      ?-  mode
+          %multiple
+        (create-multiple-inputs ledger)
+          %single
+        (create-single-inputs ledger names)
+      ==
+        ::
+    ++  create-multiple-inputs
+      |=  =ledger
+      ^-  (list input:transact)
+      =/  [ins=(list input:transact) spent-fee=?]
+        %^  spin  ledger  `?`%.n
+        |=  $:  $:  name=nname:transact
+                    recipient=lock:transact
+                    gift=coins:transact
+                    =timelock-intent:transact
+                ==
+              spent-fee=?
+            ==
+        =/  note=nnote:transact  (get-note:v name)
+        ?:  (gth gift assets.note)
+          ~|  "gift {<gift>} larger than assets {<assets.note>} for recipient {<recipient>}"
+          !!
+        ?:  ?&  !spent-fee
+                (lte (add gift fee.cause) assets.note)
+            ==
+          ::  we can subtract the fee from this note
+          :_  %.y
+          (create-input note recipient gift timelock-intent fee.cause)
+        ::  we cannot subtract the fee from this note
+        :_  spent-fee
+        (create-input note recipient gift timelock-intent 0)
+      ?.  spent-fee
+        ~|("no note suitable to subtract fee from, aborting operation" !!)
+      ins
+    ::
+    ++  create-single-inputs
+      |=  [=ledger names=(list nname:transact)]
+      ^-  (list input:transact)
+      |^
+      ?~  ledger  ~
+      =/  recipient=lock:transact  recipient.i.ledger
+      =/  gifts=coins:transact  gifts.i.ledger
+      =/  =timelock-intent:transact  timelock-intent.i.ledger
+      (distribute-single-spend names recipient gifts timelock-intent)
+    ::
+      ++  distribute-single-spend
+        |=  $:  names=(list nname:transact)
+                recipient=lock:transact
+                gifts=coins:transact
+                =timelock-intent:transact
+            ==
+        ^-  (list input:transact)
+        ::  check total assets can cover gift + fee
+        =/  total-assets=coins:transact
+          %+  roll  names
+          |=  [name=nname:transact acc=coins:transact]
+          (add acc assets:(get-note:v name))
+        ?.  (gte total-assets (add gifts fee.cause))
+          ~|("insufficient total assets: need {<(add gifts fee.cause)>}, have {<total-assets>}" !!)
+        ::  distribute gift across notes, with fee distributed separately
+        =/  remaining-gift=coins:transact  gifts
+        =/  remaining-fee=coins:transact  fee.cause
+        =|  result=(list input:transact)
+        |-
+        ?~  names  result
+        ::  exit early if nothing left to distribute
+        ?:  &(=(0 remaining-gift) =(0 remaining-fee))  result
+        =/  note=nnote:transact  (get-note:v i.names)
+        ::  determine how much of the gift this note should handle
+        =/  gift-portion=coins:transact
+          ?:  =(0 remaining-gift)  0
+          (min remaining-gift assets.note)
+        =.  remaining-gift  (sub remaining-gift gift-portion)
+        ::  determine fee portion after reserving for gift
+        =/  available-for-fee=coins:transact  (sub assets.note gift-portion)
+        =/  fee-portion=coins:transact
+          ?:  =(0 remaining-fee)  0
+          (min remaining-fee available-for-fee)
+        =.  remaining-fee  (sub remaining-fee fee-portion)
+        ::  only create input if there's something to spend
+        ?:  &(=(0 gift-portion) =(0 fee-portion))
+          $(names t.names)
+        ::  create input with this note's contribution
+        =/  input=input:transact
+          (create-distributed-input note recipient gift-portion timelock-intent fee-portion)
+        =.  result  [input result]
+        $(names t.names)
+      ::
+      ++  create-distributed-input
+        |=  $:  note=nnote:transact
+                recipient=lock:transact
+                gift-portion=coins:transact
+                =timelock-intent:transact
+                fee-portion=coins:transact
+            ==
+        ^-  input:transact
+        =/  used=coins:transact  (add gift-portion fee-portion)
+        ?.  (gte assets.note used)
+          ~|("note has insufficient assets: need {<used>}, have {<assets.note>}" !!)
+        =/  refund=coins:transact  (sub assets.note used)
+        =/  refund-address=lock:transact  lock.note
         =/  seed-list=(list seed:transact)
-          ?:  =(0 refund)  ~[gift-seed]
-          ~[gift-seed refund-seed]
+          =|  seeds=(list seed:transact)
+          ::  add gift seed if there's a gift portion
+          =?  seeds  (gth gift-portion 0)
+            :_  seeds
+            %-  new:seed:transact
+            :*  *(unit source:transact)
+                recipient
+                timelock-intent
+                gift-portion
+                (hash:nnote:transact note)
+            ==
+          ::  add refund seed if there's a refund
+          =?  seeds  (gth refund 0)
+            :_  seeds
+            %-  new:seed:transact
+            :*  *(unit source:transact)
+                refund-address
+                *timelock-intent:transact
+                refund
+                (hash:nnote:transact note)
+            ==
+          seeds
         =/  seeds-set=seeds:transact  (new:seeds:transact seed-list)
-        =/  spend-obj=spend:transact  (new:spend:transact seeds-set fee)
-        =.  spend-obj  (sign:spend:transact spend-obj sender-key)
+        =/  spend-obj=spend:transact  (new:spend:transact seeds-set fee-portion)
+        =.  spend-obj  (sign:spend:transact spend-obj get-sender-key)
         [note spend-obj]
-      ::  we cannot subtract the fee from this note, or we already have from a previous one
-      :_  spent-fee
+      ::
+    --
+    ::
+    ++  create-input
+      |=  $:  note=nnote:transact
+              recipient=lock:transact
+              gifts=coins:transact
+              =timelock-intent:transact
+              fee=coins:transact
+          ==
+      ^-  input:transact
       =/  gift-seed=seed:transact
         %-  new:seed:transact
-        :*  *(unit source:transact)      :: output-source
-            recipient                    :: recipient
-            timelock-intent              :: timelock-intent
-            gift                         :: gift
-            (hash:nnote:transact note)   :: parent-hash
+        :*  *(unit source:transact)
+            recipient
+            timelock-intent
+            gifts
+            (hash:nnote:transact note)
         ==
-      =/  seeds-set=seeds:transact  (new:seeds:transact ~[gift-seed])
-      =/  spend-obj=spend:transact  (new:spend:transact seeds-set 0)
-      =.  spend-obj  (sign:spend:transact spend-obj sender-key)
+      =/  refund=coins:transact  (sub assets.note (add gifts fee))
+      =/  refund-address=lock:transact  lock.note
+      =/  seed-list=(list seed:transact)
+        ?:  =(0 refund)  ~[gift-seed]
+        :~  gift-seed
+            %-  new:seed:transact
+            :*  *(unit source:transact)
+                refund-address
+                *timelock-intent:transact
+                refund
+                (hash:nnote:transact note)
+            ==
+        ==
+      =/  seeds-set=seeds:transact  (new:seeds:transact seed-list)
+      =/  spend-obj=spend:transact  (new:spend:transact seeds-set fee)
+      =.  spend-obj  (sign:spend:transact spend-obj get-sender-key)
       [note spend-obj]
     ::
-    ?.  spent-fee
-      ~|("no note suitable to subtract fee from, aborting operation" !!)
-    =/  ins-draft=inputs:transact  (multi:new:inputs:transact ins)
-    ?:  ?=(~ last-block.state)
-      ~|("last-block unknown!" !!)
-    ::  name is the b58-encoded name of the first input
-    =/  draft-name=@t
-      %-  head
-      %+  turn  ~(tap z-by:zo (names:inputs:transact ins-draft))
-      |=  =nname:transact
-      =<  last
-      (to-b58:nname:transact nname)
-    ::  jam inputs and save as draft
-    =/  =draft
-      %*  .  *draft
-        p  ins-draft
-        name  draft-name
+    ++  get-sender-key
+      ^-  schnorr-seckey:transact
+      (sign-key:get:v sign-key.cause)
+    ::
+    ++  validate-inputs
+      |=  =inputs:transact
+      ^-  ?
+      ?&  (validate:inputs:transact inputs)
+          %+  levy  ~(tap z-by:zo inputs)
+          |=  [name=nname:transact inp=input:transact]
+          (spendable:lock:transact lock.note.inp)
       ==
-    =/  draft-jam  (jam draft)
-    =/  markdown-text=@t
-      %-  crip
-      """
-      ## draft
+    ::
+    ++  save-transaction
+      |=  ins=(list input:transact)
+      ^-  [(list effect) ^state]
+      =/  ins-transaction=inputs:transact  (multi:new:inputs:transact ins)
+      ~&  "Validating transaction before saving"
+      ::  we fallback to the hash of the inputs as the transaction name
+      ::  if the tx is invalid. this is just for display
+      ::  in the error message, as an invalid tx is not saved.
+      =/  transaction-name=@t
+        %-  to-b58:hash:transact
+        =-  %+  fall  -
+            (hash:inputs:transact ins-transaction)
+        %-  mole
+        |.
+        ::  TODO: this also calls validate:inputs, but we need it to
+        ::  get the id of the transaction. we should deduplicate this.
+        id:(new:raw-tx:transact ins-transaction)
+      ::  jam inputs and save as transaction
+      =/  =transaction
+        %*  .  *transaction
+          p  ins-transaction
+          name  transaction-name
+        ==
+      ?.  (validate-inputs ins-transaction)
+        =/  msg=@t
+          %^  cat  3
+            %-  crip
+            """
+            # TX Validation Failed
 
-      - {<draft-name>}
+            Failed to validate the correctness of transaction {(trip transaction-name)}.
 
-      {<draft>}
-      """
-    =/  path=@t
-      %-  crip
-      "./drafts/{(trip name.draft)}.draft"
-    %-  (debug "saving draft to {<path>}")
-    =/  =effect  [%file %write path draft-jam]
-    :-  ~[effect [%markdown markdown-text] [%exit 0]]
-    state
+            Check that the note(s) you are spending from:
+
+            1. Can be spent by the public key you are signing with.
+            2. Have enough assets to cover the gift and fee.
+            3. Have the correct timelock intent.
+
+            ---
+
+
+            """
+          (display-transaction-cord transaction-name ins-transaction)
+        %-  (debug "{(trip msg)}")
+        :_  state
+        :~  [%markdown msg]
+            [%exit 1]
+        ==
+      =/  transaction-jam  (jam transaction)
+      =/  markdown-text=@t  (display-transaction-cord transaction-name ins-transaction)
+      =/  path=@t
+        %-  crip
+        "./txs/{(trip name.transaction)}.tx"
+      %-  (debug "saving transaction to {<path>}")
+      =/  =effect  [%file %write path transaction-jam]
+      :-  ~[effect [%markdown markdown-text] [%exit 0]]
+      state
+    --
   ::
   ::  this is just simple-spend but with an addition of passing in the draft path
   ++  do-aeroe-spend
@@ -2117,7 +2602,7 @@
     =/  master-public-coil  [%coil [%pub public-key] chain-code]:cor
     =/  master-private-coil  [%coil [%prv private-key] chain-code]:cor
     =.  master.state  (some master-public-coil)
-    =.  state  set-receive-address:v
+
     %-  (debug "keygen: public key: {<(en:base58:wrap public-key:cor)>}")
     %-  (debug "keygen: private key: {<(en:base58:wrap private-key:cor)>}")
     =/  pub-label  `(crip "master-public-{<(end [3 4] public-key:cor)>}")
@@ -2125,6 +2610,8 @@
     =.  keys.state  (key:put:v master-public-coil ~ pub-label)
     =.  keys.state  (key:put:v master-private-coil ~ prv-label)
     =.  keys.state  (seed:put:v seed-phrase)
+    =/  extended-private=@t  extended-private-key:cor
+    =/  extended-public=@t  extended-public-key:cor
     :_  state
     :~  :-  %markdown
         %-  crip
@@ -2140,6 +2627,12 @@
         ### Chain Code
         {<(en:base58:wrap chain-code:cor)>}
 
+        ### Import Private Key
+        {(trip extended-private)}
+
+        ### Import Public Key
+        {(trip extended-public)}
+
         ### Seed Phrase
         {<seed-phrase>}
         """
@@ -2150,85 +2643,53 @@
   ::  at index `i`. this will overwrite existing paths if
   ::  the master key changes
   ++  do-derive-child
-    |^
     |=  =cause
     ?>  ?=(%derive-child -.cause)
     =/  index
       ?:  hardened.cause
         (add i.cause (bex 31))
       i.cause
-    =/  derived-keys=(set coil)  (derive-child index)
+    =/  derived-keys=(set coil)  (derive-child:v index)
     =.  keys.state
       %-  ~(rep in derived-keys)
       |=  [=coil keys=_keys.state]
       =.  keys.state  keys
       (key:put:v coil `index label.cause)
-    :-  [%exit 0]~
-    state
     ::
-    ::  +derive-child: derives the i-th hardened/unhardened child key(s)
-    ::
-    ::    derives the i-th child from the master key. for hardened keys,
-    ::    (bex 31) should be already added to `i`.
-    ::
-    ++  derive-child
-      |=  i=@u
-      ^-  (set coil)
-      ?:  (gte i (bex 32))
-        ~|("Child index {<i>} out of range. Child indices are capped to values between [0, 2^32)" !!)
-      ?~  master.state
-        ~|("No master keys available for derivation" !!)
-      =;  coils=(list coil)
-        (silt coils)
-      =/  hardened  (gte i (bex 31))
-      ::
-      ::  Grab the prv master key if it exists (cold wallet)
-      ::  otherwise grab the pub master key (hot wallet).
-      =/  parent=coil
-        ?:  ~(master has:v %prv)
-          ~(master get:v %prv)
-        ~(master get:v %pub)
-      ?:  hardened
-        ?>  ?=(%prv -.key.parent)
-        ::
-        =>  (derive:s10 parent i)
-        :~  [%coil [%prv private-key] chain-code]
-            [%coil [%pub public-key] chain-code]
-        ==
-      ::
-      ::  if unhardened, we just assert that they are within the valid range
-      ?:  (gte i (bex 31))
-        ~|("Unhardened child index {<i>} out of range. Indices are capped to values between [0, 2^31)" !!)
-      ?-    -.key.parent
-       ::  if the parent is a private key, we can derive the unhardened prv and pub child
-          %prv
-        =>  (derive:s10 parent i)
-        :~  [%coil [%prv private-key] chain-code]
-            [%coil [%pub public-key] chain-code]
-        ==
-      ::
-       ::  if the parent is a public key, we can only derive the unhardened pub child
-          %pub
-        =>  (derive:s10 parent i)
-        ~[[%coil [%pub public-key] chain-code]]
-      ==
-    --
+    =/  key-text=tape
+      %-  zing
+      %+  turn  ~(tap in derived-keys)
+      |=  =coil
+      =/  [key-b58=@t cc-b58=@t]  (to-b58:^coil coil)
+      =/  key-type=tape
+        ?:  ?=(%pub -.key.coil)
+          "Public Key"
+        "Private Key"
+      """
+      - {key-type}: {<key-b58>}
+      - Chain Code: {<cc-b58>}
+      """
+    :_  state
+    :~
+      :-  %markdown
+      %-  crip
+      """
+      ## Derive Child
+
+      ### Derived Keys
+      {key-text}
+      """
+      [%exit 0]
+    ==
   ::
   ++  do-sign-tx
     |=  =cause
     ?>  ?=(%sign-tx -.cause)
     %-  (debug "sign-tx: {<dat.cause>}")
-    ::  get private key at specified index, or first derived key if no index
-    =/  private-keys=(list coil)  ~(coils get:v %prv)
-    ?~  private-keys
-      ~|("No private keys available for signing" !!)
-    =/  sender=coil
-      ?~  index.cause  i.private-keys
-      =/  key-at-index=meta  (~(by-index get:v %prv) u.index.cause)
-      ?>  ?=(%coil -.key-at-index)
-      key-at-index
+    ::  get private key at child index, or master key if no index
+    ::  add 2^31 to child index if hardened
     =/  sender-key=schnorr-seckey:transact
-      (from-atom:schnorr-seckey:transact p.key.sender)
+      (sign-key:get:v sign-key.cause)
     =/  signed-inputs=inputs:transact
       %-  ~(run z-by:zo p.dat.cause)
       |=  =input:transact
@@ -2238,16 +2699,16 @@
           spend.input
         sender-key
       input
-    =/  signed-draft=draft
+    =/  signed-transaction=transaction
       %=  dat.cause
         p  signed-inputs
       ==
-    =/  draft-jam  (jam signed-draft)
+    =/  transaction-jam  (jam signed-transaction)
     =/  path=@t
       %-  crip
-      "./drafts/{(trip name.signed-draft)}.draft"
-    %-  (debug "saving input draft to {<path>}")
-    =/  =effect  [%file %write path draft-jam]
+      "./txs/{(trip name.signed-transaction)}.tx"
+    %-  (debug "saving input transaction to {<path>}")
+    =/  =effect  [%file %write path transaction-jam]
     :-  ~[effect [%exit 0]]
     state
   ++  do-sign-aeroe-tx
@@ -2289,7 +2750,7 @@
     |=  cause=advanced-spend-seed
     ^-  [(list effect) ^state]
     |^
-    =?  active-draft.state  ?=(~ active-draft.state)  `*draft-name
+    =?  active-transaction.state  ?=(~ active-transaction.state)  `*transaction-name
     =?  active-seed.state  ?=(~ active-seed.state)  `*seed-name
     ?-  -.cause
       %new  do-new
@@ -2445,8 +2906,8 @@
       |=  sed=preseed
       ^-  [(list effect) ^state]
       =.  active-seed.state  (some name.sed)
-      =.  draft-tree.state  (~(add-seed plan draft-tree.state) name.sed sed)
-      =^  writes  state  write-draft:d
+      =.  transaction-tree.state  (~(add-seed plan transaction-tree.state) name.sed sed)
+      =^  writes  state  write-transaction:d
       [writes state]
     --  ::+do-advanced-spend-seed
   ::
@@ -2730,16 +3191,16 @@
       |=  inp=preinput
       ^-  [(list effect) ^state]
       =.  active-input.state  (some name.inp)
-      =.  draft-tree.state  (~(add-input plan draft-tree.state) name.inp inp)
-      =^  writes  state  write-draft:d
+      =.  transaction-tree.state  (~(add-input plan transaction-tree.state) name.inp inp)
+      =^  writes  state  write-transaction:d
       [writes state]
     --  ::+do-advanced-spend-input
   ::
-  ++  do-advanced-spend-draft
-    |=  cause=advanced-spend-draft
+  ++  do-advanced-spend-transaction
+    |=  cause=advanced-spend-transaction
     ^-  [(list effect) ^state]
     |^
-    =?  active-draft.state  ?=(~ active-draft.state)  `*draft-name
+    =?  active-transaction.state  ?=(~ active-transaction.state)  `*transaction-name
     ?-  -.cause
       %new  do-new
       %set-name  do-set-name
@@ -2751,28 +3212,28 @@
     ::
     ++  do-new
       ?>  ?=([%new *] cause)
-      =.  active-draft.state  (some name.cause)
-      =/  dat=draft
-        %*  .  *draft
+      =.  active-transaction.state  (some name.cause)
+      =/  dat=transaction
+        %*  .  *transaction
           name  name.cause
         ==
-      (write-draft dat)
+      (write-transaction dat)
     ::
     ++  do-set-name
       ?>  ?=([%set-name *] cause)
-      =/  pre=(unit draft)
-        (get-draft:p draft-name.cause)
+      =/  pre=(unit transaction)
+        (get-transaction:p transaction-name.cause)
       ?>  ?=(^ pre)
-      =.  active-draft.state  (some new-name.cause)
+      =.  active-transaction.state  (some new-name.cause)
       =.  name.u.pre  new-name.cause
-      (write-draft u.pre)
+      (write-transaction u.pre)
     ::
     ++  do-add-input
       ?>  ?=([%add-input *] cause)
-      =/  pre=(unit draft)
-        (get-draft:p draft-name.cause)
+      =/  pre=(unit transaction)
+        (get-transaction:p transaction-name.cause)
       ?>  ?=(^ pre)
-      =.  active-draft.state  (some draft-name.cause)
+      =.  active-transaction.state  (some transaction-name.cause)
       =/  inp=(unit preinput)
         (get-input:p input-name.cause)
       ?>  ?=(^ inp)
@@ -2785,19 +3246,19 @@
         :_  ~  :-  %text
         %-  crip
         """
-        draft already has input with note name
+        transaction already has input with note name
         {<(to-b58:nname:transact name.note.p.u.inp)>}, doing nothing.
         """
       =.  p.u.pre
         (~(put z-by:zo p.u.pre) [name.note.p.u.inp p.u.inp])
-      (write-draft u.pre)
+      (write-transaction u.pre)
     ::
     ++  do-remove-input
       ?>  ?=([%remove-input *] cause)
-      =/  pre=(unit draft)
-        (get-draft:p draft-name.cause)
+      =/  pre=(unit transaction)
+        (get-transaction:p transaction-name.cause)
       ?>  ?=(^ pre)
-      =.  active-draft.state  (some draft-name.cause)
+      =.  active-transaction.state  (some transaction-name.cause)
       =/  inp=(unit preinput)
         (get-input:p input-name.cause)
       ?>  ?=(^ inp)
@@ -2809,7 +3270,7 @@
         :_  ~  :-  %text
         %-  crip
         """
-        draft does not have input with note name
+        transaction does not have input with note name
         {<(to-b58:nname:transact name.note.p.u.inp)>}, doing nothing.
         """
       ?.  =(u.inp (~(got z-by:zo p.u.pre) name.note.p.u.inp))
@@ -2820,20 +3281,20 @@
         :_  ~  :-  %text
         %-  crip
         """
-        draft has input with note name
+        transaction has input with note name
         {<(to-b58:nname:transact name.note.p.u.inp)>}, but it is
         a different input. to remove this input, use %remove-input-by-name
         instead.
         """
       =.  p.u.pre
         (~(del z-by:zo p.u.pre) name.note.p.u.inp)
-      (write-draft u.pre)
+      (write-transaction u.pre)
     ::
     ++  do-remove-input-by-name
       ?>  ?=([%remove-input-by-name *] cause)
-      =/  pre=(unit draft)
-        (get-draft:p draft-name.cause)
-      =.  active-draft.state  (some draft-name.cause)
+      =/  pre=(unit transaction)
+        (get-transaction:p transaction-name.cause)
+      =.  active-transaction.state  (some transaction-name.cause)
       ?>  ?=(^ pre)
       =/  name=nname:transact  (from-b58:nname:transact name.cause)
       ?.  (~(has z-by:zo p.u.pre) name)
@@ -2844,17 +3305,17 @@
         :_  ~  :-  %text
         %-  crip
         """
-        draft does not have input with note name {(trip first.name.cause)}
+        transaction does not have input with note name {(trip first.name.cause)}
         {(trip last.name.cause)}, doing nothing.
         """
       =.  p.u.pre  (~(del z-by:zo p.u.pre) name)
-      (write-draft u.pre)
+      (write-transaction u.pre)
     ::
     ++  do-print-status
       ?>  ?=([%print-status *] cause)
-      =/  pre=(unit draft)
-        (get-draft:p draft-name.cause)
-      =.  active-draft.state  (some draft-name.cause)
+      =/  pre=(unit transaction)
+        (get-transaction:p transaction-name.cause)
+      =.  active-transaction.state  (some transaction-name.cause)
       ?>  ?=(^ pre)
       =/  inputs=(list [name=nname:transact =input:transact])
         ~(tap z-by:zo p.u.pre)
@@ -2887,7 +3348,7 @@
         """
       =/  status-text=tape
         """
-        ## Draft Status
+        ## Transaction Status
 
         Name: {(trip name.u.pre)}
         Number of inputs: {<(lent inputs)>}
@@ -2899,11 +3360,11 @@
       :_  state
       (print (need (de:md (crip status-text))))
     ::
-    ++  write-draft
-      |=  dat=draft
+    ++  write-transaction
+      |=  dat=transaction
       ^-  [(list effect) ^state]
-      =.  active-draft.state  (some name.dat)
-      write-draft:d
-    --  ::+do-advanced-spend-draft
+      =.  active-transaction.state  (some name.dat)
+      write-transaction:d
+    --  ::+do-advanced-spend-transaction
   --  ::+poke
 --

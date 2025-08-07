@@ -7,9 +7,14 @@ use nockapp::NockApp;
 use zkvm_jetpack::hot::produce_prover_hot_state;
 
 // When enabled, use jemalloc for more stable memory allocation
-#[cfg(feature = "jemalloc")]
+#[cfg(all(feature = "jemalloc", not(feature = "tracing-heap")))]
 #[global_allocator]
 static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
+#[cfg(feature = "tracing-heap")]
+#[global_allocator]
+static ALLOC: tracy_client::ProfiledAllocator<tikv_jemallocator::Jemalloc> =
+    tracy_client::ProfiledAllocator::new(tikv_jemallocator::Jemalloc, 100);
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {

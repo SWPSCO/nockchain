@@ -786,21 +786,34 @@ pub struct FullDebugCell<'a>(pub &'a Cell);
 
 impl fmt::Debug for FullDebugCell<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "[")?;
-        let mut cell = *self.0;
-        loop {
-            write!(f, "{:?}", cell.head())?;
-            match cell.tail().as_cell() {
-                Ok(next_cell) => {
+        fn do_fmt(cell: &Cell, brackets: bool, f: &mut fmt::Formatter) -> fmt::Result {
+            if brackets {
+                write!(f, "[")?;
+            }
+            match cell.head().as_cell() {
+                Ok(head_cell) => {
+                    do_fmt(&head_cell, true, f)?;
                     write!(f, " ")?;
-                    cell = next_cell;
                 }
                 Err(_) => {
-                    write!(f, " {:?}]", cell.tail())?;
-                    break;
+                    write!(f, "{:?} ", cell.head())?;
                 }
             }
+            match cell.tail().as_cell() {
+                Ok(next_cell) => {
+                    do_fmt(&next_cell, false, f)?;
+                }
+                Err(_) => {
+                    write!(f, "{:?}", cell.tail())?;
+                }
+            }
+            if brackets {
+                write!(f, "]")?;
+            }
+            Ok(())
         }
+
+        do_fmt(&*self.0, true, f)?;
         Ok(())
     }
 }
@@ -821,7 +834,7 @@ impl fmt::Debug for DebugPath<'_> {
                     } else if atom.is_indirect() {
                         write!(f, "{:?}", atom.as_indirect())?;
                     } else {
-                        write!(f, "{:?}", atom)?;
+                        write!(f, "{atom:?}")?;
                     }
                 }
                 Err(_) => {

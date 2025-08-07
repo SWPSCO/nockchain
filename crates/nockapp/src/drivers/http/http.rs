@@ -142,7 +142,7 @@ impl CachedResponse {
             .body
             .as_ref()
             .map(|b| Body::from(b.clone()))
-            .unwrap_or_else(|| Body::empty());
+            .unwrap_or_else(Body::empty);
         res.body(body).map_err(HttpError::ResponseBuildError)
     }
 }
@@ -317,8 +317,7 @@ pub fn http() -> IODriverFn {
                             Ok(https_listener) => {
                                 let https_addr = https_listener.local_addr().unwrap();
                                 info!("HTTPS server listening on {}", https_addr);
-                                let std_listener =
-                                    std::net::TcpListener::from(https_listener.into_std().unwrap());
+                                let std_listener = https_listener.into_std().unwrap();
                                 if let Err(e) =
                                     axum_server::from_tcp_rustls(std_listener, rustls_config)
                                         .serve(app_for_https.into_make_service())
@@ -622,7 +621,7 @@ pub fn http() -> IODriverFn {
 
                             let response_body = res_builder.body
                                 .map(Body::from)
-                                .unwrap_or_else(|| Body::empty());
+                                .unwrap_or_else(Body::empty);
 
                             let response = res.body(response_body).map_err(HttpError::ResponseBuildError)?;
 

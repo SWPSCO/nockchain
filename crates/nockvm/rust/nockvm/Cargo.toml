@@ -30,6 +30,7 @@ signal-hook = { workspace = true }
 slotmap = { workspace = true }
 static_assertions = { workspace = true }
 thiserror = { workspace = true }
+tracing-core.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]

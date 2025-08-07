@@ -7,3 +7,4 @@ test-follower
 .nockchain_identity.peerid
 target
 !crates/nockapp/test-jams
+keys.export

@@ -137,11 +137,11 @@ pub mod util {
     use crate::jets::util::BAIL_EXIT;
     use crate::jets::{JetErr, Result};
     use crate::mem::NockStack;
-    use crate::noun::{Atom, Cell, Noun, D, NO, T, YES};
+    use crate::noun::{Atom, Cell, Noun, NounAllocator, D, NO, T, YES};
     use crate::site::{site_slam, Site};
 
     /// Reverse order of list
-    pub fn flop(stack: &mut NockStack, noun: Noun) -> Result {
+    pub fn flop<T: NounAllocator>(alloc: &mut T, noun: Noun) -> Result {
         let mut list = noun;
         let mut tsil = D(0);
         loop {
@@ -150,7 +150,7 @@ pub mod util {
             }
 
             let cell = list.as_cell()?;
-            tsil = T(stack, &[cell.head(), tsil]);
+            tsil = T(alloc, &[cell.head(), tsil]);
             list = cell.tail();
         }
 
@@ -282,7 +282,7 @@ pub mod util {
                 break;
             }
             tsil = T(stack, &[b_noun, tsil]);
-            a_mut = a_mut - 1;
+            a_mut -= 1;
         }
         Ok(tsil)
     }
@@ -329,7 +329,7 @@ pub mod util {
 
                 // try next position
                 hstk = hstk.as_cell()?.tail();
-                i = i + 1;
+                i += 1;
                 break;
             }
         }
@@ -351,7 +351,7 @@ pub mod util {
             }
             res.push(current_cell.head());
             list = current_cell.tail();
-            pos = pos + 1
+            pos += 1;
         }
 
         let mut res_cell = D(0);

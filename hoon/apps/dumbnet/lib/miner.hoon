@@ -101,13 +101,11 @@
     ::  has not reached interval (default ~m2), so leave timestamp alone
     [%.n m]
   =.  timestamp.candidate-block.m  (time-in-secs:page:t now)
-  =/  print-var
-    %-  trip
-    ^-  @t
+  =/  log-message
     %^  cat  3
-      'candidate block timestamp updated: '
+      'update-candidate-block: Candidate block timestamp updated: '
     (scot %$ timestamp.candidate-block.m)
-  ~>  %slog.[0 [%leaf print-var]]
+  ~>  %slog.[0 log-message]
   :-  %.y
   (add-txs-to-candidate c)
 ::
@@ -126,7 +124,13 @@
 ++  heard-new-tx
   |=  raw=raw-tx:t
   ^-  mining-state:dk
-  ~>  %slog.[3 (cat 3 'miner: heard-new-tx: raw-tx: ' (to-b58:hash:t id.raw))]
+  =/  log-message
+    %+  rap  3
+    :~  'heard-new-tx: '
+        'Miner received new transaction: '
+        (to-b58:hash:t id.raw)
+    ==
+  ~>  %slog.[0 log-message]
   ::  if the mining pubkey is not set, do nothing
   ?:  =(*(z-set lock:t) pubkeys.m)  m
   ::
@@ -144,14 +148,14 @@
   =/  new-acc=(unit tx-acc:t)
     (process:tx-acc:t candidate-acc.m u.tx height.candidate-block.m)
   ?~  new-acc
-    =/  print-var
-        %-  trip
+    =/  log-message
         %+  rap  3
-        :~  'tx '
+        :~  'heard-new-tx: '
+            'Transaction '
             (to-b58:hash:t id.raw)
             ' cannot be added to candidate block.'
         ==
-    ~>  %slog.[3 %leaf^print-var]
+    ~>  %slog.[3 log-message]
     m
   =/  old-mining-state  m
   ::  we can add tx to candidate-block
@@ -160,21 +164,27 @@
   =/  old-fees=coins:t  fees.candidate-acc.m
   =.  candidate-acc.m  u.new-acc
   =/  new-fees=coins:t  fees.candidate-acc.m
-  ::  check if new-fees != old-fees to determine if split should be recalculated.
-  ::  since we don't have replace-by-fee
-  =/  added-to-candidate-print=tape
-      %-  trip
+  =/  log-message-added-tx
       %+  rap  3
-      :~  'added tx '
+      :~  'heard-new-tx: '
+          'Added transaction '
           (to-b58:hash:t id.raw)
           ' to the candidate block.'
       ==
+  =/  log-message-exceeds-max-size
+    %+  rap  3
+    :~  'heard-new-tx: '
+        'Exceeds max block size, not adding tx: '
+        (to-b58:hash:t id.raw)
+    ==
+  ::  check if new-fees != old-fees to determine if split should be recalculated.
+  ::  since we don't have replace-by-fee
   ?:  =(new-fees old-fees)
     ::  fees are equal so no need to recalculate split
     ?.  candidate-block-below-max-size
-      ~>  %slog.[3 leaf+"exceeds max block size, not adding tx"]
+      ~>  %slog.[3 log-message-exceeds-max-size]
       old-mining-state
-    ~>  %slog.[3 %leaf^added-to-candidate-print]
+    ~>  %slog.[3 log-message-added-tx]
     m
   ::  fees are unequal. for this miner, fees are only ever monotonically
   ::  incremented and so this assertion should never fail.
@@ -190,9 +200,9 @@
     (new:coinbase-split:t new-assets shares.m)
   ::  check size of candidate block
   ?.  candidate-block-below-max-size
-    ~>  %slog.[3 leaf+"exceeds max block size, not adding tx"]
+    ~>  %slog.[3 log-message-exceeds-max-size]
     old-mining-state
-  ~>  %slog.[3 %leaf^added-to-candidate-print]
+  ~>  %slog.[3 log-message-added-tx]
   m
 ::
 ::  +heard-new-block: refreshes the candidate block to be mined in reaction to a new block
@@ -210,21 +220,37 @@
   ?~  heaviest-block.c
     ::  genesis block has its own codepath, which is why this conditional does not attempt
     ::  to generate the genesis block
-    ~>  %slog.[0 leaf+"attempted to generate new candidate block when we have no genesis block"]
+    =/  log-message
+      %+  rap  3
+      :~  'heard-new-block: '
+          'Attempted to generate new candidate block when we have no genesis block'
+      ==
+    ~>  %slog.[0 log-message]
     m
   ?:  =(u.heaviest-block.c parent.candidate-block.m)
-    ~>  %slog.[0 leaf+"heaviest block unchanged, do not generate new candidate block"]
+    =/  log-message
+      %+  rap  3
+      :~  'heard-new-block: '
+          'Heaviest block unchanged, do not generate new candidate block'
+      ==
+    ~>  %slog.[0 log-message]
     m
   ?.  mining-pubkeys-set
-    ~>  %slog.[0 leaf+"no pubkey(s) set so no new candidate block will be generated"]
+    =/  log-message
+      %+  rap  3
+      :~  'heard-new-block: '
+          'No pubkey(s) set so no new candidate block will be generated'
+      ==
+    ~>  %slog.[0 log-message]
     m
-  =/  print-var
-    %-  trip
+  =/  log-message
     ^-  @t
-    %^  cat  3
-      'generating new candidate block with parent: '
-    (to-b58:hash:t u.heaviest-block.c)
-  ~>  %slog.[0 [%leaf print-var]]
+    %+  rap  3
+    :~  'heard-new-block: '
+        'Generating new candidate block with parent: '
+        (to-b58:hash:t u.heaviest-block.c)
+    ==
+  ~>  %slog.[0 log-message]
   =.  candidate-block.m
     %-  new-candidate:page:t
     :*  (to-page:local-page:t (~(got z-by blocks.c) u.heaviest-block.c))

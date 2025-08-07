@@ -320,12 +320,11 @@ impl NockCancelToken {
                 break false;
             } else {
                 trace!("Nock cancellation: cancelling");
-                if let Ok(_) = self.running_status.compare_exchange(
-                    running,
-                    running.neg(),
-                    Ordering::SeqCst,
-                    Ordering::SeqCst,
-                ) {
+                if self
+                    .running_status
+                    .compare_exchange(running, running.neg(), Ordering::SeqCst, Ordering::SeqCst)
+                    .is_ok()
+                {
                     break true;
                 }
             }
@@ -782,11 +781,13 @@ pub fn interpret(context: &mut Context, mut subject: Noun, formula: Noun) -> Res
                                     // We could trace on 2 as well, but 2 only comes from Hoon via
                                     // '.*', so we can assume it's never directly used to invoke
                                     // jetted code.
-                                    if context.trace_info.is_some() {
-                                        if let Some(path) = context.cold.matches(stack, &mut res) {
-                                            append_trace(stack, path);
-                                        };
-                                    };
+                                    if let Some((path, trace_info)) =
+                                        context.trace_info.as_mut().and_then(|v| {
+                                            context.cold.matches(stack, &mut res).zip(Some(v))
+                                        })
+                                    {
+                                        trace_info.append_trace(stack, path);
+                                    }
 
                                     subject = res;
                                     push_formula(stack, formula, true)?;
@@ -807,11 +808,13 @@ pub fn interpret(context: &mut Context, mut subject: Noun, formula: Noun) -> Res
                                     // We could trace on 2 as well, but 2 only comes from Hoon via
                                     // '.*', so we can assume it's never directly used to invoke
                                     // jetted code.
-                                    if context.trace_info.is_some() {
-                                        if let Some(path) = context.cold.matches(stack, &mut res) {
-                                            append_trace(stack, path);
-                                        };
-                                    };
+                                    if let Some((path, trace_info)) =
+                                        context.trace_info.as_mut().and_then(|v| {
+                                            context.cold.matches(stack, &mut res).zip(Some(v))
+                                        })
+                                    {
+                                        trace_info.append_trace(stack, path);
+                                    }
                                 }
                             } else {
                                 // Axis into core must be atom
@@ -1038,19 +1041,17 @@ pub fn interpret(context: &mut Context, mut subject: Noun, formula: Noun) -> Res
             }
         } else if running_status == NockCancelToken::RUNNING_IDLE {
             break;
-        } else {
-            if context
-                .running_status
-                .compare_exchange(
-                    running_status,
-                    running_status - 1,
-                    Ordering::SeqCst,
-                    Ordering::SeqCst,
-                )
-                .is_ok()
-            {
-                break;
-            }
+        } else if context
+            .running_status
+            .compare_exchange(
+                running_status,
+                running_status - 1,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            )
+            .is_ok()
+        {
+            break;
         }
     }
 
@@ -1173,7 +1174,8 @@ fn push_formula(stack: &mut NockStack, formula: Noun, tail: bool) -> Result {
                             9 => {
                                 if let Ok(arg_cell) = formula_cell.tail().as_cell() {
                                     if let Ok(axis_atom) = arg_cell.head().as_atom() {
-                                        *stack.push() = NockWork::Work9(Nock9 {
+                                        let p = stack.push();
+                                        *p = NockWork::Work9(Nock9 {
                                             todo: Todo9::ComputeCore,
                                             axis: axis_atom,
                                             core: arg_cell.tail(),
@@ -1283,7 +1285,10 @@ fn exit(
         context.restore(snapshot);
 
         if context.stack.copying() {
-            assert!(context.stack.get_frame_pointer() != virtual_frame);
+            assert!(!std::ptr::eq(
+                context.stack.get_frame_pointer(),
+                virtual_frame
+            ));
             context.stack.frame_pop();
         }
 
@@ -1302,7 +1307,7 @@ fn exit(
             }
         };
 
-        while stack.get_frame_pointer() != virtual_frame {
+        while !std::ptr::eq(stack.get_frame_pointer(), virtual_frame) {
             stack.preserve(&mut preserve);
             stack.frame_pop();
         }
@@ -1323,7 +1328,7 @@ fn mean_frame_push(stack: &mut NockStack, slots: usize) {
         let trace = *(stack.local_noun_pointer(0));
         stack.frame_push(slots + 2);
         *(stack.local_noun_pointer(0)) = trace;
-        *(stack.local_noun_pointer(1) as *mut *const TraceStack) = std::ptr::null();
+        *(stack.local_noun_pointer(1) as *mut *const Noun) = std::ptr::null();
     }
 }
 
@@ -1415,20 +1420,6 @@ pub fn inc(stack: &mut NockStack, atom: Atom) -> Atom {
                 }
             }
         }
-    }
-}
-
-/// Push onto the tracing stack
-fn append_trace(stack: &mut NockStack, path: Noun) {
-    unsafe {
-        let trace_stack = *(stack.local_noun_pointer(1) as *const *const TraceStack);
-        let new_trace_entry = stack.struct_alloc(1);
-        *new_trace_entry = TraceStack {
-            path,
-            start: Instant::now(),
-            next: trace_stack,
-        };
-        *(stack.local_noun_pointer(1) as *mut *const TraceStack) = new_trace_entry;
     }
 }
 
@@ -1769,13 +1760,11 @@ mod debug {
                 if !atom.is_normalized() {
                     if atom.size() == 1 {
                         panic!(
-                            "Un-normalized indirect_atom (should be direct) returned from jet for {:?}",
-                            path
+                            "Un-normalized indirect_atom (should be direct) returned from jet for {path:?}",
                         );
                     } else {
                         panic!(
-                            "Un-normalized indirect_atom (last word 0) returned from jet for {:?}",
-                            path
+                            "Un-normalized indirect_atom (last word 0) returned from jet for {path:?}",
                         );
                     }
                 }

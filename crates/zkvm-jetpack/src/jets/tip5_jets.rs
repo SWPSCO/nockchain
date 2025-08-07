@@ -34,7 +34,7 @@ pub fn hoon_list_to_sponge(list: Noun) -> Result<[u64; STATE_SIZE], JetErr> {
         let cell = current.as_cell()?;
         sponge[i] = cell.head().as_atom()?.as_u64()?;
         current = cell.tail();
-        i = i + 1;
+        i += 1;
     }
 
     if i != STATE_SIZE {
@@ -92,17 +92,17 @@ pub fn tip5_calc_digest(sponge: &[u64; 16]) -> [u64; 5] {
 }
 
 // absorb complete input
-pub fn tip5_absorb_input(input_vec: &mut Vec<Belt>, mut sponge: &mut [u64; 16], q: usize) {
+pub fn tip5_absorb_input(input_vec: &mut Vec<Belt>, sponge: &mut [u64; 16], q: usize) {
     let mut cnt_q = q;
     let mut input_to_absorb = input_vec.as_slice();
     loop {
         let (scag_input, slag_input) = input_to_absorb.split_at(RATE);
-        tip5_absorb_rate(&mut sponge, scag_input);
+        tip5_absorb_rate(sponge, scag_input);
 
         if cnt_q == 0 {
             break;
         }
-        cnt_q = cnt_q - 1;
+        cnt_q -= 1;
         input_to_absorb = slag_input;
     }
 }
@@ -128,25 +128,25 @@ pub fn hash_varlen_jet(context: &mut Context, subject: Noun) -> Result<Noun, Jet
     Ok(vec_to_hoon_list(stack, &digest))
 }
 
-fn hash_varlen(mut input_vec: &mut Vec<Belt>) -> [u64; 5] {
+fn hash_varlen(input_vec: &mut Vec<Belt>) -> [u64; 5] {
     let mut sponge = create_init_sponge_variable();
 
     // assert that input is made of base field elements
-    assert_all_based(&input_vec);
+    assert_all_based(input_vec);
 
     // pad input with ~[1 0 ... 0] to be a multiple of rate
-    let (q, r) = tip5_calc_q_r(&input_vec);
-    tip5_pad_vecbelt(&mut input_vec, r);
+    let (q, r) = tip5_calc_q_r(input_vec);
+    tip5_pad_vecbelt(input_vec, r);
 
     // bring input into montgomery space
-    tip5_montify_vecbelt(&mut input_vec);
+    tip5_montify_vecbelt(input_vec);
 
     // process input in batches of size RATE
-    tip5_absorb_input(&mut input_vec, &mut sponge, q);
+    tip5_absorb_input(input_vec, &mut sponge, q);
 
     // calc digest
-    let digest = tip5_calc_digest(&sponge);
-    digest
+
+    tip5_calc_digest(&sponge)
 }
 
 pub fn create_init_sponge_variable() -> [u64; STATE_SIZE] {
@@ -269,15 +269,15 @@ pub fn hash_10_jet(context: &mut Context, subject: Noun) -> Result<Noun, JetErr>
     Ok(vec_to_hoon_list(stack, &digest))
 }
 
-fn hash_10(mut input_vec: &mut Vec<Belt>) -> [u64; 5] {
+fn hash_10(input_vec: &mut Vec<Belt>) -> [u64; 5] {
     // check input
-    let (q, r) = tip5_calc_q_r(&input_vec);
+    let (q, r) = tip5_calc_q_r(input_vec);
     assert_eq!(q, 1);
     assert_eq!(r, 0);
-    assert_all_based(&input_vec);
+    assert_all_based(input_vec);
 
     // bring input into montgomery space
-    tip5_montify_vecbelt(&mut input_vec);
+    tip5_montify_vecbelt(input_vec);
 
     // create init sponge (%fixed)
     let mut sponge = create_init_sponge_fixed();
@@ -332,7 +332,7 @@ fn hash_ten_cell(stack: &mut NockStack, ten_cell: Noun) -> Result<Noun, JetErr> 
     // leaf_sequence(ten-cell)
     let mut leaf: Vec<u64> = Vec::<u64>::new();
     do_leaf_sequence(ten_cell, &mut leaf)?;
-    let mut leaf_belt = leaf.into_iter().map(|x| Belt(x)).collect();
+    let mut leaf_belt = leaf.into_iter().map(Belt).collect();
 
     // list-to-tuple hash10
     let digest = hash_10(&mut leaf_belt);
@@ -374,14 +374,14 @@ pub fn hash_hashable(stack: &mut NockStack, h: Noun) -> Result<Noun, JetErr> {
 
     if h_head.is_direct() {
         let tag = h_head.as_direct()?;
-        let res = match tag.data() {
+
+        match tag.data() {
             tas!(b"hash") => hash_hashable_hash(stack, h_tail),
             tas!(b"leaf") => hash_hashable_leaf(stack, h_tail),
             tas!(b"list") => hash_hashable_list(stack, h_tail),
             tas!(b"mary") => hash_hashable_mary(stack, h_tail),
             _ => hash_hashable_other(stack, h_head, h_tail),
-        };
-        res
+        }
     } else {
         hash_hashable_other(stack, h_head, h_tail)
     }

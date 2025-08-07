@@ -43,7 +43,7 @@ impl ExportedState {
             version: EXPORTED_STATE_VERSION,
             ker_hash: state.ker_hash,
             event_num: state.event_num,
-            jam: jam,
+            jam,
         }
     }
 

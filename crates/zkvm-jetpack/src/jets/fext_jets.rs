@@ -1,7 +1,8 @@
 use nockvm::interpreter::Context;
-use nockvm::jets::util::slot;
+use nockvm::jets::util::{slot, BAIL_FAIL};
 use nockvm::jets::JetErr;
-use nockvm::noun::{IndirectAtom, Noun};
+use nockvm::noun::{IndirectAtom, Noun, D, T};
+use nockvm::site::{site_slam, Site};
 use tracing::debug;
 
 use crate::form::fext::*;
@@ -10,6 +11,41 @@ use crate::hand::handle::new_handle_mut_felt;
 use crate::jets::utils::jet_err;
 use crate::noun::noun_ext::NounExt;
 use crate::utils::*;
+
+pub fn zip_roll_jet(context: &mut Context, subject: Noun) -> Result<Noun, JetErr> {
+    let sample = slot(subject, 6)?;
+    let mut list_a = slot(sample, 2)?;
+    let mut list_b = slot(sample, 6)?;
+    let mut gate = slot(sample, 7)?;
+    let mut prod = slot(gate, 13)?;
+
+    let site = Site::new(context, &mut gate);
+    loop {
+        if let Ok(list_a_cell) = list_a.as_cell() {
+            if let Ok(list_b_cell) = list_b.as_cell() {
+                list_a = list_a_cell.tail();
+                list_b = list_b_cell.tail();
+                let left_sam = T(
+                    &mut context.stack,
+                    &[list_a_cell.head(), list_b_cell.head()],
+                );
+                let sam = T(&mut context.stack, &[left_sam, prod]);
+                prod = site_slam(context, &site, sam)?;
+            } else {
+                debug!("list_a and list_b sizes unequal");
+                return jet_err();
+            }
+        } else {
+            if unsafe { !list_a.raw_equals(&D(0)) } {
+                return Err(BAIL_FAIL);
+            }
+            if unsafe { !list_b.raw_equals(&D(0)) } {
+                return Err(BAIL_FAIL);
+            }
+            return Ok(prod);
+        }
+    }
+}
 
 pub fn fadd_jet(context: &mut Context, subject: Noun) -> Result<Noun, JetErr> {
     let sam = slot(subject, 6)?;

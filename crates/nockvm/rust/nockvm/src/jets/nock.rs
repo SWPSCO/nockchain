@@ -267,7 +267,7 @@ pub mod util {
                                             break 'tank tonc.tail();
                                         }
                                     } else {
-                                        panic!("+mink in +mook somehow returned atom {:?}", tone)
+                                        panic!("+mink in +mook somehow returned atom {tone:?}")
                                     }
                                 }
 

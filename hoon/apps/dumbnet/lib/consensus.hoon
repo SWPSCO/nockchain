@@ -78,7 +78,8 @@
 ++  checkpointed-digests
   ^-  (z-map page-number:t hash:t)
   %-  ~(gas z-by *(z-map page-number:t hash:t))
-  :~  [%4.032 (from-b58:hash:t 'DhaVTgMz6CMy3ZG3vsci1z9U2Gg7WZL6y3g7bZzfJLUbus1rd8j4BQU')]
+  :~  [%16.128 (from-b58:hash:t 'ANjtb2YNFo3cAtLVkjkXXP2DJ2S5ZvByywpxgAa1UhxXM5f8YmiJLWX')]
+      [%4.032 (from-b58:hash:t 'DhaVTgMz6CMy3ZG3vsci1z9U2Gg7WZL6y3g7bZzfJLUbus1rd8j4BQU')]
       [%2.448 (from-b58:hash:t '9EChUtcNJumW5DDYgS6UP5UHfHtD6vFH7HoSqjmTuWP2Px6JdpxaR23')]
       [%720 (from-b58:hash:t 'C4vJRnFNHCLHKHVRJGiYeoiYXS7CyTGrVk2ibEv95HQiZoxRvtr5SRQ')]
       [%144 (from-b58:hash:t '3rbqdep8HLqwwkW4YvZazVPYZpbqsFbqHCfEKGt13GVUUzA9ToDCsxT')]
@@ -103,7 +104,7 @@
 ++  set-genesis-seal
   |=  [height=page-number:t msg-hash=@t]
   ^-  consensus-state:dk
-  ~>  %slog.[0 leaf+"setting genesis seal."]
+  ~>  %slog.[0 'set-genesis-seal: Setting genesis seal']
   =/  seal  (new:genesis-seal:t height msg-hash)
   c(genesis-seal seal)
 ::
@@ -111,9 +112,9 @@
   |=  btc-hash=(unit btc-hash:t)
   ^-  consensus-state:dk
   ?:  =(~ btc-hash)
-    ~>  %slog.[0 leaf+"Not checking btc hash for genesis block"]
+    ~>  %slog.[0 'add-btc-data: Not checking Bitcoin block hash for genesis block']
     c(btc-data `btc-hash)
-  ~>  %slog.[0 leaf+"received btc block hash, waiting to hear nockchain genesis block!"]
+  ~>  %slog.[0 'add-btc-data: Received Bitcoin block hash, waiting to hear Nockchain genesis block!']
   c(btc-data `btc-hash)
 ::
 ++  inputs-in-heaviest-balance
@@ -138,7 +139,7 @@
 ++  get-cur-balance
   ^-  (z-map nname:t nnote:t)
   ?~  heaviest-block.c
-    ~>  %slog.[%1 leaf+"no known blocks, balance is empty"]
+    ~>  %slog.[1 'get-cur-balance: No known blocks, balance is empty']
     *(z-map nname:t nnote:t)
   (~(got z-by balance.c) u.heaviest-block.c)
 ::
@@ -189,8 +190,8 @@
     (chunk:bignum:t next-target-atom)
   ?:  =(prev-target-atom next-target-atom)
     next-target-bn
-  ~>  %slog.[0 (cat 3 'previous target: ' (rsh [3 2] (scot %ui prev-target-atom)))]
-  ~>  %slog.[0 (cat 3 'new target: ' (rsh [3 2] (scot %ui next-target-atom)))]
+  ~>  %slog.[0 (cat 3 'compute-target: Previous target: ' (rsh [3 2] (scot %ui prev-target-atom)))]
+  ~>  %slog.[0 (cat 3 'compute-target: New target: ' (rsh [3 2] (scot %ui next-target-atom)))]
   next-target-bn
 ::
 ::  +compute-epoch-duration: computes the duration of an epoch in seconds
@@ -213,7 +214,7 @@
     (~(got z-by min-timestamps.c) prev-last-block)
   =/  epoch-end=@
     (~(got z-by min-timestamps.c) last-block)
-  ~|  "time warp attack: negative epoch duration"
+  ~|  "compute-epoch-duration: Time warp attack: Negative epoch duration"
   (sub epoch-end epoch-start)
 ::
 ::  +check-size: check on page size, requires all raw-tx
@@ -356,13 +357,13 @@
   ::
   ::  check if digest matches checkpointed history, skip check if fakenet
   ?~  genesis-seal.c
-    ~>  %slog.[0 leaf+"fatal: genesis seal not set!"]
+    ~>  %slog.[1 'validate-page-without-txs: Fatal error: Genesis seal not set!']
     [%.n %genesis-seal-not-set]
   ?.  ?|  !=(realnet-genesis-msg:dk msg-hash.u.genesis-seal.c)
           ?!((~(has z-by checkpointed-digests) height.pag))
           =(digest.pag (~(got z-by checkpointed-digests) height.pag))
       ==
-    ~&  %checkpoint-match-failed
+    ~>  %slog.[1 'validate-page-without-txs: Checkpoint match failed']
     [%.n %checkpoint-match-failed]
   ::
   =/  check-heaviness=?
@@ -405,9 +406,9 @@
 ++  validate-page-with-txs
   |=  pag=page:t
   ^-  (reason:dk tx-acc:t)
-  =/  digest-b58=tape  (trip (to-b58:hash:t digest.pag))
+  =/  digest-b58=cord  (to-b58:hash:t digest.pag)
   ?.  (check-size pag)
-    ::~&  >>>  "block {digest-b58} is too large"
+    ~>  %slog.[1 (cat 3 'validate-page-with-txs: Block too large: ' digest-b58)]
     [%.n %block-too-large]
   =/  raw-tx-set=(z-set (unit raw-tx:t))
     (~(run z-in tx-ids.pag) |=(=tx-id:t (get-raw-tx tx-id)))
@@ -450,7 +451,7 @@
   ::
   ?~  balance-transfer
     ::  balance transfer failed
-    ::~&  >>>  "block {digest-b58} invalid"
+    ~>  %slog.[1 (cat 3 'validate-page-with-txs: Block invalid: ' digest-b58)]
     [%.n %balance-transfer-failed]
   ::
   ::  check that the coinbase split adds up to emission+fees
@@ -461,7 +462,7 @@
     (add (emission-calc:coinbase:t height.pag) fees.u.balance-transfer)
   ?.  =(emission-and-fees total-split)
     [%.n %improper-split]
-  ::~&  >  "block {digest-b58} txs validated"
+  ~>  %slog.[0 (cat 3 'validate-page-with-txs: Block validated: ' digest-b58)]
   [%.y u.balance-transfer]
 ::
 ::  +update-heaviest: set new heaviest block if it is so
@@ -469,30 +470,39 @@
   |=  pag=page:t
   ^-  consensus-state:dk
   =/  digest-b58=cord  (to-b58:hash:t digest.pag)
-  ::~>   %slog.[0 leaf+"checking if block {digest-b58} is heaviest"]
+  =/  log-message
+    %+  rap  3
+    :~  'update-heaviest: '
+        'Checking if block '
+        digest-b58
+        ' is heaviest'
+    ==
+  ~>  %slog.[0 log-message]
   ?:  =(~ heaviest-block.c)
     :: if we have no heaviest block, this must be genesis block.
-    ~|  "received non-genesis block before genesis block"
+    ~|  "update-heaviest: Received non-genesis block before genesis block"
     ?>  =(*page-number:t height.pag)
     c(heaviest-block (some digest.pag))
   ::  > rather than >= since we take the first heaviest block we've heard
   ?:  %+  compare-heaviness:page:t  pag
       (~(got z-by blocks.c) (need heaviest-block.c))
-    =/  print-var
-      %-  trip
-      ^-  @t
-      %^  cat  3
-        digest-b58
-      ' is new heaviest block'
-    ~>  %slog.[0 leaf+print-var]
+    =/  log-message
+      %+  rap  3
+      :~  'update-heaviest: '
+          'Block '
+          digest-b58
+          ' is new heaviest block'
+      ==
+    ~>  %slog.[0 log-message]
     c(heaviest-block (some digest.pag))
-  =/  print-var
-    %-  trip
-    ^-  @t
-    %^  cat  3
-      digest-b58
-    ' is NOT new heaviest block'
-  ~>  %slog.[0 leaf+print-var]
+  =/  log-message
+    %+  rap  3
+    :~  'update-heaviest: '
+        'Block '
+        digest-b58
+        ' is NOT new heaviest block'
+    ==
+  ~>  %slog.[0 log-message]
   c
 ::
 ::  +get-elders: get list of ancestor block IDs up to 24 deep
@@ -675,7 +685,6 @@
 ::
 ::  add an already-validated raw transaction, producing a list of blocks ready to validate
 ++  add-raw-tx
-  ~/  %add-raw-tx
   |=  =raw-tx:t
   ^-  [(list block-id:t) consensus-state:dk]
   ?<  (~(has z-by raw-txs.c) id.raw-tx)

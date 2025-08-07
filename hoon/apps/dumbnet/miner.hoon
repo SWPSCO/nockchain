@@ -8,6 +8,7 @@
 =>
   |%
   +$  kernel-state  [%state version=%1]
+<<<<<<< HEAD
   ::
   +$  cause
     $%
@@ -20,6 +21,12 @@
         pool-target=bignum:bignum
         pow-len=@        
       ==
+=======
+  +$  cause
+    $%  [%0 header=noun-digest:tip5 nonce=noun-digest:tip5 target=bignum:bignum pow-len=@]
+        [%1 header=noun-digest:tip5 nonce=noun-digest:tip5 target=bignum:bignum pow-len=@]
+        [%2 header=noun-digest:tip5 nonce=noun-digest:tip5 target=bignum:bignum pow-len=@]
+>>>>>>> upstream/master
     ==
   ::
   +$  success
@@ -56,7 +63,7 @@
     ::
     =/  cause  ((soft cause) dat)
     ?~  cause
-      ~>  %slog.[0 [%leaf "error: bad cause"]]
+      ~>  %slog.[1 'poke: Bad cause']
       `k
     ::
     =/  c  u.cause
@@ -67,8 +74,13 @@
         %1  [%1 commit.c nonce.c pow-len.c]
         %2  [%2 commit.c nonce.c pow-len.c]
       ==
+<<<<<<< HEAD
     ::
     =/  [prf=proof:sp dig=tip5-hash-atom] 
+=======
+    :: XX TODO set up stark config, construct effect
+    =/  [prf=proof:sp dig=tip5-hash-atom]
+>>>>>>> upstream/master
       (prove-block-inner:mine input)
     =;  eff  
       :_  k  ~[eff]

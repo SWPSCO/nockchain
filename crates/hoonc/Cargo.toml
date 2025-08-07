@@ -3,6 +3,10 @@ name = "hoonc"
 version = "0.2.0"
 edition.workspace = true
 
+[features]
+default = []
+tracing-tracy = ["dep:tracing-tracy"]
+
 [dependencies]
 bincode = { workspace = true }
 blake3 = { workspace = true }
@@ -18,7 +22,11 @@ thiserror = { workspace = true }
 tokio = { workspace = true, features = ["sync"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-# tracing-tracy = { workspace = true, features = ["flush-on-exit"] }
+tracing-tracy = { workspace = true, optional = true, features = [
+    "enable",
+    "manual-lifetime",
+    "ondemand",
+] }
 walkdir = "2.5.0"
 
 [[bin]]

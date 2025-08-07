@@ -214,4 +214,123 @@
     right  right
     key   (ch-add:affine:curve (point left a-gen:curve) pub)
   ==
+::
+::  extended key serialization
+::
+++  extended-private-key
+  ^-  @t
+  %-  crip
+  %-  en:base58:wrap
+  %-  add-checksum
+  (serialize-extended %.y)
+::
+++  extended-public-key
+  ^-  @t
+  %-  crip
+  %-  en:base58:wrap
+  %-  add-checksum
+  (serialize-extended %.n)
+::
+++  serialize-extended
+  |=  include-private=?
+  ^-  @
+  =/  version=@
+    ?:  include-private
+      0x4b2.430b  ::  produces "zprv" for 78-byte cheetah private keys
+    0xea.e65c     ::  produces "zpub" for 142-byte cheetah public keys
+  =/  key-data=@
+    ?:  include-private
+      ::  private key: 0x00 + 32-byte private key (33 bytes total)
+      ::  this serves as a format indicator to distinguish between
+      ::  private and public keys, and is inherited from the
+      ::  bip32 spec to maintain format consistency
+      (can 3 ~[[32 private-key] [1 0]])
+    ::  public key: 97-byte cheetah curve point
+    public-key
+  =/  key-size=@  ?:(include-private 33 97)
+  =/  total-size=@  (add key-size 45)  ::  key + 45 bytes metadata
+  ::
+  %+  can  3
+  :~  [key-size key-data]
+      [32 cad]
+      [4 ind]
+      [4 pif]
+      [1 (mod dep 256)]
+      [4 version]
+  ==
+::
+++  add-checksum
+  |=  data=@
+  ^-  @
+  =/  data-size=@  (met 3 data)
+  =/  hash1=@  (sha-256:sha data)
+  =/  hash2=@  (sha-256:sha hash1)
+  =/  checksum=@  (cut 3 [28 4] hash2)  ::  first 4 bytes
+  (can 3 ~[[4 checksum] [data-size data]])
+::
+++  from-extended-key
+  |=  key=@t
+  ^+  +>
+  =/  decoded=@
+    (de:base58:wrap (trip key))
+  ?>  (verify-checksum decoded)
+  =/  total-size=@  (met 3 decoded)
+  =/  payload=@  (cut 3 [4 total-size] decoded)
+  =/  version=@  (cut 3 [0 4] key)
+  =/  version-text=@t  `@t`version
+  =/  is-private=?
+    ?:  =(version-text 'zprv')  %.y  ::  zprv
+    ?:  =(version-text 'zpub')  %.n  ::  zpub
+    ~|("unsupported extended key version: {<version>}" !!)
+  =/  key-size=@  ?:(is-private 33 97)
+  ::  metadata layout: [key-data][chain-code][index][parent-fp][depth][version]
+  =/  depth=@ud  (cut 3 [(add key-size 40) 1] payload)
+  =/  parent-fp=@  (cut 3 [(add key-size 36) 4] payload)
+  =/  index=@ud  (cut 3 [(add key-size 32) 4] payload)
+  =/  chain-code=@  (cut 3 [key-size 32] payload)
+  =/  key-data=@  (cut 3 [0 key-size] payload)
+  =/  private-key=@
+    ?.  is-private  0
+    (cut 3 [0 32] key-data)
+  =/  public-key=a-pt:curve
+    ?:  is-private
+      (point private-key a-gen:curve)
+    (de-a-pt key-data)
+  %_  +>.$
+      prv  private-key
+      pub  public-key
+      cad  chain-code
+      dep  depth
+      ind  index
+      pif  parent-fp
+  ==
+::
+++  verify-checksum
+  |=  data=@
+  ^-  ?
+  =/  total-size=@  (met 3 data)
+  =/  payload=@  (cut 3 [4 total-size] data)
+  =/  provided-checksum=@  (cut 3 [0 4] data)
+  =/  hash1=@  (sha-256:sha payload)
+  =/  hash2=@  (sha-256:sha hash1)
+  =/  computed-checksum=@  (cut 3 [28 4] hash2)
+  =(provided-checksum computed-checksum)
+--
+::
+|%
+::
+++  extended-from-keyc
+  |=  [=keyc include-private=?]
+  ^-  @t
+  ?:  include-private
+    extended-private-key:(from-private keyc)
+  extended-public-key:(from-public keyc)
+::
+++  keyc-from-extended
+  |=  key=@t
+  ^-  keyc
+  =/  core  (from-extended-key key)
+  ?:  =(0 prv:core)
+    [public-key:core chain-code:core]
+  [private-key:core chain-code:core]
 --

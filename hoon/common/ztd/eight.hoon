@@ -40,7 +40,7 @@
 ::  version %0 and %1 use the same constraints
 +$  preprocess-0-1  [%0 p=preprocess-data]
 +$  preprocess-2    [%2 p=preprocess-data]
-+$  preprocess 
++$  preprocess
   $:  pre-0-1=preprocess-0-1    :: version %0 and %1 constraints
       pre-2=preprocess-2        :: version %2 constraints
   ==
@@ -252,9 +252,9 @@
           tworow-trace-polys=(list bpoly)
           constraint-map=(map @ constraints)
           constraint-counts=(map @ constraint-counts)
-          composition-chals=(map @ bpoly)
-          chal-map=(map @ belt)
-          dyn-map=(map @ bpoly)
+          weights-map=(map @ bpoly)
+          challenges=bpoly
+          dyn-list=(list bpoly)
           is-extra=?
       ==
   ^-  bpoly
@@ -267,9 +267,9 @@
           tworow-trace-polys=(list bpoly)
           constraint-map=(map @ constraints)
           constraint-counts=(map @ constraint-counts)
-          composition-chals=(map @ bpoly)
-          chal-map=(map @ belt)
-          dyn-map=(map @ bpoly)
+          weights-map=(map @ bpoly)
+          challenges=bpoly
+          dyn-list=(list bpoly)
           is-extra=?
       ==
   ^-  bpoly
@@ -285,11 +285,11 @@
   =/  height=@  (snag i heights)
   =/  omicron  (~(snag bop omicrons) i)
   =/  last-row  (init-bpoly ~[(bneg (binv omicron)) 1])      ::  f(X)=X-g^{-1}
-  =/  chals  (~(got by composition-chals) i)
+  =/  weights  (~(got by weights-map) i)
   =/  trace  (snag i tworow-trace-polys)
   =/  constraints  (~(got by constraint-w-deg-map.dp) i)
   =/  counts  (~(got by constraint-counts) i)
-  =/  dyns  (~(got by dyn-map) i)
+  =/  dyns  (snag i dyn-list)
   ::
   =/  row-zerofier                                           ::  f(X) = (X^N-1)
     (bpsub (bppow id-bpoly height) one-bpoly)
@@ -302,7 +302,7 @@
     %-  process-composition-constraints
     :*  boundary.constraints
         trace
-        (~(scag bop chals) (mul 2 boundary.counts))
+        (~(scag bop weights) (mul 2 boundary.counts))
         dyns
     ==
   ::
@@ -312,7 +312,7 @@
     :*  row.constraints
         trace
       ::
-        %+  ~(swag bop chals)
+        %+  ~(swag bop weights)
           (mul 2 boundary.counts)
         (mul 2 row.counts)
       ::
@@ -328,7 +328,7 @@
     :*  transition.constraints
         trace
       ::
-        %+  ~(swag bop chals)
+        %+  ~(swag bop weights)
           (mul 2 (add boundary.counts row.counts))
         (mul 2 transition.counts)
       ::
@@ -341,7 +341,7 @@
     :*  terminal.constraints
         trace
       ::
-        %+  ~(swag bop chals)
+        %+  ~(swag bop weights)
           (mul 2 :(add boundary.counts row.counts transition.counts))
         (mul 2 terminal.counts)
       ::
@@ -355,7 +355,7 @@
     :*  extra.constraints
         trace
       ::
-        %-  ~(slag bop chals)
+        %-  ~(slag bop weights)
         %+  mul  2
         ;:  add
           boundary.counts
@@ -383,7 +383,7 @@
     ::  constraint type can contain multiple mp-mega constraints.
     ::
     =/  comps=(list bpoly)
-      (mp-substitute-ultra mp trace max-height chal-map dyns)
+      (mp-substitute-ultra mp trace max-height challenges dyns)
     %+  roll
       (zip-up degs comps)
     |=  [[deg=@ comp=bpoly] [idx=_idx acc=_acc]]

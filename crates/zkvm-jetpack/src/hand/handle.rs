@@ -60,8 +60,8 @@ where
     (tail, sli_ref)
 }
 
-pub fn new_handle_mut_felt<'a>(stack: &mut NockStack) -> (IndirectAtom, &'a mut Felt) {
-    let (felt_atom, dat_ptr) = unsafe { IndirectAtom::new_raw_mut_words(stack, 4) };
+pub fn new_handle_mut_felt<'a, T: NounAllocator>(alloc: &mut T) -> (IndirectAtom, &'a mut Felt) {
+    let (felt_atom, dat_ptr) = unsafe { IndirectAtom::new_raw_mut_words(alloc, 4) };
     dat_ptr[3] = 0x1;
     (
         felt_atom,

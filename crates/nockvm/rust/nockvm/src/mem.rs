@@ -1492,8 +1492,7 @@ impl NockStack {
         // Check for null pointers before calculating offsets
         if prev_frame_ptr.is_null() || prev_stack_ptr.is_null() || prev_alloc_ptr.is_null() {
             panic!(
-                "serf: frame_pop: null NockStack pointer f={:p} s={:p} a={:p}",
-                prev_frame_ptr, prev_stack_ptr, prev_alloc_ptr
+                "serf: frame_pop: null NockStack pointer f={prev_frame_ptr:p} s={prev_stack_ptr:p} a={prev_alloc_ptr:p}",
             );
         }
 
@@ -1911,10 +1910,10 @@ impl NockStack {
         loop {
             c += 1;
 
-            eprintln!("\r {}:", c);
-            eprintln!("\r frame_pointer = {:p}", fp);
-            eprintln!("\r stack_pointer = {:p}", sp);
-            eprintln!("\r alloc_pointer = {:p}", ap);
+            eprintln!("\r {c}:");
+            eprintln!("\r frame_pointer = {fp:p}");
+            eprintln!("\r stack_pointer = {sp:p}");
+            eprintln!("\r alloc_pointer = {ap:p}");
 
             if fp.is_null() {
                 break;

@@ -211,13 +211,16 @@
     ::  round two challenges: β, z
     =^  chals-rd2=(list belt)  rng  (belts:rng num-chals-rd2:chal)
     =/  challenges  (weld chals-rd1 chals-rd2)
-    =/  chal-map=(map @ belt)
-      (make-challenge-map:chal challenges s f)
     ::
     ::  build mega-extension columns
     =/  table-mega-exts=(list table-mary)
       (build-mega-extend tables challenges return)
     ::~&  %tables-built
+    ::
+    ::  augment challenges with derived challenges
+    =/  augmented-chals=bpoly
+      (augment-challenges:chal challenges s f)
+    ::
     =.  tables
       %+  turn  (zip-up tables table-mega-exts)
       |=  [t=table-dat mega-ext=table-mary]
@@ -245,17 +248,16 @@
       (compute-codeword-commitments mega-ext-marys fri-domain-len width)
     ::
     ::  get terminal values for use in permutation/evaluation arguments
-    =/  dyn-map=(map @ bpoly)
-      %-  ~(gas by *(map @ bpoly))
-      %+  iturn  tables
-      |=  [i=@ t=table-dat]
-      [i (terminal:q.t p.t)]
+    =/  dyn-list=(list bpoly)
+      %+  turn  tables
+      |=  t=table-dat
+      (terminal:q.t p.t)
     ::
     ::  weld terminals from each table together
     =/  terminals=bpoly
       %+  roll  (range (lent tables))
       |=  [i=@ acc=bpoly]
-      (~(weld bop acc) (~(got by dyn-map) i))
+      (~(weld bop acc) (snag i dyn-list))
     ::  send terminals to verifier
     =.  proof  (~(push proof-stream proof) terms+terminals)
     ::  reseed the rng
@@ -364,7 +366,7 @@
     =^  extra-comp-weights=bpoly  rng
       =^  belt-list  rng  (belts:rng (mul 2 num-extra-constraints))
       [(init-bpoly belt-list) rng]
-    =/  extra-composition-chals=(map @ bpoly)
+    =/  extra-composition-weights=(map @ bpoly)
       %-  ~(gas by *(map @ bpoly))
       =-  -<
       %+  roll  (range num-tables)
@@ -388,9 +390,9 @@
           tworow-trace-polys-eval
           constraint-map.pre
           count-map.pre
-          extra-composition-chals
-          chal-map
-          dyn-map
+          extra-composition-weights
+          augmented-chals
+          dyn-list
           %.y
       ==
     =.  proof
@@ -439,7 +441,7 @@
       =^  belt-list  rng  (belts:rng (mul 2 num-constraints))
       [(init-bpoly belt-list) rng]
     ::
-    =/  composition-chals=(map @ bpoly)
+    =/  composition-weights=(map @ bpoly)
       %-  ~(gas by *(map @ bpoly))
       =-  -<
       %+  roll  (range num-tables)
@@ -463,9 +465,9 @@
           tworow-trace-polys-eval
           constraint-map.pre
           count-map.pre
-          composition-chals
-          chal-map
-          dyn-map
+          composition-weights
+          augmented-chals
+          dyn-list
           %.n
       ==
     ::

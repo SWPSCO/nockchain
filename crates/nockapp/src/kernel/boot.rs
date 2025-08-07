@@ -1,17 +1,21 @@
 use std::path::PathBuf;
 
 use chrono;
-use clap::{arg, command, ColorChoice, Parser, ValueEnum};
+use clap::{arg, command, Args, ColorChoice, Parser, ValueEnum};
 use nockvm::jets::hot::HotEntry;
 use nockvm::noun::Atom;
+use nockvm::trace::{
+    IntervalFilter, JsonBackend, KeywordFilter, TraceBackend, TraceFilter, TraceInfo,
+    TracingBackend,
+};
 use tokio::fs;
-use tracing::{debug, info, Level};
+use tracing::{debug, info, Level, Subscriber};
 use tracing_subscriber::fmt::format::Writer;
 use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormatFields};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::{fmt, EnvFilter};
+use tracing_subscriber::{fmt, EnvFilter, Layer};
 
 use crate::export::ExportedState;
 use crate::kernel::form::Kernel;
@@ -21,7 +25,7 @@ use crate::utils::error::{CrownError, ExternalError};
 use crate::{default_data_dir, AtomExt, NockApp};
 
 const DEFAULT_SAVE_INTERVAL: u64 = 120000;
-const DEFAULT_LOG_FILTER: &str = "info,slogger=trace";
+const DEFAULT_LOG_FILTER: &str = "info";
 
 #[derive(Debug, Clone, ValueEnum)]
 pub enum NockStackSize {
@@ -31,6 +35,65 @@ pub enum NockStackSize {
     Medium,
     Large,
     Huge,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum TraceMode {
+    Json,
+    Tracing,
+}
+
+/// Trace options for NockApp
+#[derive(Args, Clone, Debug, Default)]
+pub struct TraceOpts {
+    /// You don't really need this, but it is here in case a new tracing backend is added or you want to use JSON tracing.
+    /// We strongly recommend using Tracy
+    #[arg(long = "trace", help = "Make a Sword trace in json or tracing mode")]
+    pub mode: Option<TraceMode>,
+
+    #[arg(long, requires = "trace")]
+    pub keyword_filter: Option<String>,
+
+    #[arg(long, requires = "trace")]
+    pub interval_filter: Option<usize>,
+}
+
+impl From<TraceOpts> for Option<TraceInfo> {
+    fn from(trace_opts: TraceOpts) -> Self {
+        let keyword_filter = trace_opts
+            .keyword_filter
+            .map(|v| v.split(",").map(String::from).collect::<Vec<String>>())
+            .map(|keywords| KeywordFilter { keywords });
+        let interval_filter = trace_opts
+            .interval_filter
+            .map(|interval| IntervalFilter { interval, cnt: 0 });
+
+        let filter = match (keyword_filter, interval_filter) {
+            (Some(a), Some(b)) => Some(a.or(b).boxed()),
+            (Some(a), _) => Some(a.boxed()),
+            (_, Some(b)) => Some(b.boxed()),
+            (None, None) => None,
+        };
+
+        trace_opts
+            .mode
+            .map(|mode| match mode {
+                TraceMode::Json => {
+                    let file = std::fs::File::create("trace.json")
+                        .expect("Cannot create trace file trace.json");
+                    let pid = std::process::id();
+                    let process_start = std::time::Instant::now();
+
+                    Box::new(JsonBackend {
+                        file,
+                        pid,
+                        process_start,
+                    }) as Box<dyn TraceBackend>
+                }
+                TraceMode::Tracing => Box::new(TracingBackend::new()),
+            })
+            .map(|backend| TraceInfo { backend, filter })
+    }
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -43,8 +106,8 @@ pub struct Cli {
     )]
     pub new: bool,
 
-    #[arg(long, help = "Make an Sword trace", default_value = "false")]
-    pub trace: bool,
+    #[command(flatten)]
+    pub trace_opts: TraceOpts,
 
     #[arg(
         long,
@@ -89,7 +152,7 @@ pub fn default_boot_cli(new: bool) -> Cli {
     Cli {
         save_interval: DEFAULT_SAVE_INTERVAL,
         new,
-        trace: false,
+        trace_opts: Default::default(),
         color: ColorChoice::Auto,
         state_jam: None,
         export_state_jam: None,
@@ -193,11 +256,34 @@ where
     }
 }
 
-/// Initialize tracing with appropriate configuration based on CLI arguments.
-pub fn init_default_tracing(cli: &Cli) {
+fn init_with_default_filter<T: Subscriber + Send + Sync + for<'a> LookupSpan<'a>>(reg: T) {
     let filter = EnvFilter::new(
         std::env::var("RUST_LOG").unwrap_or_else(|_| DEFAULT_LOG_FILTER.to_string()),
     );
+
+    let reg = reg.with(filter);
+
+    #[cfg(feature = "tracing-tracy")]
+    if std::env::var("TRACY_DISABLE").is_err() {
+        let tracy = tracing_tracy::TracyLayer::default();
+        let only_nockcode = std::env::var("TRACY_ONLY_NOCKCODE").is_ok();
+        if only_nockcode {
+            let nockcode_filter =
+                tracing_subscriber::filter::filter_fn(move |meta| meta.target() == "nockcode");
+            reg.with(tracy.with_filter(nockcode_filter)).init();
+        } else {
+            reg.with(tracy).init();
+        }
+        info!("Tracy tracing is enabled");
+        return;
+    } else {
+        info!("Tracy tracing is disabled");
+    }
+    reg.init();
+}
+
+/// Initialize tracing with appropriate configuration based on CLI arguments.
+pub fn init_default_tracing(cli: &Cli) {
     let use_ansi = cli.color == ColorChoice::Auto || cli.color == ColorChoice::Always;
 
     // Build and initialize the subscriber
@@ -208,20 +294,16 @@ pub fn init_default_tracing(cli: &Cli) {
             .with_ansi(use_ansi)
             .event_format(MinimalFormatter);
 
-        tracing_subscriber::registry()
-            .with(fmt_layer)
-            .with(filter)
-            .init();
+        init_with_default_filter(tracing_subscriber::registry().with(fmt_layer));
     } else {
-        tracing_subscriber::registry()
-            .with(
+        init_with_default_filter(
+            tracing_subscriber::registry().with(
                 fmt::layer()
                     .with_ansi(use_ansi)
                     .with_target(true)
                     .with_level(true),
-            )
-            .with(filter)
-            .init();
+            ),
+        );
     }
 }
 
@@ -288,28 +370,38 @@ pub async fn setup_<J: Jammer + Send + 'static>(
     let kernel_f = async |checkpoint| {
         let kernel: Kernel<SaveableCheckpoint> = match cli.stack_size {
             NockStackSize::Tiny => {
-                Kernel::load_with_hot_state_tiny(jam, checkpoint, hot_state, test_jets, cli.trace)
-                    .await?
+                Kernel::load_with_hot_state_tiny(
+                    jam, checkpoint, hot_state, test_jets, cli.trace_opts,
+                )
+                .await?
             }
             NockStackSize::Small => {
-                Kernel::load_with_hot_state_small(jam, checkpoint, hot_state, test_jets, cli.trace)
-                    .await?
+                Kernel::load_with_hot_state_small(
+                    jam, checkpoint, hot_state, test_jets, cli.trace_opts,
+                )
+                .await?
             }
             NockStackSize::Normal => {
-                Kernel::load_with_hot_state(jam, checkpoint, hot_state, test_jets, cli.trace)
+                Kernel::load_with_hot_state(jam, checkpoint, hot_state, test_jets, cli.trace_opts)
                     .await?
             }
             NockStackSize::Medium => {
-                Kernel::load_with_hot_state_medium(jam, checkpoint, hot_state, test_jets, cli.trace)
-                    .await?
+                Kernel::load_with_hot_state_medium(
+                    jam, checkpoint, hot_state, test_jets, cli.trace_opts,
+                )
+                .await?
             }
             NockStackSize::Large => {
-                Kernel::load_with_hot_state_large(jam, checkpoint, hot_state, test_jets, cli.trace)
-                    .await?
+                Kernel::load_with_hot_state_large(
+                    jam, checkpoint, hot_state, test_jets, cli.trace_opts,
+                )
+                .await?
             }
             NockStackSize::Huge => {
-                Kernel::load_with_hot_state_huge(jam, checkpoint, hot_state, test_jets, cli.trace)
-                    .await?
+                Kernel::load_with_hot_state_huge(
+                    jam, checkpoint, hot_state, test_jets, cli.trace_opts,
+                )
+                .await?
             }
         };
         let res: Result<Kernel<SaveableCheckpoint>, CrownError<ExternalError>> = Ok(kernel);
@@ -361,7 +453,7 @@ async fn import_kernel_state<C>(
 pub fn parse_test_jets(jets: &str) -> Vec<NounSlab> {
     let mut test_jets = Vec::new();
     for jet in jets.split(',') {
-        if jet == "" {
+        if jet.is_empty() {
             continue;
         }
         let mut slab = NounSlab::new();
@@ -381,7 +473,7 @@ pub fn parse_test_jets(jets: &str) -> Vec<NounSlab> {
                 .as_noun();
                 let path_el = nockvm::noun::T(&mut slab, &[sym_atom, ver_atom]);
                 path = nockvm::noun::T(&mut slab, &[path_el, path]);
-            } else if el == "" {
+            } else if el.is_empty() {
                 continue;
             } else {
                 let el_atom = Atom::from_value(&mut slab, el)

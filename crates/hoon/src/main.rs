@@ -1,6 +1,5 @@
 // Execute nock scripts
 use clap::Parser;
-use tokio;
 use tracing::info;
 use zkvm_jetpack::hot::produce_prover_hot_state;
 

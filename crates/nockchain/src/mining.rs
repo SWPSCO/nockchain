@@ -16,8 +16,9 @@ use nockvm::noun::{Atom, D, NO, T, YES};
 use nockvm_macros::tas;
 use rand::Rng;
 use tokio::sync::Mutex;
-use tracing::{debug, info, instrument, warn};
+use tracing::{debug, error, info, instrument, warn};
 use zkvm_jetpack::form::PRIME;
+use zkvm_jetpack::hand::structs::HoonList;
 use zkvm_jetpack::noun::noun_ext::NounExt as OtherNounExt;
 
 pub enum MiningWire {
@@ -148,40 +149,64 @@ pub fn create_mining_driver(
                             let (serf, id, slab_res) = mining_result.expect("Mining attempt result failed");
                             let slab = slab_res.expect("Mining attempt result failed");
                             let result = unsafe { slab.root() };
-                            // If the mining attempt was cancelled, the goof goes into poke_swap which returns
-                            // %poke followed by the cancelled poke. So we check for hed = %poke
-                            // to identify a cancelled attempt.
-                            let hed = result.as_cell().expect("Expected result to be a cell").head();
-                            if hed.is_atom() && hed.eq_bytes("poke") {
-                                //  mining attempt was cancelled. restart with current block header.
-                                debug!("mining attempt cancelled. restarting on new block header. thread={id}");
-                                start_mining_attempt(serf, mining_data.lock().await, &mut mining_attempts, None, id).await;
-                            } else {
-                                //  there should only be one effect
-                                let effect = result.as_cell().expect("Expected result to be a cell").head();
-                                let [head, res, tail] = effect.uncell().expect("Expected three elements in mining result");
-                                if head.eq_bytes("mine-result") {
-                                    if unsafe { res.raw_equals(&D(0)) } {
-                                        // success
-                                        // poke main kernel with mined block and start a new attempt
-                                        info!("Found block! thread={id}");
-                                        let [hash, poke] = tail.uncell().expect("Expected two elements in tail");
-                                        let mut poke_slab = NounSlab::new();
-                                        poke_slab.copy_into(poke);
-                                        handle.poke(MiningWire::Mined.to_wire(), poke_slab).await.expect("Could not poke nockchain with mined PoW");
 
-                                        // launch new attempt
-                                        let mut nonce_slab = NounSlab::new();
-                                        nonce_slab.copy_into(hash);
-                                        start_mining_attempt(serf, mining_data.lock().await, &mut mining_attempts, Some(nonce_slab), id).await;
-                                    } else {
-                                        // failure
-                                        //  launch new attempt, using hash as new nonce
-                                        //  nonce is tail
-                                        debug!("didn't find block, starting new attempt. thread={id}");
-                                        let mut nonce_slab = NounSlab::new();
-                                        nonce_slab.copy_into(tail);
-                                        start_mining_attempt(serf, mining_data.lock().await, &mut mining_attempts, Some(nonce_slab), id).await;
+                            match HoonList::try_from(*result) {
+                                Err(_) => {
+                                    start_mining_attempt(serf, mining_data.lock().await, &mut mining_attempts, None, id).await;
+                                }
+                                Ok(effects) => {
+                                    let mining_result =
+                                        effects.filter_map(|effect| {
+                                            if effect.is_atom() {
+                                                None
+                                            } else {
+                                                let Ok(effect_cell) = effect.as_cell() else {
+                                                    error!("Expected effect to be a cell");
+                                                    return None;
+                                                };
+                                                let hed = effect_cell.head();
+                                                if hed.eq_bytes("mine-result") {
+                                                    Some(effect_cell.tail())
+                                                } else {
+                                                    None
+                                                }
+                                            }
+                                    }).next();
+                                    match mining_result {
+                                        None => {
+                                            start_mining_attempt(serf, mining_data.lock().await, &mut mining_attempts, None, id).await;
+                                        },
+                                        Some(mine_result) => {
+                                            let Ok([res, tail]) = mine_result.uncell() else {
+                                                error!("Expected two elements in mining result");
+                                                return Err(NockAppError::OtherError);
+                                            };
+                                            if unsafe { res.raw_equals(&D(0)) } {
+                                                // success
+                                                // poke main kernel with mined block and start a new attempt
+                                                info!("Found block! thread={id}");
+                                                let Ok([hash, poke]) = tail.uncell() else {
+                                                    error!("Expected two elements in tail");
+                                                    return Err(NockAppError::OtherError);
+                                                };
+                                                let mut poke_slab = NounSlab::new();
+                                                poke_slab.copy_into(poke);
+                                                handle.poke(MiningWire::Mined.to_wire(), poke_slab).await.expect("Could not poke nockchain with mined PoW");
+
+                                                // launch new attempt
+                                                let mut nonce_slab = NounSlab::new();
+                                                nonce_slab.copy_into(hash);
+                                                start_mining_attempt(serf, mining_data.lock().await, &mut mining_attempts, Some(nonce_slab), id).await;
+                                            } else {
+                                                // failure
+                                                //  launch new attempt, using hash as new nonce
+                                                //  nonce is tail
+                                                debug!("didn't find block, starting new attempt. thread={id}");
+                                                let mut nonce_slab = NounSlab::new();
+                                                nonce_slab.copy_into(tail);
+                                                start_mining_attempt(serf, mining_data.lock().await, &mut mining_attempts, Some(nonce_slab), id).await;
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -238,7 +263,7 @@ pub fn create_mining_driver(
                                         hot_state.clone(),
                                         NOCK_STACK_SIZE_TINY,
                                         test_jets.clone(),
-                                        false,
+                                        Default::default(),
                                     )
                                     .await
                                     .expect("Could not load mining kernel");

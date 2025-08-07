@@ -519,6 +519,37 @@
     |=  [i=@ chal=belt]
     [i chal]
   ::
+  ::  Compute derived challenges
+  ++  augment-challenges
+    ~/  %augment-challenges
+    |=  [raw-chals=(list belt) [s=* f=*]]
+    ^-  bpoly
+    ~+
+    ~|  "make sure that you are passing in the right number of raw challenges, especially in your test arm"
+    ?>  (gte (lent raw-chals) num-chals)  ::  ensure we have enough random values
+    =/  raw-chals  (scag num-chals raw-chals)
+    =/  named-chals
+      %-  ~(gas by *(map term belt))
+      (zip-up chal-names-basic raw-chals)
+    =/  a    (got-pelt named-chals %a)
+    =/  b    (got-pelt named-chals %b)
+    =/  c    (got-pelt named-chals %c)
+    =/  alf  (got-pelt named-chals %alf)
+    =/  inv-alf
+      (pinv (got-pelt named-chals %alf))
+    =/  input-ifp
+      =-  (compress-pelt ~[a b c] ~[size dyck leaf]:-)
+      (build-tree-data:constraint-util s alf)
+    %-  init-bpoly
+    %+  weld  raw-chals
+    :~  (~(snag bop [3 inv-alf]) 0)
+        (~(snag bop [3 inv-alf]) 1)
+        (~(snag bop [3 inv-alf]) 2)
+        (~(snag bop [3 input-ifp]) 0)
+        (~(snag bop [3 input-ifp]) 1)
+        (~(snag bop [3 input-ifp]) 2)
+    ==
+  ::
   ++  zip-chals
     ~/  %zip-chals
     |=  [names=(set term) raw-chals=(list felt)]

@@ -4,10 +4,11 @@ version.workspace = true
 edition.workspace = true
 
 [features]
-default = ["slog-tracing"]
+default = ["slog-tracing", "tracing-tracy"]
 slog-tracing = []
 trait-alias = []
 bazel_build = []
+tracing-tracy = ["dep:tracing-tracy"]
 
 [dependencies]
 anyhow = { workspace = true }
@@ -42,8 +43,14 @@ tokio = { workspace = true, features = ["time", "sync", "signal"] }
 tokio-util = { workspace = true, features = ["rt"] }
 tower-http = { workspace = true }
 tracing = { workspace = true }
+tracing-opentelemetry.workspace = true
 tracing-subscriber = { workspace = true }
 tracing-test = { workspace = true }
+tracing-tracy = { workspace = true, optional = true, features = [
+    "enable",
+    "manual-lifetime",
+    "ondemand",
+] }
 yaque = { workspace = true }
 
 # Let's Encrypt and HTTPS support
@@ -61,7 +68,6 @@ opentelemetry.workspace = true
 opentelemetry-otlp.workspace = true
 opentelemetry_sdk.workspace = true
 tonic.workspace = true
-tracing-opentelemetry.workspace = true
 
 [dev-dependencies]
 

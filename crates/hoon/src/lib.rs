@@ -8,7 +8,7 @@ use nockvm::interpreter::Context;
 use nockvm::jets::cold::Cold;
 use nockvm::jets::hot::{HotEntry, URBIT_HOT_STATE};
 use nockvm::mem::NockStack;
-use nockvm::trace::TraceInfo;
+use nockvm::trace::{JsonBackend, TraceInfo};
 
 /// Command line arguments
 #[derive(Parser, Debug, Clone)]
@@ -29,15 +29,44 @@ pub struct HoonCli {
 }
 
 pub async fn run(cli: HoonCli, hot_state: &[HotEntry]) -> Result<(), Box<dyn std::error::Error>> {
-    let trace_info = if cli.boot.trace {
-        let file = File::create("trace.json").expect("Cannot create trace file trace.json");
-        let pid = std::process::id();
-        let process_start = std::time::Instant::now();
-        Some(TraceInfo {
-            file,
-            pid,
-            process_start,
-        })
+    // let trace_info = if cli.boot.trace_opts {
+    //     let file = File::create("trace.json").expect("Cannot create trace file trace.json");
+    //     let pid = std::process::id();
+    //     let process_start = std::time::Instant::now();
+    //     Some(TraceInfo {
+    //         file,
+    //         pid,
+    //         process_start,
+    //     })
+    // } else {
+    //     None
+    // };
+    let trace_info = if let Some(trace_mode) = cli.boot.trace_opts.mode {
+        match trace_mode {
+            nockapp::kernel::boot::TraceMode::Json => {
+                let file = File::create("trace.json").expect("Cannot create trace file trace.json");
+                let pid = std::process::id();
+                let process_start = std::time::Instant::now();
+                Some(
+                    JsonBackend {
+                        file,
+                        pid,
+                        process_start,
+                    }
+                    .into(),
+                )
+            }
+            _ => None,
+        }
+        // let file = File::create("trace.json").expect("Cannot create trace file trace.json");
+        // let pid = std::process::id();
+        // let process_start = std::time::Instant::now();
+        // let json_backend = JsonBackend {
+        //     file,
+        //     pid,
+        //     process_start,
+        // };
+        // Some(json_backend.into())
     } else {
         None
     };

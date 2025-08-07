@@ -798,13 +798,17 @@
     ?~  inputs
       (birth-children children new-page-number)
     ?.  (validate:input i.inputs)
-      ~&  >>>
-          :*  %failed-spend-validate
-              "note name "
-              name.note.i.inputs
-              " signature "
-              signature.spend.i.inputs
-          ==
+      =/  log-message
+        %+  rap  3
+        :~   'spend: outputs: Failed validation for note name '
+              %-  crip
+              ^-  tape
+              ~[first ' ' last]:(to-b58:nname name.note.i.inputs)
+              ' with signature '
+              %-  crip
+              <signature.spend.i.inputs>
+        ==
+      ~>  %slog.[1 log-message]
       !!
     =/  seed-list=(list seed)  ~(tap z-in seeds.spend.i.inputs)
     |-
@@ -835,7 +839,7 @@
     ?:  (~(has z-by children) recipient.sed)
       =/  child=output  (~(got z-by children) recipient.sed)
       ?:  (~(has z-in seeds.child) sed)
-        ~&  >>>  "can't add same seed to an output more than once"
+        ~>  %slog.[1 'spend: outputs: cannot add same seed to an output more than once']
         !!
       =.  seeds.child  (~(put z-in seeds.child) sed)
       (~(put z-by children) recipient.sed child)
@@ -1213,14 +1217,14 @@
     $~  [m=1 pubkeys=*(z-set schnorr-pubkey)]
     [m=@udD pubkeys=(z-set schnorr-pubkey)]
   ::
-  ++  validate
+  ++  spendable
     |=  =form
     ^-  ?
-    ?&  (validate-intermediate form)
+    ?&  (spendable-intermediate form)
         (lte m.form ~(wyt z-in pubkeys.form))
     ==
   ::
-  ++  validate-intermediate
+  ++  spendable-intermediate
     |=  form
     ^-  ?
     =/  num-keys=@  ~(wyt z-in pubkeys)
@@ -1242,7 +1246,7 @@
   ++  check
     |=  =form
     ^-  ^form
-    ?.  (validate-intermediate form)
+    ?.  (spendable-intermediate form)
       !!
     form
   ::
@@ -1328,7 +1332,12 @@
         ^+  lock
         %-  check
         ?:  (~(has z-in pubkeys.lock) new-key)
-          ~&  >>>  "signer {<new-key>} already exists in lock"
+          =/  log-message
+            %+  rap  3
+            :~  'lock: signers: signer already exists in lock: '
+                (to-b58:schnorr-pubkey new-key)
+            ==
+          ~>  %slog.[1 log-message]
           lock
         =/  new-keys=(z-set schnorr-pubkey)
           (~(put z-in pubkeys.lock) new-key)
@@ -1353,16 +1362,27 @@
         ^+  lock
         %-  check
         ?.  (~(has z-in pubkeys.lock) no-key)
-          ~&  >>>  "key {<no-key>} does not exist in lock"
+          =/  log-message
+            %+  rap  3
+            :~  'lock: signers: key does not exist in lock: '
+                (to-b58:schnorr-pubkey no-key)
+            ==
           lock
         =/  new-keys=(z-set schnorr-pubkey)
           (~(del z-in pubkeys.lock) no-key)
         =/  num-keys=@  ~(wyt z-in new-keys)
-        ~?  >>>  (lth num-keys m.lock)
-          """
-          warning: lock requires more signatures {(scow %ud m.lock)} than there
-          are in .pubkeys: {(scow %ud num-keys)}
-          """
+        ?:  (lth num-keys m.lock)
+          =/  log-message
+            %+  rap  3
+            :~  'lock: signers: '
+                'lock requires more signatures than there are in .pubkeys: '
+                'signatures: '
+                (rsh [3 2] (scot %ui m.lock))
+                'pubkeys: '
+                (rsh [3 2] (scot %ui num-keys))
+            ==
+          ~>  %slog.[1 log-message]
+          lock(pubkeys new-keys)
         lock(pubkeys new-keys)
       ::
       ++  multi
@@ -1538,7 +1558,7 @@
         %+  levy  ~(tap z-by form)
         |=  [=lock s=@]
         ?&  !=(s 0)
-            (validate:^lock lock)
+            (spendable:^lock lock)
         ==
     ==
   --
@@ -1624,17 +1644,6 @@
       %|
     %+  levy  ~(tap z-by form)
     |=  [=lock =coins]
-    =/  based-print
-      ;:  (cury cat 3)
-        'based-split-check: '
-        'coin-not-zero: '
-        ?:(!=(0 coins) 'yes' 'no')
-        ' coins-based: '
-        ?:((^based coins) 'yes' 'no')
-        ' lock-based: '
-        ?:((based:^lock lock) 'yes' 'no')
-      ==
-    ~>  %slog.[3 based-print]
     ?&  !=(0 coins)
         (^based coins)
         (based:^lock lock)
@@ -2174,15 +2183,29 @@
     ^-  (unit form)
     %-  mole
     |.
+    =/  id-b58=cord  (to-b58:hash id.tx)
     ?.  (validate:^tx tx new-page-number)
-      ~>  %slog.[0 leaf+"tx invalid"]  !!
+      =/  log-message
+        %+  rap  3
+        :~  'tx-acc: process: '
+            'Invalid transaction: '
+            id-b58
+        ==
+      ~>  %slog.[1 log-message]  !!
     ::
     ::  process outputs
     =.  balance.tx-acc
       %+  roll  ~(val z-by outputs.tx)
       |=  [op=output bal=_balance.tx-acc]
       ?:  (~(has z-by bal) name.note.op)
-        ~>  %slog.[0 leaf+"tx output already exists in balance"]
+        =/  log-message
+          %+  rap  3
+          :~  'tx-acc: process: '
+              'Output already exists in balance: '
+              'tx: '
+              id-b58
+          ==
+        ~>  %slog.[1 log-message]
         !!
       (~(put z-by bal) name.note.op note.op)
     ::
@@ -2191,7 +2214,14 @@
       %+  roll  ~(val z-by inputs.tx)
       |=  [ip=input tic=timelock-range tac=_tx-acc]
       ?.  =(`note.ip (~(get z-by balance.tx-acc) name.note.ip))
-        ~>  %slog.[0 leaf+"tx input does not exist in balance"]
+        =/  log-message
+          %+  rap  3
+          :~  'tx-acc: process: '
+              'Input does not exist in balance: '
+              'tx: '
+              id-b58
+        ==
+        ~>  %slog.[1 log-message]
         !!
       =.  balance.tac  (~(del z-by balance.tac) name.note.ip)
       =.  fees.tac  (add fees.tac fee.spend.ip)
@@ -2203,7 +2233,13 @@
       [tic tac]
     ::
     ?.  (check:timelock-range tic new-page-number)
-      ~>  %slog.[0 leaf+"failed timelock check"]  !!
+      =/  log-message
+        %+  rap  3
+        :~  'tx-acc: process: '
+            'Failed timelock check: '
+            id-b58
+        ==
+      ~>  %slog.[1 log-message]  !!
     ::
     %_  tac
       txs   (~(put z-in txs.tac) tx)

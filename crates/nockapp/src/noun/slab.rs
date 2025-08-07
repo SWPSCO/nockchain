@@ -461,6 +461,12 @@ fn min_idx_for_size(sz: usize) -> usize {
 
 pub struct NounMap<V>(IntMap<u64, Vec<(Noun, V)>>);
 
+impl<V> Default for NounMap<V> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<V> NounMap<V> {
     pub fn new() -> Self {
         NounMap(IntMap::new())

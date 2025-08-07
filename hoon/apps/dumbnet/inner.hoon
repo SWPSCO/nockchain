@@ -44,7 +44,7 @@
       |=  arg=load-kernel-state:dk
       ^-  kernel-state:dk
       ?.  ?=(%5 -.arg)
-        ~>  %slog.[0 leaf+"state upgrade required"]
+        ~>  %slog.[0 'load: State upgrade required']
         ?-  -.arg
             ::
           %0  $(arg (state-0-to-1 arg))
@@ -62,7 +62,7 @@
       [%5 new-consensus a.arg m.arg d.arg constants.arg]
     ++  new-consensus
       ^-  consensus-state-5:dk
-      ~>  %slog.[0 leaf+"This upgrade may take some time"]
+      ~>  %slog.[0 'load: This upgrade may take some time']
       =/  blocks-needed-by=(z-jug tx-id:t block-id:t)
         %-  ~(rep z-by blocks.c.arg)
         |=  [[=block-id:t pag=local-page:t] bnb=(z-jug tx-id:t block-id:t)]
@@ -72,19 +72,24 @@
         ^-  (z-jug tx-id:t block-id:t)
         =+
           ?.  (~(has z-by raw-txs.c.arg) tx-id)
-            ~>  %slog.[0 leaf+"Missing transaction in consensus state. Please alert the developers."]  ~
+            ~>  %slog.[1 'load: Missing transaction in consensus state. Please alert the developers.']  ~
             ~
         (~(put z-ju bnb) tx-id block-id)
-      ~>  %slog.[0 leaf+"Indexed blocks by transaction id"]
+      ~>  %slog.[0 'load: Indexed blocks by transaction id']
       =/  rtx=(map tx-id:t *)  raw-txs.c.arg
       =/  bnb=(map tx-id:t *)  blocks-needed-by
       =/  excluded-map=(map tx-id:t *)  (~(dif z-by rtx) bnb)
       =/  excluded-txs=(z-set tx-id:t)  ~(key z-by excluded-map)
       =+
         ?:  =(*(z-set tx-id:t) excluded-txs)
-          ~>  %slog.[0 leaf+"Consensus state is consistent"]  ~
+          ~>  %slog.[0 'load: Consensus state is consistent']  ~
         :: this is only a concern at upgrade time. After the upgrade this is allowed to happen
-        ~>  %slog.[0 leaf+"There are transactions in consensus state which are not included in any block. Please inform the developers."]  ~
+        =/  log-message
+          %-  crip
+          "load: ".
+          "There are transactions in consensus state which are not included in any block. ".
+          "Please inform the developers."
+        ~>  %slog.[1 log-message]  ~
       =/  [spent-by=(z-jug nname:t tx-id:t) raw-txs=(z-map tx-id:t [raw-tx:t @])]
         %-  ~(rep z-by raw-txs.c.arg)
         |=  [[=tx-id:t =raw-tx:t] [sb=(z-jug nname:t tx-id:t) rtx=(z-map tx-id:t [raw-tx:t @])]]
@@ -95,8 +100,8 @@
           (~(put z-ju sb) nname tx-id)
         =.  rtx  (~(put z-by rtx) tx-id [raw-tx 0])
         [sb rtx]
-      ~>  %slog.[0 leaf+"Indexed transactions by spent notes"]
-      ~>  %slog.[0 leaf+"Upgrade state version 4 to version 5 complete"]
+      ~>  %slog.[0 'load: Indexed transactions by spent notes']
+      ~>  %slog.[0 'load: Upgrade state version 4 to version 5 complete']
       =|  pending-blocks=(z-map block-id:t [=page:t heard-at=@])
       [[blocks-needed-by excluded-txs spent-by pending-blocks] c.arg(raw-txs raw-txs)]
     --
@@ -105,7 +110,7 @@
     ++  state-3-to-4
       |=  arg=kernel-state-3:dk
       ^-  kernel-state-4:dk
-      ~>  %slog.[0 leaf+"state version 3 to version 4"]
+      ~>  %slog.[0 'load: State version 3 to version 4']
       =|  p=pending-state-4:dk :: empty pending state
       :: reset candidate block
       ?~  heaviest-block.c.arg
@@ -117,7 +122,7 @@
     ++  state-2-to-3
       |=  arg=kernel-state-2:dk
       ^-  kernel-state-3:dk
-      ~>  %slog.[0 leaf+"state version 2 to version 3"]
+      ~>  %slog.[0 'load: State version 2 to version 3']
       =/  raw-txs=(z-map tx-id:t raw-tx:t)
         %-  ~(rep z-by txs.c.arg)
         |=  [[block-id:t m=(z-map tx-id:t tx:t)] n=(z-map tx-id:t raw-tx:t)]
@@ -142,13 +147,13 @@
     ++  state-1-to-2
       |=  arg=kernel-state-1:dk
       ^-  kernel-state-2:dk
-      ~>  %slog.[0 leaf+"state version 0 to version 1"]
+      ~>  %slog.[0 'load: State version 0 to version 1']
       [%2 c.arg p.arg a.arg m.arg d.arg constants.arg]
     ::  upgrade kernel-state-0 to kernel-state-1
     ++  state-0-to-1
       |=  arg=kernel-state-0:dk
       ^-  kernel-state-1:dk
-      ~>  %slog.[0 leaf+"state version 0 to version 1"]
+      ~>  %slog.[0 'load: State version 0 to version 1']
       =/  d  [*(unit page-number:t) heaviest-chain.d.arg]
       =.  d  (compute-highest blocks.c.arg pending-blocks.p.arg d constants.arg)
       [%1 c.arg p.arg a.arg m.arg d constants.arg]
@@ -193,7 +198,7 @@
       =/  block-at-checkpoint  (~(get z-by heaviest-chain.d.arg) -.i.checkpoints)
       ?~  block-at-checkpoint  $(checkpoints t.checkpoints)
       ?.  =(u.block-at-checkpoint +.i.checkpoints)
-        ~>  %slog.[1 leaf+"Mismatched checkpoint when loading, resetting state"]
+        ~>  %slog.[1 'load: Mismatched checkpoint when loading, resetting state']
         =|  nk=kernel-state:dk
         :: preserve mining options and init status, otherwise drop all consensus state
         =.  mining.m.nk  mining.m.arg
@@ -393,17 +398,17 @@
     =/  old-state  m.k
     =/  cause  ((soft cause:dk) dat)
     ?~  cause
-      ~>  %slog.[0 [%leaf "error: badly formatted cause, should never occur."]]
+      ~>  %slog.[1 [%leaf "Error: badly formatted cause, should never occur."]]
       ~&  ;;([thing=@t ver=@ type=@t] [-.dat +<.dat +>-.dat])
       =/  peer-id  (get-peer-id wir)
       ?~  peer-id
         `k
-      ~>  %slog.[0 [leaf+"peer-id found in wire of badly formatted cause, emitting %liar-peer"]]
+      ~>  %slog.[1 [leaf+"Peer-id found in wire of badly formatted cause, emitting %liar-peer"]]
       [[%liar-peer u.peer-id %invalid-fact]~ k]
     =/  cause  u.cause
     ::~&  "inner dumbnet cause: {<[-.cause -.+.cause]>}"
     =^  effs  k
-      ?+    wir  ~|("unsupported wire: {<wir>}" !!)
+      ?+    wir  ~|("Unsupported wire: {<wir>}" !!)
           [%poke src=?(%nc %timer %sys %miner %npc) ver=@ *]
         ?-  -.cause
           %command  (handle-command now eny p.cause)
@@ -438,7 +443,7 @@
         `k
       ::
       ?~  btc-data.c.k
-        ~>  %slog.[0 leaf+"btc-data not set, crashing"]
+        ~>  %slog.[1 'heard-genesis-block: Bitcoin block hash not set!']
         !!
       ?.  (check-genesis pag u.btc-data.c.k genesis-seal.c.k)
         ::  is not a genesis block, throw it out and inform the king. note this
@@ -446,7 +451,7 @@
         ::  thus cheap to make, so we cannot trust their block-id.
         [[(liar-effect wir %not-a-genesis-block)]~ k]
       ::  heard valid genesis block
-      ~>  %slog.[0 leaf+"validated genesis block!"]
+      ~>  %slog.[0 leaf+"heard-genesis-block: Validated genesis block!"]
       (accept-block now eny pag *tx-acc:t)
     ::
     ++  heard-block
@@ -454,7 +459,7 @@
       ^-  [(list effect:dk) kernel-state:dk]
       ?:  =(*page-number:t height.pag)
         ::  heard genesis block
-        ~>  %slog.[0 leaf+"heard genesis block"]
+        ~>  %slog.[0 leaf+"heard-block: Heard genesis block"]
         (heard-genesis-block wir now eny pag)
       ?~  heaviest-block.c.k
         =/  peer-id=(unit @)  (get-peer-id wir)
@@ -470,7 +475,7 @@
             (~(got z-by blocks.c.k) u.heaviest-block.c.k)
           =/  peer-id=(unit @)  (get-peer-id wir)
           ?~  peer-id
-            ~|("unsupported wire: {<wir>}" !!)
+            ~|("heard-block: Unsupported wire: {<wir>}" !!)
           :_  k
           (missing-parent-effects digest.pag height.pag u.peer-id)
         ::  received block, don't have parent, isn't heaviest, ignore.
@@ -481,7 +486,7 @@
       ?:  (check-duplicate-block digest.pag)
         :: do almost nothing (idempotency), we already have block
         :: however we *should* tell the runtime we have it
-        ~>  %slog.[0 leaf+"heard block: duplicate block"]
+        ~>  %slog.[1 leaf+"heard-block: Duplicate block"]
         :_  k
         [%seen %block digest.pag ~]~
       ::
@@ -490,7 +495,7 @@
       ::  should be %liar-block-id. this tells the runtime that
       ::  anybody who sends us this block id is a liar
       ?.  (check-digest:page:t pag)
-        ~>  %slog.[0 leaf+"digest is not valid"]
+        ~>  %slog.[1 leaf+"heard-block: Digest is not valid"]
         :_  k
         [(liar-effect wir %page-digest-invalid)]~
       ::
@@ -525,7 +530,7 @@
         [%liar-block-id digest.pag +.check-page-without-txs]
       ::
       ?.  (check-pow pag)
-        ~>  %slog.[0 leaf+"heard-block: bad pow"]
+        ~>  %slog.[1 leaf+"heard-block: Failed PoW check"]
         :_  k
         %+  snoc  block-effs
         [%liar-block-id digest.pag %failed-pow-check]
@@ -543,7 +548,7 @@
         (add-pending-block:con pag)
       =.  d.k  (update-highest:der height.pag)
       ?:  !=(missing-txs *(list tx-id:t))
-        ~>  %slog.[0 leaf+"missing txs"]
+        ~>  %slog.[0 'heard-block: Missing transactions, requesting from peers']
         ::  block has missing txs
         =.  block-effs
           %+  weld  block-effs
@@ -554,7 +559,7 @@
         :_  k
         ?:  %+  compare-heaviness:page:t  pag
             (~(got z-by blocks.c.k) (need heaviest-block.c.k))
-          ~>  %slog.[0 %leaf^"gossip new heaviest block, have not validated txs yet"]
+          ~>  %slog.[0 'heard-block: Gossiping new heaviest block (transactions pending validation)']
           :-  [%gossip %0 %heard-block pag]
           block-effs
         block-effs
@@ -570,25 +575,31 @@
       ::  extract peer ID from wire
       =/  peer-id=(unit @)  (get-peer-id wir)
       ?~  peer-id
-        ~|("unsupported wire: {<wir>}" !!)
+        ~|("heard-elders: Unsupported wire: {<wir>}" !!)
       =/  ids-lent  (lent ids)
       ?:  (gth ids-lent 24)
+        ~>  %slog.[1 'heard-elders: More than 24 parent hashes received']
         :_  k
         [[%liar-peer u.peer-id %more-than-24-parent-hashes]~]
       ?.  ?|  =(oldest *page-number:t)
               =(ids-lent 24)
           ==
-        ~>  %slog.[0 %leaf^"bad elders: either oldest should be genesis or need 24 elders"]
+        =/  log-message
+          %-  crip
+          "heard-elders: ".
+          "Received parent hashes, but either oldest is genesis ".
+          "or exactly 24 parent hashes were received ".
+          "(expected less than 24 only if oldest is genesis)"
+        ~>  %slog.[1 log-message]
         ::  either oldest is genesis OR we must have received exactly 24 ids
         :_  k
         [[%liar-peer u.peer-id %less-than-24-parent-hashes]~]
-      ::  log
+      ::
       =/  log-message
-        %-  trip
         %^  cat  3
-          'heard elders starting at height '
+          'heard-elders: Received elders starting at height '
         (rsh [3 2] (scot %ui oldest))
-      ~>  %slog.[0 leaf+log-message]
+      ~>  %slog.[0 log-message]
       ::  find highest block we have in the ancestor list
       =/  latest-known=(unit [=block-id:t =page-number:t])
         =/  height  (dec (add oldest ids-lent))
@@ -605,7 +616,7 @@
             :_  k
             [%request %block %by-height *page-number:t]~
           ::  if we have differing genesis blocks, liar
-          ~>  %slog.[0 %leaf^"bad elders: differing genesis blocks"]
+          ~>  %slog.[1 'heard-elders: Received bad response, differing genesis blocks']
           :_  k
           [[%liar-peer u.peer-id %differing-genesis]~]
         ::  request elders of oldest ancestor to catch up faster
@@ -614,22 +625,22 @@
         :: extra log to clarify that this is a deep re-org.
         :: we need to handle this case but we hope to never see this
         =/  log-message
-          %-  trip
           %+  rap  3
-          :~  'DEEP REORG: processed elders and asking for oldest: requesting elders for block '
+          :~  'heard-elders: (DEEP REORG) Requesting oldest ancestor for block '
               (to-b58:hash:t last-id)
               ' at height '
               (rsh [3 2] (scot %ui oldest))
           ==
-        ~>  %slog.[0 %leaf^log-message]
+        ~>  %slog.[0 log-message]
         :_  k
         (missing-parent-effects last-id oldest u.peer-id)
       =/  print-var
-        %-  trip
         %^  cat  3
-          'processed elders and found intersection: requesting next block '
+          %-  crip
+          "heard-elders: Processed elders and found intersection: ".
+          "requesting next block at height "
         (rsh [3 2] (scot %ui +(page-number.u.latest-known)))
-      ~>  %slog.[0 %leaf^print-var]
+      ~>  %slog.[0 print-var]
       ::  request next block after our highest known block
       ::  this will trigger either catchup or reorg from this point
       :_  k
@@ -666,13 +677,15 @@
      =/  check-coinbase=?  =(coinbase.pag *(z-map lock:t @))
      =/  check-height=?  =(height.pag *page-number:t)
      =/  check-btc-hash=?
-       ?~  btc-hash  ~>  %slog.[0 leaf+"Not checking btc hash when validating genesis block"]  %.y
+       ?~  btc-hash
+         ~>  %slog.[0 'check-genesis: Not checking btc hash when validating genesis block']
+         %.y
        =(parent.pag (hash:btc-hash:t u.btc-hash))
      ::
      ::  check that the message matches what's in the seal
      =/  check-msg=?
        ?~  genesis-seal
-         ~>  %slog.[0 leaf+"fatal: genesis seal not set, cannot check genesis block"]  !!
+         ~>  %slog.[1 'check-genesis: Genesis seal not set, cannot check genesis block']  !!
        =((hash:page-msg:t msg.pag) msg-hash.u.genesis-seal)
      ~&  :*  check-digest+check-digest
              check-pow-hash+check-pow-hash
@@ -704,7 +717,7 @@
       |=  pag=page:t
       ^-  ?
       ?.  check-pow-flag:t
-        ~>  %slog.[0 leaf+"WARNING: check-pow-flag is off, skipping pow check"]
+        ~>  %slog.[1 'check-pow: check-pow-flag is off, skipping pow check']
         ::  this case only happens during testing
         %.y
       ?~  pow.pag
@@ -733,15 +746,19 @@
     ++  heard-tx
       |=  [wir=wire now=@da raw=raw-tx:t eny=@]
       ^-  [(list effect:dk) kernel-state:dk]
-      ~>  %slog.[3 leaf+"heard-tx"]
+      ~>  %slog.[0 'heard-tx: Received raw transaction']
       =/  id-b58  (to-b58:hash:t id.raw)
-      ~>  %slog.[3 leaf+(trip (cat 3 'raw-tx: ' id-b58))]
+      ~>  %slog.[0 (cat 3 'heard-tx: Raw transaction id: ' id-b58)]
       ::
       ::  check if we already have raw-tx
       ?:  (has-raw-tx:con id.raw)
         :: do almost nothing (idempotency), we already have it
         :: but do tell the runtime we've already seen it
-        ~>  %slog.[3 leaf+"tx-id-already-seen"]
+        =/  log-message
+          %^  cat  3
+           'heard-tx: Transaction id already seen: '
+          id-b58
+        ~>  %slog.[1 log-message]
         :_  k
         [%seen %tx id.raw]~
       ::
@@ -753,11 +770,17 @@
       ::  check tx-id. this is faster than calling validate:raw-tx (which also checks the id)
       ::  so we do it first
       ?.  =((compute-id:raw-tx:t raw) id.raw)
-        ~>  %slog.[3 leaf+"tx-id-invalid"]
+        =/  log-message
+          %^  cat  3
+            'heard-tx: Invalid transaction id: '
+        id-b58
+        ~>  %slog.[1 log-message]
         :_  k
         [(liar-effect wir %tx-id-invalid)]~
       ?~  softed-tx=((soft raw-tx:t) raw)
-        ~>  %slog.[3 leaf+"tx-not-soft"]
+        ::  note that we should never actually see this case, since we're
+        ::  already softing the cause:dk at the poke entrypoint.
+        ~>  %slog.[1 'heard-tx: Transaction structure is invalid!']
         :_  k
         [(liar-effect wir %tx-not-soft)]~
       ::
@@ -779,30 +802,30 @@
             =.  c.k  c
             (reject-pending-block:con id)
           ::
-          ~>  %slog.[3 leaf+"page-pending-raw-tx-invalid"]
+          ~>  %slog.[1 'heard-tx: Pending blocks waiting on invalid transaction!']
           :_  k
           [(liar-effect wir %page-pending-raw-tx-invalid) ~]
         =^  work  c.k  (add-raw-tx:con raw)
-        ~>  %slog.[3 leaf+"process-ready-blocks"]
+        ~>  %slog.[0 'heard-tx: Processing ready blocks']
         (process-ready-blocks now eny work raw)
       ::  no pending blocks waiting on tx
       ::
       ::  check if any inputs are absent in heaviest balance
       ?.  (inputs-in-heaviest-balance:con raw)
         ::  input(s) in tx not in balance, discard tx
-        ~>  %slog.[3 leaf+"inputs-not-in-heaviest-balance"]
+        ~>  %slog.[1 'heard-tx: Inputs not in heaviest balance, discarding transaction']
         `k
       ::  all inputs in balance
       ::
       ::  check if any inputs are in spent-by
       ?:  (inputs-spent:con raw)
         ::  inputs present in spent-by, discard tx
-        ~>  %slog.[3 leaf+"inputs-in-spent-by"]
+        ~>  %slog.[1 'heard-tx: Inputs present in spent-by, discarding transaction']
         `k
       ::  inputs not present in spent-by
       ?.  (validate:raw-tx:t raw)
         ::  raw-tx doesn't validate.
-        ~>  %slog.[3 leaf+"raw-tx-invalid"]
+        ~>  %slog.[1 'heard-tx: Transaction invalid, discarding']
         :_  k
         [(liar-effect wir %tx-inputs-not-in-spent-by-and-invalid)]~
       ::
@@ -811,7 +834,7 @@
       :: no blocks were depending on this so work should be empty
       ?>  =(~ work)
       ::
-      ~>  %slog.[3 leaf+"heard new valid tx"]
+      ~>  %slog.[0 'heard-tx: Heard new valid transaction']
       :-  ~[[%seen %tx id.raw] [%gossip %0 %heard-tx raw]]
       k
     ::
@@ -869,12 +892,11 @@
         (accept-block now eny pag +.new-transfers)
         ::
           %.n
-        =/  print-var
-          %-  trip
+        =/  log-message
           %^  cat  3
-            'process-block-with-txs: block did not validate. reason: '
+            'process-block-with-txs: Block did not validate. Reason: '
           p.new-transfers
-        ~>  %slog.[0 leaf+print-var]
+        ~>  %slog.[0 log-message]
         ::  did not validate, so we throw the block out and stop
         ::  tracking it
         =.  c.k  (reject-pending-block:con digest.pag)
@@ -899,7 +921,8 @@
         %-  trip
         ^-  @t
         %+  rap  3
-        :~  'block '  (to-b58:hash:t digest.pag)
+        :~  'accept-block: '
+            'block '  (to-b58:hash:t digest.pag)
             ' added to validated blocks at '  (rsh [3 2] (scot %ui height.pag))
             pow-print
         ==
@@ -917,7 +940,7 @@
       =/  is-new-heaviest=?  !=(old-heavy heaviest-block.c.k)
       ::  if block is the new heaviest block, gossip it to peers
       =?  effs  is-new-heaviest
-        ~>  %slog.[0 %leaf^"dumbnet: new heaviest block!"]
+        ~>  %slog.[0 'accept-block: New heaviest block!']
         =/  span=span-effect:dk
           :+  %span  %new-heaviest-chain
           ~['block_height'^n+height.pag 'heaviest_block_digest'^s+(to-b58:hash:t digest.pag)]
@@ -995,12 +1018,12 @@
     ++  liar-effect
       |=  [wir=wire r=term]
       ^-  effect:dk
-      ?+    wir  ~|("bad wire for liar effect! {<wir>}" !!)
+      ?+    wir  ~|("liar-effect: Bad wire for liar effect! {<wir>}" !!)
           [%poke %libp2p ver=@ typ=?(%gossip %response) %peer-id id=@ *]
         [%liar-peer (need (get-peer-id wir)) r]
       ::
           [%poke %npc ver=@ *]
-        ~|  'ATTN: received a bad block or tx via npc driver'
+        ~|  'liar-effect: ATTN: received a bad block or tx via npc driver'
         !!
       ::
           [%poke %miner *]
@@ -1008,7 +1031,7 @@
         ::  told the kernel about it. alternatively, +do-genesis produced
         ::  a bad genesis block. this should never happen, it indicates
         ::  a serious bug otherwise.
-        ~|  'ATTN: miner or +do-genesis produced a bad block!'
+        ~|  'liar-effect: ATTN: miner or +do-genesis produced a bad block!'
         !!
       ==
     ::
@@ -1023,15 +1046,15 @@
     ++  handle-command
       |=  [now=@da eny=@ =command:dk]
       ^-  [(list effect:dk) kernel-state:dk]
-      ~>  %slog.[3 (cat 3 'command: ' -.command)]
+      ~>  %slog.[0 (cat 3 'handle-command: ' -.command)]
       ::  ~&  "handling command: {<-.command>}"
       ?:  &(?=(init-only-command:dk -.command) !init.a.k)
         ::  kernel no longer in init phase, can't do init-only command
-        ~>  %slog.[3 leaf+"kernel no longer in init phase, can't do init-only command"]
+        ~>  %slog.[1 'handle-command: Kernel no longer in init phase, cannot do init-only command']
         `k
       ?:  &(?!(?=(init-command:dk -.command)) init.a.k)
         ::  kernel in init phase, can't perform non-init command
-        ~>  %slog.[3 leaf+"kernel is in init phase, can't do non-init command"]
+        ~>  %slog.[1 'handle-command: Kernel is in init phase, cannot do non-init command']
         `k
       |^
       ?-  -.command
@@ -1082,12 +1105,12 @@
         ?~  heaviest-block.c.k
           ::  no, request genesis block
           ?~  btc-data.c.k
-            ~>  %slog.[0 leaf+"No genesis parent btc block hash set, crashing"]
+            ~>  %slog.[1 'do-born: No genesis parent btc block hash set, crashing']
             !!
           ::  requesting any genesis block, keeping first one we see.
           ::  we do not request blocks by id so we can only request height 0
           ::  blocks and throw out ones we aren't expecting
-          ~>  %slog.[0 leaf+"Requesting genesis block"]
+          ~>  %slog.[0 'do-born: Requesting genesis block']
           :_  k
           [%request %block %by-height *page-number:t]~
         :: yes, so get height N of heaviest block and request the block
@@ -1102,7 +1125,7 @@
         =/  k=kernel-state:dk  k
         =^  mine-effects=(list effect:dk)  k
           do-mine
-        ~>  %slog.[0 leaf+"dumbnet born"]
+        ~>  %slog.[0 'do-born: Dumbnet born']
         :_  k
         (weld mine-effects born-effects)
       ::
@@ -1113,7 +1136,7 @@
         =/  commit=block-commitment:t
           (block-commitment:page:t candidate-block.m.k)
         ?.  =(bc.command commit)
-          ~&  "mined for wrong (old) block commitment"
+          ~>  %slog.[1 'do-pow: Mined for wrong (old) block commitment']
           [~ k]
         ~&  %foo1
         ?:  %+  check-target:mine  dig.command
@@ -1133,7 +1156,7 @@
         =/  pk=(unit schnorr-pubkey:t)
           (mole |.((from-b58:schnorr-pubkey:t p.command)))
         ?~  pk
-          ~>  %slog.[0 leaf+"invalid mining pubkey, exiting"]
+          ~>  %slog.[1 'do-set-mining-key: Invalid mining pubkey, exiting']
           [[%exit 1]~ k]
         =/  =lock:t  (new:lock:t u.pk)
         =.  m.k  (set-pubkeys:min [lock]~)
@@ -1146,10 +1169,10 @@
         ^-  [(list effect:dk) kernel-state:dk]
         ?>  ?=([%set-mining-key-advanced *] command)
         ?:  (gth (lent p.command) 2)
-        ~>  %slog.[0 [%leaf "coinbase split for more than two locks not yet supported, exiting"]]
+        ~>  %slog.[1 'do-set-mining-key-advanced: Coinbase split for more than two locks not yet supported, exiting']
           [[%exit 1]~ k]
         ?~  p.command
-        ~>  %slog.[0 [%leaf "empty list of locks, exiting."]]
+        ~>  %slog.[1 'do-set-mining-key-advanced: Empty list of locks, exiting.']
           [[%exit 1]~ k]
         ::
         =/  [keys=(list lock:t) shares=(list [lock:t @]) crash=?]
@@ -1164,7 +1187,7 @@
             ((slog p.r) [~ ~ %&])
           [[p.r locks] [[p.r s] shares] crash]
         ?:  crash
-          ~>  %slog.[0 leaf+"invalid public keys provided, exiting"]
+          ~>  %slog.[1 'do-set-mining-key-advanced: Invalid public keys provided, exiting']
           [[%exit 1]~ k]
         =.  m.k  (set-pubkeys:min keys)
         =.  m.k  (set-shares:min shares)
@@ -1228,7 +1251,7 @@
         ^-  [(list effect:dk) kernel-state:dk]
         ?>  ?=([%genesis *] command)
         ::  creating genesis block with template
-        ~>  %slog.[0 leaf+"create genesis block with template"]
+        ~>  %slog.[0 'do-genesis: Creating genesis block with template']
         =/  =genesis-template:t
           (new:genesis-template:t p.command)
         =/  genesis-page=page:t
@@ -1247,7 +1270,7 @@
     ++  handle-fact
       |=  [wir=wire eny=@ our=@ux now=@da =fact:dk]
       ^-  [(list effect:dk) kernel-state:dk]
-      ~>  %slog.[3 (cat 3 'fact: ' +<.fact)]
+      ~>  %slog.[0 (cat 3 'handle-fact: ' +<.fact)]
       ?:  init.a.k
         ::  kernel in init phase, fact ignored
         `k
@@ -1290,20 +1313,20 @@
           ~|  %missing-parent-genesis-case :: below assertion should never trip
           ?>  ?=(~ heaviest-block.c.k)
           =/  log-message
-            %-  trip
             %+  rap  3
-            :~  'no genesis block but heard block with id '
+            :~  'missing-parent-effects: '
+                'No genesis block but heard block with id '
                (to-b58:hash:t block-id)
                ': requesting genesis block'
             ==
-          ~>  %slog.[0 leaf+log-message]
+          ~>  %slog.[0 log-message]
           [%request %block %by-height 0]~ :: ask for the genesis block, we don't have it
         ?:  (gth block-height +(u.highest-block-height.d.k))
           ::  ask for next-heaviest block, too far up for elders
           =/  log-message
-            %-  trip
             %+  rap  3
-            :~  'heard block '
+            :~  'missing-parent-effects: '
+                'Heard block '
                 (to-b58:hash:t block-id)
                 ' at height '
                 (rsh [3 2] (scot %ui block-height))
@@ -1311,18 +1334,18 @@
                 (rsh [3 2] (scot %ui u.highest-block-height.d.k))
                 ': requesting next highest block.'
             ==
-          ~>  %slog.[0 leaf+log-message]
+          ~>  %slog.[0 log-message]
           [%request %block %by-height +(u.highest-block-height.d.k)]~ :: ask for the next block by height
         :: ask for elders
         =/  log-message
-          %-  trip
           %+  rap  3
-          :~  'potential reorg: requesting elders for block '
+          :~  'missing-parent-effects: '
+              'Potential reorg: requesting elders for block '
               (to-b58:hash:t block-id)
               ' at height '
               (rsh [3 2] (scot %ui block-height))
           ==
-        ~>  %slog.[0 leaf+log-message]
+        ~>  %slog.[0 log-message]
         [%request %block %elders block-id peer-id]~ :: ask for elders
     ::
     ::  only if mining: re-gossip transactions included in block when block is fully validated

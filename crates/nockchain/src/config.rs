@@ -74,10 +74,10 @@ pub struct NockchainCli {
     pub bind: Vec<String>,
     #[arg(
         long,
-        help = "Generate a new peer ID, discarding the existing one",
+        help = "Don't generate a new peer ID, keep the existing one",
         default_value = "false"
     )]
-    pub new_peer_id: bool,
+    pub no_new_peer_id: bool,
     #[arg(long, help = "Maximum established incoming connections")]
     pub max_established_incoming: Option<u32>,
     #[arg(long, help = "Maximum established outgoing connections")]

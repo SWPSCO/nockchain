@@ -1,3 +1,4 @@
+~%  %wrapper  ..ut  ~
 |%
 +$  goof    [mote=term =tang]
 +$  wire    path

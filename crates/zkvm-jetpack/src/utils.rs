@@ -79,7 +79,7 @@ pub fn fits_in_u128(bits: &BitSlice<u64, Lsb0>) -> bool {
         .by_vals()
         .enumerate()
         .rfind(|&(_, bit)| bit)
-        .map_or(true, |(i, _)| i <= 127)
+        .is_none_or(|(i, _)| i <= 127)
 }
 
 // convert a belt to noun

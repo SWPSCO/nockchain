@@ -259,14 +259,14 @@ pub fn tape(arena: &mut NounArena, text: &str) -> NounKey {
 /// for demonstration (not a cycle-safe impl).
 pub fn debug_print(arena: &NounArena, key: NounKey) -> String {
     match arena.get_node(key) {
-        Node::Direct(x) => format!("{}", x),
+        Node::Direct(x) => format!("{x}"),
         Node::Indirect(words) => {
             if words.is_empty() {
                 "0x".to_string()
             } else {
                 let mut s = String::from("0x");
                 for w in words.iter().rev() {
-                    s.push_str(&format!("_{:016x}", w));
+                    s.push_str(&format!("_{w:016x}"));
                 }
                 s
             }
@@ -274,7 +274,7 @@ pub fn debug_print(arena: &NounArena, key: NounKey) -> String {
         Node::Cell(h, t) => {
             let hd = debug_print(arena, *h);
             let tl = debug_print(arena, *t);
-            format!("[{} {}]", hd, tl)
+            format!("[{hd} {tl}]")
         }
     }
 }
