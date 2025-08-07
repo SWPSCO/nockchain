@@ -202,47 +202,56 @@ pub fn derive_noun_encode(input: TokenStream) -> TokenStream {
 
                     if fields.named.is_empty() {
                         quote! { ::nockvm::noun::D(0) }
+                    } else if fields.named.len() == 1 {
+                        // Single field: just return the field itself
+                        let field_name = fields.named.first().unwrap().ident.as_ref().unwrap();
+                        quote! {
+                            ::noun_serde::NounEncode::to_noun(&self.#field_name, allocator)
+                        }
                     } else {
                         quote! {
                             let mut encoded_fields = Vec::new();
                             #(#field_encoders)*
-                            // Fold field nouns into a right-branching tree: [f1 [f2 [... fn 0]]]
-                            let result = encoded_fields.into_iter().rev().fold(::nockvm::noun::D(0), |acc, noun| {
-                                // Check if acc is the atom 0
-                                if acc.is_atom() && acc.as_atom().map_or(false, |a| a.as_u64() == Ok(0)) {
-                                    ::nockvm::noun::T(allocator, &[noun, ::nockvm::noun::D(0)]) // Base case: [last_field 0]
-                                } else {
-                                    ::nockvm::noun::T(allocator, &[noun, acc])
-                                }
-                            });
+                            // Fold field nouns into a right-branching tree: [f1 [f2 [... fn]]]
+                            // Note: No terminating 0 for structs
+                            let mut result = encoded_fields.pop().unwrap();
+                            for noun in encoded_fields.into_iter().rev() {
+                                result = ::nockvm::noun::T(allocator, &[noun, result]);
+                            }
                             result
                         }
                     }
                 }
                 Fields::Unnamed(fields) => {
                     let field_count = fields.unnamed.len();
-                    let field_encoders = (0..field_count).map(|i| {
-                        let idx = syn::Index::from(i);
-                        let field_var = format_ident!("field_{}", i);
+                    if field_count == 0 {
+                        quote! { ::nockvm::noun::D(0) }
+                    } else if field_count == 1 {
+                        // Single field: just return the field itself
                         quote! {
-                            let #field_var = ::noun_serde::NounEncode::to_noun(&self.#idx, allocator);
-                            encoded_fields.push(#field_var);
+                            ::noun_serde::NounEncode::to_noun(&self.0, allocator)
                         }
-                    });
-
-                    quote! {
-                        let mut encoded_fields = Vec::new();
-                        #(#field_encoders)*
-                        // Fold field nouns into a right-branching tree: [f1 [f2 [... fn 0]]]
-                        let result = encoded_fields.into_iter().rev().fold(::nockvm::noun::D(0), |acc, noun| {
-                            // Check if acc is the atom 0
-                            if acc.is_atom() && acc.as_atom().map_or(false, |a| a.as_u64() == Ok(0)) {
-                                ::nockvm::noun::T(allocator, &[noun, ::nockvm::noun::D(0)]) // Base case: [last_field 0]
-                            } else {
-                                ::nockvm::noun::T(allocator, &[noun, acc])
+                    } else {
+                        let field_encoders = (0..field_count).map(|i| {
+                            let idx = syn::Index::from(i);
+                            let field_var = format_ident!("field_{}", i);
+                            quote! {
+                                let #field_var = ::noun_serde::NounEncode::to_noun(&self.#idx, allocator);
+                                encoded_fields.push(#field_var);
                             }
                         });
-                        result
+
+                        quote! {
+                            let mut encoded_fields = Vec::new();
+                            #(#field_encoders)*
+                            // Fold field nouns into a right-branching tree: [f1 [f2 [... fn]]]
+                            // Note: No terminating 0 for structs
+                            let mut result = encoded_fields.pop().unwrap();
+                            for noun in encoded_fields.into_iter().rev() {
+                                result = ::nockvm::noun::T(allocator, &[noun, result]);
+                            }
+                            result
+                        }
                     }
                 }
                 Fields::Unit => {
@@ -424,46 +433,76 @@ pub fn derive_noun_decode(input: TokenStream) -> TokenStream {
 
                     let field_types: Vec<_> = fields.named.iter().map(|f| &f.ty).collect();
 
-                    // Generate field decoding using correct tree addressing with optional custom axis
-                    let field_decoders = field_names
-                        .iter()
-                        .zip(field_types.iter())
-                        .enumerate()
-                        .map(|(i, (name, ty))| {
-                            // Get the corresponding field
-                            let field = fields
-                                .named
-                                .iter()
-                                .find(|f| f.ident.as_ref().unwrap().to_string() == name.to_string())
-                                .unwrap();
+                    if fields.named.is_empty() {
+                        quote! {
+                            Ok(Self {})
+                        }
+                    } else if fields.named.len() == 1 {
+                        // Single field: decode directly from noun
+                        let field_name = &field_names[0];
+                        let field_type = &field_types[0];
+                        quote! {
+                            let #field_name = <#field_type as ::noun_serde::NounDecode>::from_noun(allocator, noun)?;
+                            Ok(Self { #field_name })
+                        }
+                    } else {
+                        let num_fields = fields.named.len();
+                        // Generate field decoding using correct tree addressing with optional custom axis
+                        let field_decoders = field_names
+                            .iter()
+                            .zip(field_types.iter())
+                            .enumerate()
+                            .map(|(i, (name, ty))| {
+                                // Get the corresponding field
+                                let field = fields
+                                    .named
+                                    .iter()
+                                    .find(|f| f.ident.as_ref().unwrap().to_string() == name.to_string())
+                                    .unwrap();
 
-                            // Check for custom axis
-                            let custom_axis = parse_axis_attr(&field.attrs);
+                                // Check for custom axis
+                                let custom_axis = parse_axis_attr(&field.attrs);
 
-                            // Calculate the axis for right-branching binary tree
-                            // For field i, axis = 2 for i=0, axis = ((1*2+1)...*2+1)*2 for i>0
-                            let default_axis = if i == 0 {
-                                2
-                            } else {
-                                let mut axis = 1;
-                                for _ in 0..i {
-                                    axis = axis * 2 + 1;
+                                // Calculate the axis for right-branching binary tree
+                                // Pattern:
+                                // - First field: axis 2
+                                // - Middle fields: 2 * previous_axis + 2
+                                // - Last field: previous_axis + 1
+                                // Examples:
+                                // - 2 fields [x y]: x=2, y=3 (2+1)
+                                // - 3 fields [x [y z]]: x=2, y=6 (2*2+2), z=7 (6+1)
+                                // - 4 fields [x [y [z w]]]: x=2, y=6 (2*2+2), z=14 (2*6+2), w=15 (14+1)
+                                let default_axis = if i == 0 {
+                                    2  // first field always at axis 2
+                                } else if i == num_fields - 1 {
+                                    // Last field: previous_axis + 1
+                                    let mut axis = 2;
+                                    for _ in 1..i {
+                                        axis = 2 * axis + 2;
+                                    }
+                                    axis + 1
+                                } else {
+                                    // Middle fields: 2 * previous_axis + 2
+                                    let mut axis = 2;
+                                    for _ in 1..=i {
+                                        axis = 2 * axis + 2;
+                                    }
+                                    axis
+                                };
+
+                                let axis = custom_axis.unwrap_or(default_axis);
+                                quote! {
+                                    let #name = <#ty as ::noun_serde::NounDecode>::from_noun(allocator, &::nockvm::noun::Slots::slot(&cell, #axis)?)?;
                                 }
-                                axis * 2
-                            };
+                            });
 
-                            let axis = custom_axis.unwrap_or(default_axis);
-                            quote! {
-                                let #name = <#ty as ::noun_serde::NounDecode>::from_noun(allocator, &::nockvm::noun::Slots::slot(&cell, #axis)?)?;
-                            }
-                        });
-
-                    quote! {
-                        let cell = noun.as_cell().map_err(|_| ::noun_serde::NounDecodeError::ExpectedCell)?;
-                        #(#field_decoders)*
-                        Ok(Self {
-                            #(#field_names),*
-                        })
+                        quote! {
+                            let cell = noun.as_cell().map_err(|_| ::noun_serde::NounDecodeError::ExpectedCell)?;
+                            #(#field_decoders)*
+                            Ok(Self {
+                                #(#field_names),*
+                            })
+                        }
                     }
                 }
                 Fields::Unnamed(fields) => {
@@ -499,14 +538,31 @@ pub fn derive_noun_decode(input: TokenStream) -> TokenStream {
                                     }
                                 });
 
+                            // Calculate the axis for right-branching binary tree
+                            // Pattern:
+                            // - First field: axis 2
+                            // - Middle fields: 2 * previous_axis + 2
+                            // - Last field: previous_axis + 1
+                            // Examples:
+                            // - 2 fields [x y]: x=2, y=3 (2+1)
+                            // - 3 fields [x [y z]]: x=2, y=6 (2*2+2), z=7 (6+1)
+                            // - 4 fields [x [y [z w]]]: x=2, y=6 (2*2+2), z=14 (2*6+2), w=15 (14+1)
                             let default_axis = if i == 0 {
-                                2
-                            } else {
-                                let mut axis = 1;
-                                for _ in 0..i {
-                                    axis = axis * 2 + 1;
+                                2  // first field always at axis 2
+                            } else if i == field_count - 1 {
+                                // Last field: previous_axis + 1
+                                let mut axis = 2;
+                                for _ in 1..i {
+                                    axis = 2 * axis + 2;
                                 }
-                                axis * 2
+                                axis + 1
+                            } else {
+                                // Middle fields: 2 * previous_axis + 2
+                                let mut axis = 2;
+                                for _ in 1..=i {
+                                    axis = 2 * axis + 2;
+                                }
+                                axis
                             };
 
                             let axis = custom_axis.unwrap_or(default_axis);
@@ -727,3 +783,4 @@ pub fn derive_noun_decode(input: TokenStream) -> TokenStream {
 
     TokenStream::from(expanded)
 }
+
