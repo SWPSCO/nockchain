@@ -208,7 +208,6 @@
           sign-key=(unit [child-index=@ud hardened=?])  ::  child key information to sign from
           =timelock-intent:transact                     ::  timelock constraint
       ==
-<<<<<<< HEAD
       $:  %aeroe-spend
           names=(list [first=@t last=@t])              ::  base58-encoded name hashes
           recipients=(list [m=@ pks=(list @t)])        ::  base58-encoded locks
@@ -218,9 +217,6 @@
       ==
       [%sign-tx dat=draft index=(unit @ud) entropy=@]
       [%sign-aeroe-tx dat=draft index=(unit @ud) file-path=@t entropy=@]
-=======
-      [%sign-tx dat=transaction sign-key=(unit [child-index=@ud hardened=?]) entropy=@]
->>>>>>> upstream/master
       [%list-pubkeys ~]
       [%list-notes ~]
       [%show-seedphrase ~]
@@ -688,7 +684,6 @@
         ~|("private key does not match public key" !!)
       meta
     ::
-<<<<<<< HEAD
     ++  labels
       =/  label-meta=(list meta)
         %+  murn  (gulf 0 255)
@@ -697,21 +692,6 @@
           :(welp base-path /[key-type] /[ud/index] /label)
         (~(get of keys.state) trek)
       (turn label-meta |=(=meta `*`+.meta))
-=======
-    ++  sign-key
-      |=  key=(unit [child-index=@ hardened=?])
-      ^-  schnorr-seckey:transact
-      =.  key-type  %prv
-      =/  sender=coil
-        ?~  key  master
-        =/  [child-index=@ hardened=?]  u.key
-        =/  absolute-index=@
-          ?.(hardened child-index (add child-index (bex 31)))
-        =/  key-at-index=meta  (by-index absolute-index)
-        ?>  ?=(%coil -.key-at-index)
-        key-at-index
-      (from-atom:schnorr-seckey:transact p.key.sender)
->>>>>>> upstream/master
     ::
     ++  by-index
       |=  index=@ud
@@ -1239,7 +1219,6 @@
       assets.nnote
     ``(roll list-coins add)
     ::
-<<<<<<< HEAD
       [%receive-address ~]
     ``receive-address.state
     ::
@@ -1296,10 +1275,6 @@
       :(weld "\{" first last assets "}")
     ``(crip :(weld "[" `tape`(zing (join "," note-objects)) "]"))
   ::
-=======
-      [%state ~]
-    ``state
->>>>>>> upstream/master
   ==
 ::
 ++  poke
@@ -1337,12 +1312,8 @@
       %list-notes            (do-list-notes cause)
       %list-notes-by-pubkey  (do-list-notes-by-pubkey cause)
       %list-notes-by-pubkey-csv  (do-list-notes-by-pubkey-csv cause)
-<<<<<<< HEAD
       %simple-spend          (do-simple-spend cause)
       %aeroe-spend           (do-aeroe-spend cause)
-=======
-      %spend                 (do-spend cause)
->>>>>>> upstream/master
       %update-balance        (do-update-balance cause)
       %update-block          (do-update-block cause)
       %import-keys           (do-import-keys cause)
