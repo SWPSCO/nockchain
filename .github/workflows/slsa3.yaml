@@ -17,7 +17,7 @@ env:
   
 jobs:
   vars:
-    runs-on: ubuntu-latest
+    runs-on: ['self-hosted', 'Linux', 'X64']
     outputs:
       short_sha: ${{ steps.set.outputs.short_sha }}
     steps:
@@ -32,7 +32,7 @@ jobs:
 
   build-linux-x64:
     needs: vars
-    runs-on: ubuntu-latest
+    runs-on: ['self-hosted', 'Linux', 'X64']
     steps:
       - uses: actions/checkout@v3
         with:
@@ -238,7 +238,7 @@ jobs:
 
   package:
     needs: [build-linux-x64, build-macos ]
-    runs-on: ubuntu-latest
+    runs-on: ['self-hosted', 'Linux', 'X64']
     outputs:
       content_hashes: ${{ steps.content-hash.outputs.content_hashes }}
     steps:
@@ -295,7 +295,7 @@ jobs:
       (github.event_name == 'repository_dispatch' && github.event.action == 'build-master') ||
       (github.event_name == 'workflow_dispatch' && github.event.inputs.create_release == 'true')
     needs: [vars, package, provenance]
-    runs-on: ubuntu-latest
+    runs-on: ['self-hosted', 'Linux', 'X64']
     steps:
       - uses: actions/download-artifact@v4
         with:
