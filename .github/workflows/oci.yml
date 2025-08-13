@@ -76,9 +76,9 @@ jobs:
         RUN cargo install --target x86_64-unknown-linux-gnu --locked --force --path crates/hoonc --bin hoonc
         RUN make build-hoon-all
         RUN cargo build --release --target x86_64-unknown-linux-gnu --bin nockchain
-        FROM alpine:latest
+        FROM debian:bullseye-slim
         WORKDIR /nc
-        RUN apk --no-cache add ca-certificates
+        RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
         COPY --from=builder /build/target/x86_64-unknown-linux-gnu/release/nockchain /usr/local/bin/nockchain
         ENTRYPOINT ["nockchain", "--help"]
         EOF
