@@ -64,6 +64,7 @@ jobs:
             build-essential \
             musl-tools \
             git \
+            protobuf-compiler \
             && rm -rf /var/lib/apt/lists/*
         WORKDIR /build
         RUN git clone https://github.com/zorp-corp/nockchain.git .
