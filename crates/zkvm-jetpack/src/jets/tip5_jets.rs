@@ -437,12 +437,22 @@ pub fn digest_to_atom_jet(context: &mut Context, subject: Noun) -> Result<Noun, 
     let d_big = d.as_atom()?.as_ubig(stack);
     let e_big = e.as_atom()?.as_ubig(stack);
 
-    let bp_big = b_big * UBig::from(P);
-    let cp2_big = c_big * UBig::from(P).pow(2);
-    let dp3_big = d_big * UBig::from(P).pow(3);
-    let ep4_big = e_big * UBig::from(P).pow(4);
+    // Use stack-aware operations for pow and multiplication
+    let p_ubig = UBig::from(P);
+    let p2_ubig = p_ubig.pow_stack(stack, 2);
+    let p3_ubig = p_ubig.pow_stack(stack, 3);
+    let p4_ubig = p_ubig.pow_stack(stack, 4);
 
-    let res: UBig = a_big + bp_big + cp2_big + dp3_big + ep4_big;
+    let bp_big = UBig::mul_stack(stack, b_big, p_ubig);
+    let cp2_big = UBig::mul_stack(stack, c_big, p2_ubig);
+    let dp3_big = UBig::mul_stack(stack, d_big, p3_ubig);
+    let ep4_big = UBig::mul_stack(stack, e_big, p4_ubig);
+
+    // Use stack-aware addition
+    let res1 = UBig::add_stack(stack, a_big, bp_big);
+    let res2 = UBig::add_stack(stack, res1, cp2_big);
+    let res3 = UBig::add_stack(stack, res2, dp3_big);
+    let res = UBig::add_stack(stack, res3, ep4_big);
 
     Ok(Atom::from_ubig(stack, &res).as_noun())
 }

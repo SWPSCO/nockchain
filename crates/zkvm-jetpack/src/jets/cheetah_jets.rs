@@ -1,11 +1,13 @@
 use bs58;
 use ibig::UBig;
+use nockapp::NounExt;
 use nockvm::interpreter::Context;
 use nockvm::jets::util::BAIL_FAIL;
 use nockvm::jets::JetErr;
 use nockvm::noun::{Atom, Noun, NounAllocator, Slots, NO, T, YES};
 use noun_serde::{NounDecode, NounDecodeError, NounEncode};
 use once_cell::sync::Lazy;
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
 use crate::form::base::bneg;
 use crate::form::bpoly::{bpegcd, bpscal};
@@ -410,16 +412,75 @@ pub fn verify_affine_jet(context: &mut Context, subject: Noun) -> Result<Noun, J
     let pubkey: CheetahPoint = CheetahPoint::from_noun(&pubkey).map_err(|_| BAIL_FAIL)?;
     let m = <[Belt; 5]>::from_noun(&m).map_err(|_| BAIL_FAIL)?;
 
-    let res = verify_affine(pubkey, &m, chal, sig)?;
+    let res = verify_affine(pubkey, &m, &chal, &sig)?;
     Ok(res.to_noun(&mut context.stack))
+}
+
+pub(crate) struct ValidateArgs {
+    pub pubkey: CheetahPoint,
+    pub m: [Belt; 5],
+    pub chal: UBig,
+    pub sig: UBig,
+}
+
+//  TODO: Implement NounDecode for UBig, requires NounAllocator in NounDecode from_noun
+//impl NounDecode for ValidateArgs {
+//    fn from_noun<A: NounAllocator>(stack: &mut A, noun: &Noun) -> Result<Self, NounDecodeError> {
+//        let pubkey = CheetahPoint::from_noun(&noun.slot(2)?)?;
+//        let m = Vec::<Belt>::from_noun(&noun.slot(6)?)?;
+//        let chal = noun.slot(14)?.as_atom()?.as_ubig(stack);
+//        let sig = noun.slot(15)?.as_atom()?.as_ubig(stack);
+//
+//        Ok(ValidateArgs {
+//            pubkey,
+//            m,
+//            chal,
+//            sig,
+//        })
+//    }
+//}
+
+pub fn batch_verify_affine_jet(context: &mut Context, subject: Noun) -> Result<Noun, JetErr> {
+    let list = subject.slot(6)?;
+    let args = list
+        .list_iter()
+        .map(|arg| {
+            let pubkey = CheetahPoint::from_noun(&arg.slot(2)?).map_err(|_| BAIL_FAIL)?;
+            let m = <[Belt; 5]>::from_noun(&arg.slot(6)?).map_err(|_| BAIL_FAIL)?;
+            let chal = arg.slot(14)?.as_atom()?.as_ubig(&mut context.stack);
+            let sig = arg.slot(15)?.as_atom()?.as_ubig(&mut context.stack);
+            Ok(ValidateArgs {
+                pubkey,
+                m,
+                chal,
+                sig,
+            })
+        })
+        .collect::<Result<Vec<ValidateArgs>, JetErr>>()?;
+
+    let all_signatures_valid = !args
+        .par_iter()
+        .map(|arg| {
+            let ValidateArgs {
+                pubkey,
+                m,
+                chal,
+                sig,
+            } = arg;
+            verify_affine(*pubkey, m, chal, sig).unwrap()
+        })
+        //  check if any result is invalid and try to short-circuit as soon as an
+        //  invalid result is found
+        .any(|result| !result);
+    Ok(all_signatures_valid.to_noun(&mut context.stack))
 }
 
 #[inline(always)]
 pub fn verify_affine(
     pubkey: CheetahPoint,
-    m: &[Belt; 5],
-    chal: UBig,
-    sig: UBig,
+    m: &[Belt],
+    chal: &UBig,
+    sig: &UBig,
 ) -> Result<bool, JetErr> {
     let left = ch_scal_big(&sig, &A_GEN)?;
     let right = ch_neg(&ch_scal_big(&chal, &pubkey)?);
@@ -438,7 +499,7 @@ pub fn verify_affine(
     let hash = hash_varlen(&mut hashable);
     let truncated_hash = trunc_g_order(&hash);
 
-    Ok(truncated_hash == chal)
+    Ok(truncated_hash == *chal)
 }
 
 fn trunc_g_order(a: &[u64]) -> UBig {
@@ -667,7 +728,6 @@ mod tests {
     }
     #[test]
     fn test_verify_affine_sparse_seckey() -> Result<(), Box<dyn std::error::Error>> {
-        let mut context = init_context();
         // chal and sig are values taken from an example signature
         // secret_key: 0x8
         // message (hash): [0 1 2 3 4]
@@ -699,21 +759,48 @@ mod tests {
         };
 
         let m = [Belt(1), Belt(2), Belt(3), Belt(4), Belt(5)];
-        let pubkey = pubkey.to_noun(&mut context.stack);
-        let chal = Atom::from_ubig(&mut context.stack, &chal).as_noun();
-        let sig = Atom::from_ubig(&mut context.stack, &sig).as_noun();
-        let m = m.to_noun(&mut context.stack);
-        let sample = T(&mut context.stack, &[pubkey, m, chal, sig]);
-        assert_jet(&mut context, verify_affine_jet, sample, YES);
+        assert!(verify_affine(pubkey, &m, &chal, &sig)?);
         Ok(())
     }
 
     #[test]
     fn test_verify_affine_dense_seckey() -> Result<(), Box<dyn std::error::Error>> {
-        let mut context = init_context();
         // chal and sig are values taken from an example signature
         // secret_key: g-order - 1
         // message (hash): [8 9 10 11 12]
+        let chal = UBig::from_str_radix(
+            "6f3cd43cd8709f4368aed04cd84292ab1c380cb645aaa7d010669d70375cbe88", 16,
+        )?;
+        let sig = UBig::from_str_radix(
+            "5197ab182e307a350b5cf3606d6e99a6f35b0d382c8330dde6e51fb6ef8ebb8c", 16,
+        )?;
+        let pubkey = CheetahPoint {
+            x: F6lt([
+                Belt(2754611494552410273),
+                Belt(8599518745794843693),
+                Belt(10526511002404673680),
+                Belt(4830863958577994148),
+                Belt(375185138577093320),
+                Belt(12938930721685970739),
+            ]),
+            y: F6lt([
+                Belt(3062714866612034253),
+                Belt(15671931273416742386),
+                Belt(4071440668668521568),
+                Belt(7738250649524482367),
+                Belt(5259065445844042557),
+                Belt(8456011930642078370),
+            ]),
+            inf: false,
+        };
+        let m = [Belt(8), Belt(9), Belt(10), Belt(11), Belt(12)];
+        assert!(verify_affine(pubkey, &m, &chal, &sig)?);
+        Ok(())
+    }
+
+    #[test]
+    fn test_batch_verify_affine() -> Result<(), Box<dyn std::error::Error>> {
+        let mut context = init_context();
         let chal = UBig::from_str_radix(
             "6f3cd43cd8709f4368aed04cd84292ab1c380cb645aaa7d010669d70375cbe88", 16,
         )?;
@@ -745,8 +832,9 @@ mod tests {
         let chal = Atom::from_ubig(&mut context.stack, &chal).as_noun();
         let sig = Atom::from_ubig(&mut context.stack, &sig).as_noun();
         let m = m.to_noun(&mut context.stack);
-        let sample = T(&mut context.stack, &[pubkey, m, chal, sig]);
-        assert_jet(&mut context, verify_affine_jet, sample, YES);
+        let arg = T(&mut context.stack, &[pubkey, m, chal, sig]);
+        let sample = T(&mut context.stack, &[arg, arg, arg, arg, arg, arg, D(0)]);
+        assert_jet(&mut context, batch_verify_affine_jet, sample, YES);
         Ok(())
     }
 }

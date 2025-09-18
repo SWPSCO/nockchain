@@ -223,6 +223,12 @@
         (based:belt-schnorr:cheetah sig.form)
     ==
   ::
+  ++  to-atom
+    |=  =form
+    ^-  [@ux @ux]
+    :-  (t8-to-atom:belt-schnorr:cheetah chal.form)
+    (t8-to-atom:belt-schnorr:cheetah sig.form)
+  ::
   ++  hashable  |=(=form leaf+form)
   ++  hash  |=(=form (hash-hashable:tip5 (hashable form)))
   --
@@ -767,16 +773,16 @@
   ::  +verify-signatures: verify all signatures in the inputs of a tx
   ++  verify-signatures
     |=  ips=form
-    %-  batch-verify:affine:belt-schnorr:cheetah
+    %-  batch-verify:affine:schnorr:cheetah
     (signatures ips)
   ::
   ::  +signatures: pull all the necessary data out of inputs to verify the signature
   ++  signatures
     |=  ips=form
-    ^-  (list [schnorr-pubkey ^hash schnorr-signature])
+    ^-  (list [schnorr-pubkey ^hash @ux @ux])
     %+  roll
       ~(val z-by ips)
-    |=  [inp=input sigs=(list [schnorr-pubkey ^hash schnorr-signature])]
+    |=  [inp=input sigs=(list [schnorr-pubkey ^hash @ux @ux])]
     %+  weld
       sigs
     (signatures:spend spend.inp)
@@ -1954,17 +1960,16 @@
   ++  signatures
     ~/  %signatures
     |=  sen=form
-    ^-  (list [schnorr-pubkey ^hash schnorr-signature])
+    ^-  (list [schnorr-pubkey ^hash @ux @ux])
     ?~  signature.sen
       ~>  %slog.[0 "Invalid inputs. There is an input with a spend with no signature"]
       !!
-    ^-  (list [schnorr-pubkey ^hash schnorr-signature])
     %+  turn
       ~(tap z-by u.signature.sen)
     |=  [pk=schnorr-pubkey sig=schnorr-signature]
     :*  pk
         (sig-hash:spend sen)
-        sig
+        (to-atom:schnorr-signature sig)
     ==
   ::
   ::  +verify: verify the .signature and each seed has correct parent-hash
@@ -1981,7 +1986,7 @@
     ~/  %verify-signatures
     |=  sen=form
     ^-  ?
-    (batch-verify:affine:belt-schnorr:cheetah (signatures sen))
+    (batch-verify:affine:schnorr:cheetah (signatures sen))
   ::
   ::  +verify-without-signatures: verifies whether an $input's .spend is valid without checking the signatures
   ++  verify-without-signatures

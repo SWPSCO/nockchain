@@ -41,7 +41,9 @@ use crate::messages::{NockchainDataRequest, NockchainFact, NockchainRequest, Noc
 use crate::metrics::NockchainP2PMetrics;
 use crate::p2p_state::{CacheResponse, P2PState};
 use crate::p2p_util::{log_fail2ban_ipv4, log_fail2ban_ipv6, MultiaddrExt, PeerIdExt};
+#[cfg(test)]
 use crate::tip5_util::tip5_hash_to_base58;
+use crate::tip5_util::tip5_hash_to_base58_stack;
 use crate::tracked_join_set::TrackedJoinSet;
 use crate::traffic_cop;
 
@@ -465,7 +467,7 @@ async fn send_timer_poke(
 }
 
 async fn handle_effect(
-    noun_slab: NounSlab,
+    mut noun_slab: NounSlab,
     swarm_tx: mpsc::Sender<SwarmAction>,
     equix_builder: equix::EquiXBuilder,
     local_peer_id: PeerId,
@@ -543,7 +545,7 @@ async fn handle_effect(
                 if let Ok(raw_tx_cell) = request_body.tail().as_cell() {
                     if raw_tx_cell.head().eq_bytes(b"by-id") {
                         trace!("Requesting raw transaction by ID, removing ID from seen set");
-                        let tx_id = tip5_hash_to_base58(raw_tx_cell.tail())?;
+                        let tx_id = tip5_hash_to_base58_stack(&mut noun_slab, raw_tx_cell.tail())?;
                         let mut state_guard = driver_state.clone().lock_owned().await;
                         state_guard.seen_txs.remove(&tx_id);
                     }
@@ -662,7 +664,7 @@ async fn handle_effect(
                 let seen_pq = seen_cell.tail().as_cell()?;
                 let block_id = seen_pq.head().as_cell()?;
                 let mut state_guard = driver_state.lock().await;
-                let block_id_str = tip5_hash_to_base58(block_id.as_noun())
+                let block_id_str = tip5_hash_to_base58_stack(&mut noun_slab, block_id.as_noun())
                     .expect("failed to convert block ID to base58");
                 trace!("seen block id: {:?}", &block_id_str);
                 state_guard.seen_blocks.insert(block_id_str);
@@ -692,7 +694,7 @@ async fn handle_effect(
             } else if seen_type.eq_bytes(b"tx") {
                 let tx_id = seen_cell.tail().as_cell()?;
                 let mut state_guard = driver_state.lock().await;
-                let tx_id_str = tip5_hash_to_base58(tx_id.as_noun())
+                let tx_id_str = tip5_hash_to_base58_stack(&mut noun_slab, tx_id.as_noun())
                     .expect("failed to convert tx ID to base58");
                 trace!("seen tx id: {:?}", &tx_id_str);
                 state_guard.seen_txs.insert(tx_id_str);
@@ -951,7 +953,8 @@ async fn handle_request_response(
                         });
 
                     let poke_kernel = tokio::task::spawn(async move {
-                        let gossip = NockchainFact::from_noun_slab(&request_slab)?;
+                        let mut request_slab = request_slab;
+                        let gossip = NockchainFact::from_noun_slab(&mut request_slab)?;
                         let state_arc = driver_state.clone();
                         let metrics_arc = metrics.clone();
                         let enable_fut: Pin<Box<dyn Future<Output = bool> + Send>> = match gossip {
@@ -1111,7 +1114,7 @@ async fn handle_request_response(
                     nockvm::noun::FullDebugCell(&response_noun.as_cell()?)
                 );
 
-                let response = NockchainFact::from_noun_slab(&response_slab)?;
+                let response = NockchainFact::from_noun_slab(&mut response_slab)?;
                 let response_cell = unsafe { response_slab.root().as_cell() }?;
                 let state_arc = driver_state.clone();
                 let metrics_arc = metrics.clone();

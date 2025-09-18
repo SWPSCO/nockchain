@@ -6,7 +6,7 @@ use nockvm_macros::tas;
 use serde_bytes::ByteBuf;
 
 use crate::p2p_util::PeerIdExt;
-use crate::tip5_util::tip5_hash_to_base58;
+use crate::tip5_util::{tip5_hash_to_base58, tip5_hash_to_base58_stack};
 
 const POKE_VERSION: u64 = 0;
 
@@ -21,7 +21,7 @@ pub enum NockchainFact {
 }
 
 impl NockchainFact {
-    pub fn from_noun_slab(slab: &NounSlab) -> Result<Self, NockAppError> {
+    pub fn from_noun_slab(slab: &mut NounSlab) -> Result<Self, NockAppError> {
         let mut poke_slab = NounSlab::new();
 
         poke_slab.copy_from_slab(slab);
@@ -33,23 +33,24 @@ impl NockchainFact {
         if head.eq_bytes(b"heard-block") {
             let page = noun.as_cell()?.tail();
             let block_id = page.as_cell()?.head();
-            let block_id_str = tip5_hash_to_base58(block_id)?;
+            let block_id_str = tip5_hash_to_base58_stack(slab, block_id)?;
             Ok(NockchainFact::HeardBlock(block_id_str, poke_slab))
         } else if head.eq_bytes(b"heard-tx") {
             let raw_tx = noun.as_cell()?.tail();
             let tx_id = raw_tx.as_cell()?.head();
-            let tx_id_str = tip5_hash_to_base58(tx_id)?;
+            let tx_id_str = tip5_hash_to_base58_stack(slab, tx_id)?;
             Ok(NockchainFact::HeardTx(tx_id_str, poke_slab))
         } else if head.eq_bytes(b"heard-elders") {
             let elders_dat = noun.as_cell()?.tail();
             let oldest = elders_dat.as_cell()?.head().as_atom()?.as_u64()?;
             let elder_ids = elders_dat.as_cell()?.tail();
-            let elder_id_strings: Result<Vec<String>, nockapp::NockAppError> = elder_ids
-                .list_iter()
-                .map(|id_noun| tip5_hash_to_base58(id_noun))
-                .collect();
+            // Need to handle the closure capturing mutable reference
+            let mut elder_id_strings = Vec::new();
+            for id_noun in elder_ids.list_iter() {
+                elder_id_strings.push(tip5_hash_to_base58_stack(slab, id_noun)?);
+            }
             Ok(NockchainFact::HeardElders(
-                oldest, elder_id_strings?, poke_slab,
+                oldest, elder_id_strings, poke_slab,
             ))
         } else {
             Err(NockAppError::OtherError(String::from(

@@ -1,5 +1,3 @@
-use std::ops::{BitOr, Shl};
-
 use ibig::UBig;
 use nockvm::interpreter::Context;
 use nockvm::jets::util::slot;
@@ -32,12 +30,26 @@ pub fn felt_from_u64s(x0: u64, x1: u64, x2: u64) -> Felt {
 
 // create a noun of a felt
 pub fn felt_as_noun(context: &mut Context, felt: Felt) -> Result<Noun, JetErr> {
-    let res_big = UBig::from(felt[0].0)
-        .shl(0)
-        .bitor(UBig::from(felt[1].0).shl(64))
-        .bitor(UBig::from(felt[2].0).shl(128))
-        .bitor(UBig::from(1u64).shl(192));
-    Ok(Atom::from_ubig(&mut context.stack, &res_big).as_noun())
+    let stack = &mut context.stack;
+
+    // Build the result using stack-aware operations
+    // Use from_unsigned_stack to avoid allocation through global allocator
+    let part0 = UBig::from_unsigned_stack(stack, felt[0].0);
+
+    let val1 = UBig::from_unsigned_stack(stack, felt[1].0);
+    let part1 = UBig::shl_stack(stack, val1, 64);
+
+    let val2 = UBig::from_unsigned_stack(stack, felt[2].0);
+    let part2 = UBig::shl_stack(stack, val2, 128);
+
+    let val3 = UBig::from_unsigned_stack(stack, 1u64);
+    let part3 = UBig::shl_stack(stack, val3, 192);
+
+    let res1 = UBig::bitor_stack(stack, part0, part1);
+    let res2 = UBig::bitor_stack(stack, res1, part2);
+    let res_big = UBig::bitor_stack(stack, res2, part3);
+
+    Ok(Atom::from_ubig(stack, &res_big).as_noun())
 }
 
 // frep_jet
