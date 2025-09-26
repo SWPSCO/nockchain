@@ -390,6 +390,10 @@
       ^-  (unit (unit ?))
       =+  tid=(from-b58:hash:t tid-b58:pole)
       ``(~(has z-by raw-txs.c.k) tid)
+    ::
+        [%candidate ~]
+      ^-  (unit (unit page:t))
+      ``candidate-block.m.k
     ==
   ::
   ++  poke
