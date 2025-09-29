@@ -8,6 +8,7 @@ kernels = { workspace = true, features = ["wallet"] }
 nockapp = { workspace = true }
 nockapp-grpc = { workspace = true }
 nockchain-types = { workspace = true }
+nockchain-math = { workspace = true }
 nockvm = { workspace = true }
 nockvm_macros = { workspace = true }
 noun-serde = { workspace = true }

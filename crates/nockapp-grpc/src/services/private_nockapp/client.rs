@@ -18,7 +18,7 @@ impl PrivateNockAppGrpcClient {
 
     // Monitoring ping is handled in MonitoringService, not here.
 
-    pub async fn peek(&mut self, pid: i32, path: Vec<String>) -> Result<Vec<u8>> {
+    pub async fn peek(&mut self, pid: i32, path: Vec<u8>) -> Result<Vec<u8>> {
         let request = PeekRequest { pid, path };
 
         let response = self.client.peek(request).await?;

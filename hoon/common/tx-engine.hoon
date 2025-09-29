@@ -1181,11 +1181,14 @@
 ::  $timelock-intent: enforces $timelocks in output notes from $seeds
 ::
 ::    the difference between $timelock and $timelock-intent is that $timelock-intent
-::    permits the values ~ and [~ ~ ~] while $timelock does not permit [~ ~ ~].
+::    permits the values ~ and [~ [~ ~] [~ ~]] while $timelock does not permit
+::    [~ [~ ~] [~ ~]].
+::
 ::    the reason for this is that a non-null timelock intent forces the output
 ::    note to have this timelock. so a ~ means it does not enforce any timelock
-::    restriction on the output note, while [~ ~ ~] means that the output note
-::    must have a timelock of ~.
+::    restriction on the output note, while [~ [~ ~] [~ ~]] means that the output note
+::    must have a timelock of ~. See +reconcile:outputs in this file for more details.
+::
 ++  timelock-intent
   =<  form
   ~%  %timelock-intent  ..timelock-intent  ~
@@ -1198,6 +1201,14 @@
         ::    and the range of absolute page-numbers in which the note may spend
         relative=timelock-range
     ==
+  ::
+  ::  +normalize: normalize timelock ranges
+  ++  normalize
+    |=  =form
+    ?~  form  form
+    %-  some
+    :-  (new:timelock-range absolute.u.form)
+    (new:timelock-range relative.u.form)
   ::
   ++  based
     ~/  %based
@@ -1225,13 +1236,13 @@
   =<  form
   ~%  %timelock  ..timelock  ~
   |%
-  ::  A timelock, in terms of values, is a $timelock-intent that does not permit [~ ~ ~]
-  +$  form  $|(timelock-intent |=(timelock-intent !=(+< [~ ~ ~])))
+  ::  A timelock, in terms of values, is a $timelock-intent that does not permit [~ [~ ~] [~ ~]]
+  +$  form  $|(timelock-intent |=(timelock-intent !=(+< [~ [~ ~] [~ ~]])))
   ::
   ++  convert-from-intent
     |=  int=timelock-intent
     ^-  form
-    ?:  =(int [~ ~ ~])  *form
+    ?:  =(int [~ [~ ~] [~ ~]])  ~
     int
   ::
   ::  +fix-absolute: produce absolute timelock from relative timelock and page number
@@ -1266,10 +1277,17 @@
   +$  form  [min=(unit page-number) max=(unit page-number)]
   ::
   ::  +new: constructor for $timelock-range
+  ::
+  ::      We map [~ 0] to ~ to normalize the range.
   ++  new
     |=  [min=(unit page-number) max=(unit page-number)]
     ^-  form
-    [min max]
+    =/  range=form  [min max]
+    =?  range  =([~ 0] min.range)
+      [~ max]
+    =?  range  =([~ 0] max.range)
+      [min ~]
+    range
   ::
   ::  +check: check that a $page-number is in a $timelock-range
   ++  check
@@ -1669,10 +1687,12 @@
   ::
   ++  coinbase-timelock
     ^-  timelock
+    %-  convert-from-intent:timelock
     `[*timelock-range (new:timelock-range [`coinbase-timelock-min ~])]
   ::
   ++  first-month-coinbase-timelock
     ^-  timelock
+    %-  convert-from-intent:timelock
     `[*timelock-range (new:timelock-range [`4.383 ~])]
   ::
   ++  emission-calc
@@ -1828,7 +1848,7 @@
       %*  .  *form
         output-source    output-source
         recipient        recipient
-        timelock-intent  timelock-intent
+        timelock-intent  (normalize:^timelock-intent timelock-intent)
         gift             gift
         parent-hash      parent-hash
       ==

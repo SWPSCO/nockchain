@@ -72,8 +72,12 @@ message TimeLockIntent {
     TimeLockRangeAbsolute absolute = 1;
     TimeLockRangeRelative relative = 2;
     TimeLockRangeAbsoluteAndRelative absolute_and_relative = 3;
+    TimeLockRangeNeither neither = 4;
   }
 }
+
+// Use this when you want to force the output to not have a timelock
+message TimeLockRangeNeither {}
 
 message TimeLockRangeAbsoluteAndRelative {
   optional TimeLockRangeAbsolute absolute = 1;

@@ -13,7 +13,7 @@ service NockAppService {
 
 message PeekRequest {
   int32 pid = 1; // process ID for tracking
-  repeated string path = 2; // path components
+  bytes path = 2; // JAM-encoded nock peek path
 }
 
 message PeekResponse {

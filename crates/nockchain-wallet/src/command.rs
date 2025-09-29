@@ -1,89 +1,168 @@
+use std::str::FromStr;
+
 use clap::{Parser, Subcommand};
 use nockapp::driver::Operation;
 use nockapp::kernel::boot::Cli as BootCli;
-use nockapp::noun::slab::NounSlab;
 use nockapp::wire::{Wire, WireRepr};
 use nockapp::NockAppError;
-use nockvm::noun::{Noun, D, T};
+use nockchain_math::belt::Belt;
+use nockchain_types::tx_engine::note::{
+    BlockHeight, BlockHeightDelta, TimelockRangeAbsolute, TimelockRangeRelative,
+};
 
 use crate::connection::ConnectionCli;
-/// Represents a timelock range with optional min and max page numbers
+
+/// CLI helper that captures optional lower and upper bounds for timelocks.
 #[derive(Debug, Clone)]
-pub struct TimelockRange {
-    pub min: Option<u64>,
-    pub max: Option<u64>,
+pub struct TimelockRangeCli {
+    min: Option<u64>,
+    max: Option<u64>,
 }
 
-impl TimelockRange {
-    pub fn new(min: Option<u64>, max: Option<u64>) -> Self {
-        Self { min, max }
+impl TimelockRangeCli {
+    pub fn absolute(&self) -> TimelockRangeAbsolute {
+        TimelockRangeAbsolute::new(
+            self.min.map(|value| BlockHeight(Belt(value))),
+            self.max.map(|value| BlockHeight(Belt(value))),
+        )
     }
 
-    pub fn none() -> Self {
-        Self {
-            min: None,
-            max: None,
-        }
+    pub fn relative(&self) -> TimelockRangeRelative {
+        TimelockRangeRelative::new(
+            self.min.map(|value| BlockHeightDelta(Belt(value))),
+            self.max.map(|value| BlockHeightDelta(Belt(value))),
+        )
     }
 
-    /// Convert to noun representation: [min=(unit page-number) max=(unit page-number)]
-    pub fn to_noun(&self, slab: &mut NounSlab) -> Noun {
-        let min_noun = match self.min {
-            Some(val) => T(slab, &[D(0), D(val)]), // unit: [~ value]
-            None => D(0),                          // unit: ~
-        };
-        let max_noun = match self.max {
-            Some(val) => T(slab, &[D(0), D(val)]), // unit: [~ value]
-            None => D(0),                          // unit: ~
-        };
-        T(slab, &[min_noun, max_noun])
-    }
-}
-
-/// Represents a timelock intent - optional constraint for output notes
-#[derive(Debug, Clone)]
-pub struct TimelockIntent {
-    pub absolute: Option<TimelockRange>,
-    pub relative: Option<TimelockRange>,
-}
-
-impl TimelockIntent {
-    pub fn none() -> Self {
-        Self {
-            absolute: None,
-            relative: None,
-        }
+    pub fn has_upper_bound(&self) -> bool {
+        self.max.is_some()
     }
 
-    pub fn absolute_only(range: TimelockRange) -> Self {
-        Self {
-            absolute: Some(range),
-            relative: Some(TimelockRange::none()),
-        }
-    }
-
-    pub fn relative_only(range: TimelockRange) -> Self {
-        Self {
-            absolute: Some(TimelockRange::none()),
-            relative: Some(range),
-        }
-    }
-
-    /// Convert to noun representation: (unit [absolute=timelock-range relative=timelock-range])
-    pub fn to_noun(&self, slab: &mut NounSlab) -> Noun {
-        match (&self.absolute, &self.relative) {
-            (None, None) => D(0), // unit: ~ (no intent)
-            (abs, rel) => {
-                let default_abs_range = TimelockRange::none();
-                let default_rel_range = TimelockRange::none();
-                let abs_range = abs.as_ref().unwrap_or(&default_abs_range);
-                let rel_range = rel.as_ref().unwrap_or(&default_rel_range);
-
-                let abs_noun = abs_range.to_noun(slab);
-                let rel_noun = rel_range.to_noun(slab);
-                let content = T(slab, &[abs_noun, rel_noun]);
-                T(slab, &[D(0), content]) // unit: [~ content]
+    pub fn from_bounds(min: Option<u64>, max: Option<u64>) -> Result<Self, String> {
+        if let (Some(lo), Some(hi)) = (min, max) {
+            if lo > hi {
+                return Err(format!(
+                    "timelock range must have min <= max, got {}..{}",
+                    lo, hi
+                ));
             }
+        }
+
+        Ok(Self { min, max })
+    }
+
+    fn parse_bound(component: &str) -> Result<Option<u64>, String> {
+        let trimmed = component.trim();
+        if trimmed.is_empty() {
+            Ok(None)
+        } else {
+            trimmed
+                .parse::<u64>()
+                .map(Some)
+                .map_err(|err| format!("invalid timelock bound '{}': {}", trimmed, err))
+        }
+    }
+}
+
+/// Optional timelock constraints are specified with a single flag: `--timelock <SPEC>`, where `SPEC` is a comma-separated list of `absolute=<range>` and/or `relative=<range>`.
+///   - Ranges use the `min..max` syntax. (`10..`, `..500`, `0..1`).
+///   - Providing only a range (without `absolute=`) is shorthand for `absolute=<range>`.
+///   - Supplying both components gives a combined intent.
+///
+/// For now, all the seeds in a transaction constructed by the wallet will share the same
+/// intent. So for all "intents" and purposes, the timelock intent is functionally the same
+/// as a timelock.
+
+#[derive(Debug, Clone, Default)]
+pub struct TimelockIntentCli {
+    absolute: Option<TimelockRangeCli>,
+    relative: Option<TimelockRangeCli>,
+}
+
+impl TimelockIntentCli {
+    pub fn absolute_range(&self) -> Option<TimelockRangeAbsolute> {
+        self.absolute.as_ref().map(|range| range.absolute())
+    }
+
+    pub fn relative_range(&self) -> Option<TimelockRangeRelative> {
+        self.relative.as_ref().map(|range| range.relative())
+    }
+
+    pub fn has_upper_bound(&self) -> bool {
+        self.absolute
+            .as_ref()
+            .map_or(false, TimelockRangeCli::has_upper_bound)
+            || self
+                .relative
+                .as_ref()
+                .map_or(false, TimelockRangeCli::has_upper_bound)
+    }
+}
+
+impl FromStr for TimelockIntentCli {
+    type Err = String;
+
+    fn from_str(spec: &str) -> Result<Self, Self::Err> {
+        let trimmed = spec.trim();
+        if trimmed.is_empty() {
+            return Err("timelock spec cannot be empty".into());
+        }
+
+        let mut intent = TimelockIntentCli::default();
+        for part in trimmed.split(',') {
+            let part = part.trim();
+            if part.is_empty() {
+                continue;
+            }
+
+            if let Some(rest) = part.strip_prefix("absolute=") {
+                if intent.absolute.is_some() {
+                    return Err("absolute timelock specified more than once".into());
+                }
+                intent.absolute = Some(rest.parse()?);
+            } else if let Some(rest) = part.strip_prefix("relative=") {
+                if intent.relative.is_some() {
+                    return Err("relative timelock specified more than once".into());
+                }
+                intent.relative = Some(rest.parse()?);
+            } else {
+                if intent.absolute.is_some() {
+                    return Err(
+                        "ambiguous timelock spec; prefix additional ranges with 'absolute=' or 'relative='"
+                            .into(),
+                    );
+                }
+                intent.absolute = Some(part.parse()?);
+            }
+        }
+
+        if intent.absolute.is_none() && intent.relative.is_none() {
+            return Err(
+                "timelock spec must include an absolute=... or relative=... component".into(),
+            );
+        }
+
+        Ok(intent)
+    }
+}
+
+impl FromStr for TimelockRangeCli {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let trimmed = s.trim();
+        if trimmed.is_empty() {
+            return Err("timelock range cannot be empty".into());
+        }
+
+        if let Some((min_str, max_str)) = trimmed.split_once("..") {
+            let min = Self::parse_bound(min_str)?;
+            let max = Self::parse_bound(max_str)?;
+            TimelockRangeCli::from_bounds(min, max)
+        } else {
+            // Single value -> lower bound only
+            let min = Self::parse_bound(trimmed)?;
+            TimelockRangeCli::from_bounds(min, None)
         }
     }
 }
@@ -163,7 +242,7 @@ pub enum Commands {
         index: u64,
 
         /// Hardened or unhardened child key
-        #[arg(short, long)]
+        #[arg(long)]
         hardened: bool,
 
         /// Label for the child key
@@ -261,7 +340,7 @@ pub enum Commands {
         #[arg(short, long, value_parser = clap::value_parser!(u64).range(0..2 << 31))]
         index: Option<u64>,
         /// Hardened or unhardened child key
-        #[arg(short, long, default_value = "false")]
+        #[arg(long, default_value = "false")]
         hardened: bool,
     },
 
@@ -282,14 +361,11 @@ pub enum Commands {
         /// Optional key index to use for signing [0, 2^31), if not provided, we use the master key
         #[arg(short, long, value_parser = clap::value_parser!(u64).range(0..2 << 31))]
         index: Option<u64>,
-        /// Type of timelock intent: "absolute", "relative", or "none"
-        #[arg(long, default_value = "none")]
-        timelock_intent: String,
-        /// Minimum block height for absolute timelock or relative delay in blocks
-        #[arg(long)]
-        timelock_min: Option<u64>,
+        /// Optional timelock intent, e.g. `--timelock absolute=0..100,relative=10..`
+        #[arg(long = "timelock", value_name = "SPEC")]
+        timelock_intent: Option<TimelockIntentCli>,
         /// Hardened or unhardened child key
-        #[arg(short, long, default_value = "false")]
+        #[arg(long, default_value = "false")]
         hardened: bool,
     },
 
@@ -340,7 +416,7 @@ pub enum Commands {
         #[arg(short, long, value_parser = clap::value_parser!(u64).range(0..2 << 31))]
         index: Option<u64>,
         /// Hardened or unhardened child key
-        #[arg(short, long, default_value = "false")]
+        #[arg(long, default_value = "false")]
         hardened: bool,
     },
 
@@ -354,7 +430,7 @@ pub enum Commands {
         #[arg(short, long, value_parser = clap::value_parser!(u64).range(0..2 << 31))]
         index: Option<u64>,
         /// Hardened or unhardened child key
-        #[arg(short, long, default_value = "false")]
+        #[arg(long, default_value = "false")]
         hardened: bool,
     },
 

@@ -2,7 +2,6 @@ use std::net::SocketAddr;
 
 use nockapp::driver::{NockAppHandle, PokeResult};
 use nockapp::noun::slab::NounSlab;
-use nockvm::noun::{D, T};
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
 use tracing::{debug, error, info, warn};
@@ -25,7 +24,7 @@ impl PrivateNockAppGrpcServer {
     }
 
     pub async fn serve(self, addr: SocketAddr) -> Result<()> {
-        info!("Starting gRPC server on {}", addr);
+        info!("Starting private gRPC server on {}", addr);
 
         let service = PrivateNockAppServer::new(self);
 
@@ -36,32 +35,6 @@ impl PrivateNockAppGrpcServer {
             .map_err(NockAppGrpcError::Transport)?;
 
         Ok(())
-    }
-
-    /// Convert path strings to a NounSlab for peek operations
-    fn path_to_noun_slab(&self, path: &[String]) -> Result<NounSlab> {
-        if path.is_empty() {
-            return Err(NockAppGrpcError::InvalidRequest(
-                "Path cannot be empty".to_string(),
-            ));
-        }
-
-        let mut slab = NounSlab::new();
-        let mut path_nouns = Vec::new();
-
-        for segment in path {
-            // Convert path segment to a tag atom
-            let atom = nockapp::utils::make_tas(&mut slab, segment);
-            path_nouns.push(atom.as_noun());
-        }
-
-        // Add terminating D(0)
-        path_nouns.push(D(0));
-
-        let path_noun = T(&mut slab, &path_nouns);
-        slab.set_root(path_noun);
-
-        Ok(slab)
     }
 
     /// Build error response with proper error status
@@ -91,20 +64,25 @@ impl PrivateNockApp for PrivateNockAppGrpcServer {
         request: Request<PeekRequest>,
     ) -> std::result::Result<Response<PeekResponse>, Status> {
         let req = request.into_inner();
-        info!("CorePeek request: pid={}, path={:?}", req.pid, req.path);
-
-        let path_slab = match self.path_to_noun_slab(&req.path) {
-            Ok(slab) => slab,
+        debug!("CorePeek request: pid={}, path={:?}", req.pid, req.path);
+        let mut slab = NounSlab::new();
+        let _path = match slab.cue_into(bytes::Bytes::from(req.path)) {
+            Ok(noun) => noun,
             Err(e) => {
-                warn!("Invalid path in Peek: {}", e);
+                warn!("Failed to decode JAM payload: {:?}", e);
                 let response = PeekResponse {
-                    result: Some(peek_response::Result::Error(self.build_error_response(e))),
+                    result: Some(peek_response::Result::Error(self.build_error_response(
+                        NockAppGrpcError::Serialization(format!(
+                            "JAM decoding for path failed: {:?}",
+                            e
+                        )),
+                    ))),
                 };
                 return Ok(Response::new(response));
             }
         };
 
-        match self.handle.peek(path_slab).await {
+        match self.handle.peek(slab).await {
             Ok(Some(result_slab)) => {
                 // Convert result to JAM-encoded bytes
                 let jam_bytes = result_slab.jam();

@@ -181,6 +181,11 @@ For multiple recipient transactions:
 - The `names` argument is a list of `[first-name last-name]` pairs specifying funding notes
 - The `fee` argument is the transaction fee to pay
 - For multisig recipients, list multiple public keys after the signature count
+- Optional timelock constraints are specified with a single flag: `--timelock <SPEC>`, where `SPEC` is a comma-separated list of `absolute=<range>` and/or `relative=<range>`.
+  - Ranges use the `min..max` syntax. (`10..`, `..500`, `0..1`).
+  - Providing only a range (without `absolute=`) is shorthand for `absolute=<range>`.
+  - Supplying both components gives a combined intent.
+  - Any finite upper bound prompts for confirmation—type `YES` to acknowledge the note becomes unspendable after the upper bound.
 
 ### Make Transaction from Transaction File
 

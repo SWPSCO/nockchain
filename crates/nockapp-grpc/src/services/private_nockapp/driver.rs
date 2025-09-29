@@ -6,7 +6,8 @@ use nockapp::wire::{WireRepr, WireTag as AppWireTag};
 use nockapp::{Bytes, NockAppError, Noun};
 use nockvm::noun::{D, T};
 use nockvm_macros::tas;
-use noun_serde::{NounDecode, NounDecodeError, NounEncode};
+use noun_serde::prelude::*;
+use noun_serde::NounDecodeError;
 use tracing::{error, info};
 
 use super::client::PrivateNockAppGrpcClient;
@@ -32,7 +33,7 @@ use crate::wire_conversion::create_grpc_wire;
 pub fn grpc_server_driver(port: u16) -> IODriverFn {
     let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
     make_driver(move |handle: NockAppHandle| async move {
-        info!("Starting gRPC server on {}", addr);
+        info!("Starting private gRPC server on {}", addr);
 
         let server = PrivateNockAppGrpcServer::new(handle);
 
@@ -141,8 +142,13 @@ pub fn grpc_listener_driver(addr: String) -> IODriverFn {
                             }
                         }
                         PrivateGrpcEffect::Peek { pid, typ, path } => {
+                            let mut path_slab: NounSlab = NounSlab::new();
+                            let path_noun = path.to_noun(&mut path_slab);
+                            path_slab.set_root(path_noun);
+                            let path_bytes = path_slab.jam().to_vec();
+
                             let jam_bytes = client
-                                .peek(pid as i32, path)
+                                .peek(pid as i32, path_bytes)
                                 .await
                                 .map_err(|_err| NockAppError::PeekFailed)?;
                             //  [%grpc-bind result=*]

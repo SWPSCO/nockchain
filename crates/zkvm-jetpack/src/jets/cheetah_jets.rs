@@ -151,10 +151,12 @@ mod tests {
 
     #[test]
     fn test_b58_roundtrip() {
-        let x = "32KVTmv3ofSyACq9nC1Hgnk4Jt8rs2hj1cvDZWC1EQuiYFMDg8MaLtF3ntafJbEUH5XPV1pK3K4xkxfjRPAWprBb7LYCVv4HF7817Bwh9M9xAdmgrPt77j4xejihNFd9h5Eo";
-        let point = CheetahPoint::from_base58(&x).unwrap();
-        let x_round = point.into_base58().unwrap();
-        assert_eq!(x, x_round)
+        for x in ["32KVTmv3ofSyACq9nC1Hgnk4Jt8rs2hj1cvDZWC1EQuiYFMDg8MaLtF3ntafJbEUH5XPV1pK3K4xkxfjRPAWprBb7LYCVv4HF7817Bwh9M9xAdmgrPt77j4xejihNFd9h5Eo",
+            "2Xu6FtvopCS69Ko2YnC99B9SVVZ7PLoVn7WvEdDpJKRxW1pmj51uBQdYfADEbRUFYwG55Wi2Qwa3f6Y6WTev5jLcvfJFDEr2Wwt8rViQeLsz1XwEPah5pxtwHTm2nmecjJNW"] {
+                let point = CheetahPoint::from_base58(&x).unwrap();
+                let x_round = point.into_base58().unwrap();
+                assert_eq!(x, x_round)
+            }
     }
 
     #[test]

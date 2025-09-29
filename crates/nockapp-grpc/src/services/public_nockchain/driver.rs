@@ -62,7 +62,7 @@ pub fn grpc_server_driver(addr: SocketAddr) -> IODriverFn {
 /// Connect to the public gRPC server and provide a client to the app if needed
 pub fn grpc_listener_driver(addr: String) -> IODriverFn {
     make_driver(move |handle: NockAppHandle| async move {
-        tracing::debug!("Starting grpc listener driver");
+        tracing::debug!("Starting public grpc listener driver");
         let mut client = PublicNockchainGrpcClient::connect(addr.to_string())
             .await
             .map_err(|e| {

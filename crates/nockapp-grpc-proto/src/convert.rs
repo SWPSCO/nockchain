@@ -9,8 +9,8 @@ use crate::pb::common::v1::{
     NoteVersion, OutputSource, RawTransaction as PbRawTransaction, SchnorrPubkey,
     SchnorrSignature as PbSchnorrSignature, Seed as PbSeed, Signature as PbSignature,
     SignatureEntry as PbSignatureEntry, Source, Spend as PbSpend, TimeLockIntent,
-    TimeLockRangeAbsolute, TimeLockRangeAbsoluteAndRelative, TimeLockRangeRelative,
-    WalletBalanceData,
+    TimeLockRangeAbsolute, TimeLockRangeAbsoluteAndRelative, TimeLockRangeNeither,
+    TimeLockRangeRelative, WalletBalanceData,
 };
 use crate::pb::public::v1::{wallet_get_balance_response, WalletGetBalanceResponse};
 
@@ -584,7 +584,7 @@ impl From<domain::Timelock> for TimeLockIntent {
                 let abs = abs_range_to_opt(intent.absolute);
                 let rel = rel_range_to_opt(intent.relative);
                 match (abs, rel) {
-                    (None, None) => None,
+                    (None, None) => Some(time_lock_intent::Value::Neither(TimeLockRangeNeither {})),
                     (Some(a), None) => Some(time_lock_intent::Value::Absolute(a)),
                     (None, Some(r)) => Some(time_lock_intent::Value::Relative(r)),
                     (Some(a), Some(r)) => Some(time_lock_intent::Value::AbsoluteAndRelative(
@@ -627,6 +627,9 @@ impl TryFrom<TimeLockIntent> for domain::Timelock {
                     absolute: abs.into(),
                     relative: rel.into(),
                 }))
+            }
+            Some(time_lock_intent::Value::Neither(..)) => {
+                domain::Timelock(Some(domain::TimelockIntent::none()))
             }
             None => domain::Timelock(None),
         };

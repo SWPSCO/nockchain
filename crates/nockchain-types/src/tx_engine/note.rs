@@ -105,13 +105,11 @@ impl NounDecode for Lock {
         }
 
         if keys_required == 0 {
-            return Err(NounDecodeError::Custom("Expected m > 0".to_string()));
+            tracing::warn!("NounDecode Lock: expected m > 0");
         }
 
         if keys_required > unique.len() as u64 {
-            return Err(NounDecodeError::Custom(
-                "Expected m <= number of public keys".to_string(),
-            ));
+            tracing::warn!("NounDecode Lock: expected m <= number of public keys");
         }
 
         Ok(Lock {
@@ -274,9 +272,14 @@ pub struct TimelockRangeAbsolute {
 }
 
 impl TimelockRangeAbsolute {
+    /// Creates new TimelockRangeAbsolute and normalizes the min and max.
     pub fn new(min: Option<BlockHeight>, max: Option<BlockHeight>) -> Self {
+        // Turn Some(0) into None
+        let min = min.filter(|height| (height.0).0 != 0);
+        let max = max.filter(|height| (height.0).0 != 0);
         Self { min, max }
     }
+
     pub fn none() -> Self {
         Self {
             min: None,
@@ -292,10 +295,15 @@ pub struct TimelockRangeRelative {
     pub max: Option<BlockHeightDelta>,
 }
 
+/// Creates new TimelockRangeRelative and normalizes the min and max.
 impl TimelockRangeRelative {
     pub fn new(min: Option<BlockHeightDelta>, max: Option<BlockHeightDelta>) -> Self {
+        // Turn Some(0) into None
+        let min = min.filter(|height| (height.0).0 != 0);
+        let max = max.filter(|height| (height.0).0 != 0);
         Self { min, max }
     }
+
     pub fn none() -> Self {
         Self {
             min: None,
@@ -309,6 +317,15 @@ impl TimelockRangeRelative {
 pub struct TimelockIntent {
     pub absolute: TimelockRangeAbsolute,
     pub relative: TimelockRangeRelative,
+}
+
+impl TimelockIntent {
+    pub fn none() -> Self {
+        Self {
+            absolute: TimelockRangeAbsolute::none(),
+            relative: TimelockRangeRelative::none(),
+        }
+    }
 }
 
 // A 5-cell of Belts
