@@ -227,7 +227,7 @@ To check your wallet balance:
 
 ```bash
 # List all notes by pubkey
-nockchain-wallet list-notes-by-pubkey -p <your-pubkey>
+nockchain-wallet list-notes-by-pubkey <your-pubkey>
 ```
 
 ### How do I configure logging levels?
