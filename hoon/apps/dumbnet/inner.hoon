@@ -373,7 +373,68 @@
       :-  pubkeys.m.k
       ?~  heaviest-block
         ~
-      `(to-page-summary:page:t (to-page:local-page:t u.heaviest-block))
+      =+  res=(to-page-summary:page:t (to-page:local-page:t u.heaviest-block))
+      `res
+    ::
+        [%height ~]
+      ^-  (unit (unit page-number:t))
+      ?~  heaviest-block.c.k
+        [~ ~]
+      =/  heaviest-block  (~(get z-by blocks.c.k) u.heaviest-block.c.k)
+      ?~  heaviest-block
+        [~ ~]
+      =+  summary=(to-page-summary:page:t (to-page:local-page:t u.heaviest-block))
+      ``height.summary
+    ::
+        [%commitment-at height=@ ~]
+      ^-  (unit (unit noun-digest:tip5:zeke))
+      =/  num=(unit page-number:t)
+        ((soft page-number:t) height.pole)
+      ?~  num
+        ~
+      =/  id=(unit block-id:t)
+        (~(get z-by heaviest-chain.d.k) u.num)
+      ?~  id
+        [~ ~]
+      =/  pag
+        (bind (~(get z-by blocks.c.k) u.id) to-page:local-page:t)
+      ?~  pag
+        [~ ~]
+      ?~  pow.u.pag
+        [~ ~]
+      =/  prf  u.pow.u.pag
+      ?:  =((lent objects.prf) 0)
+        [~ ~]
+      =/  puzzle  (snag 0 objects.prf)
+      ?.  ?=([%puzzle *] puzzle)
+        [~ ~]
+      ~&  commitment+commitment.puzzle
+      ``commitment.puzzle
+    ::
+        [%template difficulty=@ ~]
+      ^-  (unit (unit [?(%0 %1 %2) noun-digest:tip5:zeke bignum:bignum:zeke bignum:bignum:zeke @ @]))
+      ::
+      =/  commit=block-commitment:t
+        (block-commitment:page:t candidate-block.m.k)
+      ::
+      =/  network-target
+        (~(got z-by targets.c.k) parent.candidate-block.m.k)
+      ::
+      =/  pool-target  (chunk:bignum:zeke (div max-tip5-atom:tip5:zeke (bex difficulty.pole)))
+      ::
+      =/  height  height.candidate-block.m.k
+      ::
+      =/  version=proof-version:sp
+        (height-to-proof-version:con height)
+      ::
+      =/  template  ::  second target is pool target, but right now we assume its the same as the network
+        ?-  version
+          %0  [%0 commit network-target pool-target height pow-len:t]
+          %1  [%1 commit network-target pool-target height pow-len:t]
+          %2  [%2 commit network-target pool-target height pow-len:t]
+        ==
+      ::
+      ``template
     ::
         [%blocks-summary ~]
       ^-  (unit (unit (list [block-id:t page:t])))
@@ -1127,18 +1188,22 @@
       ++  do-pow
         ^-  [(list effect:dk) kernel-state:dk]
         ?>  ?=([%pow *] command)
+        ~&  %foo
         =/  commit=block-commitment:t
           (block-commitment:page:t candidate-block.m.k)
         ?.  =(bc.command commit)
           ~>  %slog.[1 'do-pow: Mined for wrong (old) block commitment']
           [~ k]
+        ~&  %foo1
         ?:  %+  check-target:mine  dig.command
             (~(got z-by targets.c.k) parent.candidate-block.m.k)
+          ~&  %foo2
           =.  m.k  (set-pow:min prf.command)
           =.  m.k  set-digest:min
           =^  heard-block-effs  k  (heard-block /poke/miner now candidate-block.m.k eny)
           :_  k
           heard-block-effs
+        ~&  %foo3
         [~ k]
       ::
       ++  do-set-mining-key
