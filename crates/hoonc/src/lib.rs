@@ -112,7 +112,7 @@ pub async fn build_and_kick_jam(
     })
 }
 
-pub async fn save_generator(
+pub async fn kick_and_save_generator(
     context: &mut Context,
     path: &PathBuf,
     deps_dir: PathBuf,
@@ -209,14 +209,8 @@ pub async fn initialize_hoonc_(
     debug!("Dependencies directory: {:?}", deps_dir);
     debug!("Entry file: {:?}", entry);
     let data_dir = system_data_dir();
-    let mut nockapp = boot::setup(
-        KERNEL_JAM,
-        Some(boot_cli.clone()),
-        &[],
-        "hoonc",
-        Some(data_dir),
-    )
-    .await?;
+    let mut nockapp =
+        boot::setup(KERNEL_JAM, boot_cli.clone(), &[], "hoonc", Some(data_dir)).await?;
     nockapp.add_io_driver(nockapp::file_driver()).await;
     nockapp.add_io_driver(nockapp::exit_driver()).await;
 

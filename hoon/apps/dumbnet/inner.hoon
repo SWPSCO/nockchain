@@ -213,6 +213,7 @@
   ++  peek
     |=  arg=path
     ^-  (unit (unit *))
+    ~>  %slog.[0 (cat 3 'peek: %' -.arg)]
     =/  =(pole)  arg
     ?+  pole  ~
     ::
@@ -251,13 +252,23 @@
         [~ ~]
       ``u.elders
     ::
-        [%transaction tid=@ ~]
-      ::  scry for a tx that has been included in a validated block
-      ::  TODO: fixme this is wrong, it returns a map of txs from a *block* id
+        [%block-transactions bid=@ ~]
+      ::  scry for txs included in a validated block
       ^-  (unit (unit (z-map tx-id:t tx:t)))
       :-  ~
       %-  ~(get z-by txs.c.k)
-      (from-b58:hash:t tid.pole)
+      (from-b58:hash:t bid.pole)
+    ::
+        [%block-transaction bid=@ tid=@ ~]
+      ::  scry for a tx that has been included in a validated block
+      ^-  (unit (unit tx:t))
+      =/  tx-id  (from-b58:hash:t tid.pole)
+      =/  block-id  (from-b58:hash:t bid.pole)
+      =/  block-txs  (~(get z-by txs.c.k) block-id)
+      ?~  block-txs  ~
+      =/  maybe-tx  (~(get z-by u.block-txs) tx-id)
+      ?~  maybe-tx  ~
+      ``u.maybe-tx
     ::
         [%raw-transaction tid=@ ~]
       ::  scry for a raw-tx
@@ -280,6 +291,18 @@
       ?~  id
         [~ ~]
       `(bind (~(get z-by blocks.c.k) u.id) to-page:local-page:t)
+    ::
+        [%heaviest-chain ~]
+      ^-  (unit (unit [page-number:t block-id:t]))
+      ?~  highest=highest-block-height.d.k
+        [~ ~]
+      =/  block-id=(unit block-id:t)
+        (~(get z-by heaviest-chain.d.k) u.highest)
+      ?~  block-id
+        [~ ~]
+      %-  some
+      %-  some
+      [u.highest u.block-id]
     ::
         [%desk-hash ~]
       ^-  (unit (unit (unit @uvI)))
@@ -306,6 +329,40 @@
       =/  heaviest-block  (~(get z-by blocks.c.k) u.heaviest-block.c.k)
       ?~  heaviest-block  ~
       ``(to-page:local-page:t u.heaviest-block)
+    ::
+        [%current-balance ~]
+      ^-  (unit (unit (z-map nname:t nnote:t)))
+      ?~  heaviest-block.c.k
+        [~ ~]
+      ?.  (~(has z-by blocks.c.k) u.heaviest-block.c.k)
+        [~ ~]
+      :-  ~
+      %-  ~(get z-by balance.c.k)
+      u.heaviest-block.c.k
+    ::
+        [%balance-by-pubkey key-b58=@t ~]
+      ^-  (unit (unit [page-number:t block-id:t (z-map nname:t nnote:t)]))
+      =/  pubkey=schnorr-pubkey:t  (from-b58:schnorr-pubkey:t key-b58.pole)
+      ?~  heaviest-block.c.k
+        [~ ~]
+      ?.  (~(has z-by blocks.c.k) u.heaviest-block.c.k)
+        [~ ~]
+      ?~  bal=(~(get z-by balance.c.k) u.heaviest-block.c.k)
+        [~ ~]
+      ?~  highest=highest-block-height.d.k
+        [~ ~]
+      %-  some
+      %-  some
+      :+  u.highest
+        u.heaviest-block.c.k
+      %-  ~(rep z-by u.bal)
+      |=  [[k=nname:t v=nnote:t] pub-bal=(z-map nname:t nnote:t)]
+      ?:  ?&  (~(has z-in pubkeys.lock.v) pubkey)
+              |(=(1 m.lock.v) =(1 ~(wyt z-in pubkeys.lock.v)))
+          ==
+        (~(put z-by pub-bal) k v)
+      pub-bal
+
     ::
         [%heavy-summary ~]
       ^-  (unit (unit [(z-set lock:t) (unit page-summary:t)]))
@@ -379,7 +436,7 @@
       ::
       ``template
     ::
-         [%blocks-summary ~]
+        [%blocks-summary ~]
       ^-  (unit (unit (list [block-id:t page:t])))
       :-  ~
       :-  ~
@@ -389,6 +446,11 @@
       |=  lp=local-page:t
       ^-  page:t
       lp(pow ~)
+    ::
+        [%tx-accepted tid-b58=@t ~]
+      ^-  (unit (unit ?))
+      =+  tid=(from-b58:hash:t tid-b58:pole)
+      ``(~(has z-by raw-txs.c.k) tid)
     ==
   ::
   ++  poke
@@ -409,7 +471,7 @@
     ::~&  "inner dumbnet cause: {<[-.cause -.+.cause]>}"
     =^  effs  k
       ?+    wir  ~|("Unsupported wire: {<wir>}" !!)
-          [%poke src=?(%nc %timer %sys %miner %npc) ver=@ *]
+          [%poke src=?(%nc %timer %sys %miner %grpc) ver=@ *]
         ?-  -.cause
           %command  (handle-command now eny p.cause)
           %fact     (handle-fact wir eny our now p.cause)
@@ -512,7 +574,7 @@
       ::  peer id. so it gets cross-referenced with the blocks being
       ::  tracked to know who to ban.
       ::
-      ::  the crash case is when we get a bad block from the npc driver or
+      ::  the crash case is when we get a bad block from the grpc driver or
       ::  from the kernel itself.
       ::
       =/  check-page-without-txs=(reason:dk ~)
@@ -777,12 +839,6 @@
         ~>  %slog.[1 log-message]
         :_  k
         [(liar-effect wir %tx-id-invalid)]~
-      ?~  softed-tx=((soft raw-tx:t) raw)
-        ::  note that we should never actually see this case, since we're
-        ::  already softing the cause:dk at the poke entrypoint.
-        ~>  %slog.[1 'heard-tx: Transaction structure is invalid!']
-        :_  k
-        [(liar-effect wir %tx-not-soft)]~
       ::
       ::  check if raw-tx is part of a pending block
       ::
@@ -1012,7 +1068,7 @@
     ::  +liar-effect: produce the appropriate liar effect
     ::
     ::    this only produces the `%liar-peer` effect. the other possibilities
-    ::    are receiving a bad block or tx via the npc driver or from within
+    ::    are receiving a bad block or tx via the grpc driver or from within
     ::    the miner module or +do-genesis. in this case we just emit a
     ::    warning and crash, since that means there's a bug.
     ++  liar-effect
@@ -1022,8 +1078,8 @@
           [%poke %libp2p ver=@ typ=?(%gossip %response) %peer-id id=@ *]
         [%liar-peer (need (get-peer-id wir)) r]
       ::
-          [%poke %npc ver=@ *]
-        ~|  'liar-effect: ATTN: received a bad block or tx via npc driver'
+          [%poke %grpc ver=@ *]
+        ~|  'liar-effect: ATTN: received a bad block or tx via grpc driver'
         !!
       ::
           [%poke %miner *]

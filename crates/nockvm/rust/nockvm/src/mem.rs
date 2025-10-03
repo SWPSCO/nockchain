@@ -2005,6 +2005,10 @@ impl NounAllocator for NockStack {
     unsafe fn alloc_struct<T>(&mut self, count: usize) -> *mut T {
         self.struct_alloc::<T>(count)
     }
+
+    unsafe fn equals(&mut self, a: *mut Noun, b: *mut Noun) -> bool {
+        crate::unifying_equality::unifying_equality(self, a, b)
+    }
 }
 
 /// Immutable, acyclic objects which may be copied up the stack

@@ -394,6 +394,21 @@ pub enum Error {
     NonDeterministic(Mote, Noun), // mote, trace
 }
 
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Error::ScryBlocked(ref path) => write!(f, "ScryBlocked({:?})", path),
+            Error::ScryCrashed(ref trace) => write!(f, "ScryCrashed({:?})", trace),
+            Error::Deterministic(ref mote, ref trace) => {
+                write!(f, "Deterministic({:?}, {:?})", mote, trace)
+            }
+            Error::NonDeterministic(ref mote, ref trace) => {
+                write!(f, "NonDeterministic({:?}, {:?})", mote, trace)
+            }
+        }
+    }
+}
+
 impl Preserve for Error {
     unsafe fn preserve(&mut self, stack: &mut NockStack) {
         match self {
@@ -428,9 +443,9 @@ impl From<cold::Error> for Error {
 
 pub type Result = result::Result<Noun, Error>;
 
-const BAIL_EXIT: Result = Err(Error::Deterministic(Mote::Exit, D(0)));
-const BAIL_FAIL: Result = Err(Error::NonDeterministic(Mote::Fail, D(0)));
-const BAIL_INTR: Result = Err(Error::NonDeterministic(Mote::Intr, D(0)));
+pub const BAIL_EXIT: Result = Err(Error::Deterministic(Mote::Exit, D(0)));
+pub const BAIL_FAIL: Result = Err(Error::NonDeterministic(Mote::Fail, D(0)));
+pub const BAIL_INTR: Result = Err(Error::NonDeterministic(Mote::Intr, D(0)));
 pub(crate) const BAIL_JEST: Result = Err(Error::NonDeterministic(Mote::Jest, D(0)));
 
 #[allow(unused_variables)]

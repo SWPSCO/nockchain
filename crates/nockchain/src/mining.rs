@@ -17,9 +17,9 @@ use nockvm_macros::tas;
 use rand::Rng;
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, instrument, warn};
-use zkvm_jetpack::form::PRIME;
-use zkvm_jetpack::hand::structs::HoonList;
-use zkvm_jetpack::noun::noun_ext::NounExt as OtherNounExt;
+use zkvm_jetpack::form::belt::PRIME;
+use zkvm_jetpack::form::noun_ext::NounMathExt;
+use zkvm_jetpack::form::structs::HoonList;
 
 pub enum MiningWire {
     Mined,
@@ -99,8 +99,9 @@ pub fn create_mining_driver(
 
                 if let Some(tx) = init_complete_tx {
                     tx.send(()).map_err(|_| {
-                        warn!("Could not send driver initialization for mining driver.");
-                        NockAppError::OtherError
+                        NockAppError::OtherError(String::from(
+                            "Could not send driver initialization for mining driver.",
+                        ))
                     })?;
                 }
 
@@ -119,8 +120,9 @@ pub fn create_mining_driver(
 
             if let Some(tx) = init_complete_tx {
                 tx.send(()).map_err(|_| {
-                    warn!("Could not send driver initialization for mining driver.");
-                    NockAppError::OtherError
+                    NockAppError::OtherError(String::from(
+                        "Could not send driver initialization for mining driver.",
+                    ))
                 })?;
             }
 
@@ -178,8 +180,7 @@ pub fn create_mining_driver(
                                         },
                                         Some(mine_result) => {
                                             let Ok([res, tail]) = mine_result.uncell() else {
-                                                error!("Expected two elements in mining result");
-                                                return Err(NockAppError::OtherError);
+                                                return Err(NockAppError::OtherError(String::from("Expected two elements in mining result")));
                                             };
                                             if unsafe { res.raw_equals(&D(0)) } {
                                                 // success
@@ -187,7 +188,7 @@ pub fn create_mining_driver(
                                                 info!("Found block! thread={id}");
                                                 let Ok([hash, poke]) = tail.uncell() else {
                                                     error!("Expected two elements in tail");
-                                                    return Err(NockAppError::OtherError);
+                                                    return Err(NockAppError::OtherError(String::from("Expected two elements in tail")));
                                                 };
                                                 let mut poke_slab = NounSlab::new();
                                                 poke_slab.copy_into(poke);

@@ -52,8 +52,7 @@
 ::  grab all raw-txs that could possibly be included in block.
 ::  note that this set could include txs that are not spendable
 ::  from the current heaviest balance. we rely on the logic inside
-::  of process:tx-acc
-::  to catch these txs and reject them.
+::  of process:tx-acc to catch these txs and reject them.
 ++  candidate-txs
   |=  c=consensus-state:dk
   ^-  (z-set raw-tx:t)

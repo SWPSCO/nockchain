@@ -1509,7 +1509,7 @@ impl private::RawSlots for Noun {
  * An allocation object (probably a mem::NockStack) which can allocate a memory buffer sized to
  * a certain number of nouns
  */
-pub trait NounAllocator: Sized {
+pub trait NounAllocator: Sized + Stack {
     /** Allocate memory for some multiple of the size of a noun
      *
      * This should allocate *two more* `u64`s than `words` to make space for the size and metadata
@@ -1521,6 +1521,9 @@ pub trait NounAllocator: Sized {
 
     /** Allocate space for a struct in a stack frame */
     unsafe fn alloc_struct<T>(&mut self, count: usize) -> *mut T;
+
+    /** Check if two allocated nouns are equal **/
+    unsafe fn equals(&mut self, a: *mut Noun, b: *mut Noun) -> bool;
 }
 
 /**
