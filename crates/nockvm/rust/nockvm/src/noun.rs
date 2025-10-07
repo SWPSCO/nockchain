@@ -856,25 +856,185 @@ impl fmt::Debug for DebugPath<'_> {
     }
 }
 
-impl Slots for Cell {}
-impl private::RawSlots for Cell {
-    fn raw_slot(&self, axis: &BitSlice<u64, Lsb0>) -> Result<Noun> {
-        let mut noun: Noun = self.as_noun();
-        // Axis cannot be 0
-        let mut cursor = axis.last_one().ok_or(Error::NotRepresentable)?;
+// Axis iteration helpers for direct axes (u64)
+pub struct DirectAxisIterator {
+    axis: u64,
+    cursor: usize,
+}
 
-        while cursor != 0 {
-            cursor -= 1;
-
-            // Returns Err if axis tried to descend through atom
-            if axis[cursor] {
-                noun = noun.as_cell()?.tail();
+impl DirectAxisIterator {
+    #[inline(always)]
+    pub fn new(axis: u64) -> Option<Self> {
+        if axis == 0 {
+            None
+        } else {
+            let cursor = if axis == 1 {
+                0
             } else {
-                noun = noun.as_cell()?.head();
-            }
+                63 - axis.leading_zeros() as usize
+            };
+            Some(DirectAxisIterator { axis, cursor })
+        }
+    }
+
+    #[inline(always)]
+    pub fn next(&mut self) -> Option<bool> {
+        if self.cursor == 0 {
+            None
+        } else {
+            self.cursor -= 1;
+            Some(((self.axis >> self.cursor) & 1) != 0)
+        }
+    }
+}
+
+// Axis iteration helpers for indirect axes (slice of u64)
+pub struct IndirectAxisIterator<'a> {
+    words: &'a [u64],
+    cursor: usize,
+}
+
+impl<'a> IndirectAxisIterator<'a> {
+    #[inline(always)]
+    pub fn new(words: &'a [u64]) -> Option<Self> {
+        if words.is_empty() {
+            return None;
         }
 
-        Ok(noun)
+        // Find highest bit in the axis
+        let mut highest_word_idx = words.len() - 1;
+        while highest_word_idx > 0 && words[highest_word_idx] == 0 {
+            highest_word_idx -= 1;
+        }
+
+        let highest_word = words[highest_word_idx];
+        if highest_word == 0 {
+            return None;
+        }
+
+        let highest_bit_in_word = 63 - highest_word.leading_zeros() as usize;
+        let cursor = (highest_word_idx << 6) + highest_bit_in_word;
+
+        Some(IndirectAxisIterator { words, cursor })
+    }
+
+    #[inline(always)]
+    pub fn next(&mut self) -> Option<bool> {
+        if self.cursor == 0 {
+            None
+        } else {
+            self.cursor -= 1;
+            let word_idx = self.cursor >> 6;
+            let bit_idx = self.cursor & 63;
+            Some(((self.words[word_idx] >> bit_idx) & 1) != 0)
+        }
+    }
+}
+
+// Direct axis traversal without bitvec - for u64 axes
+#[inline(always)]
+fn slot_direct(cell: &Cell, axis: u64) -> Result<Noun> {
+    if axis == 0 {
+        return Err(Error::NotRepresentable);
+    }
+    if axis == 1 {
+        return Ok(cell.as_noun());
+    }
+
+    let highest = 63 - axis.leading_zeros() as usize;
+    let mut current = *cell;
+    let mut noun = current.as_noun();
+
+    for idx in (0..highest).rev() {
+        let descend_tail = ((axis >> idx) & 1) != 0;
+        let memory = unsafe { current.to_raw_pointer() };
+        noun = unsafe {
+            if descend_tail {
+                (*memory).tail
+            } else {
+                (*memory).head
+            }
+        };
+
+        if idx != 0 {
+            if noun.is_cell() {
+                current = unsafe { noun.cell };
+            } else {
+                return Err(Error::NotRepresentable);
+            }
+        }
+    }
+
+    Ok(noun)
+}
+
+impl Slots for Cell {}
+
+// Indirect axis traversal - for large axes stored in word slices
+#[inline(always)]
+fn slot_indirect(cell: &Cell, words: &[u64]) -> Result<Noun> {
+    if words.is_empty() {
+        return Err(Error::NotRepresentable);
+    }
+
+    // Find highest bit in the axis
+    let mut highest_word_idx = words.len() - 1;
+    while highest_word_idx > 0 && words[highest_word_idx] == 0 {
+        highest_word_idx -= 1;
+    }
+
+    let highest_word = words[highest_word_idx];
+    if highest_word == 0 {
+        return Err(Error::NotRepresentable);
+    }
+
+    let highest_bit_in_word = 63 - highest_word.leading_zeros() as usize;
+    let highest = (highest_word_idx << 6) + highest_bit_in_word;
+
+    if highest == 0 {
+        return Ok(cell.as_noun());
+    }
+
+    let mut current = *cell;
+    let mut noun = current.as_noun();
+    let mut idx = highest;
+
+    while idx != 0 {
+        idx -= 1;
+        let word_idx = idx >> 6;
+        let bit_idx = idx & 63;
+        let descend_tail = ((words[word_idx] >> bit_idx) & 1) != 0;
+
+        let memory = unsafe { current.to_raw_pointer() };
+        noun = unsafe {
+            if descend_tail {
+                (*memory).tail
+            } else {
+                (*memory).head
+            }
+        };
+
+        if idx != 0 {
+            if noun.is_cell() {
+                current = unsafe { noun.cell };
+            } else {
+                return Err(Error::NotRepresentable);
+            }
+        }
+    }
+
+    Ok(noun)
+}
+
+impl private::RawSlots for Cell {
+    #[inline(always)]
+    fn raw_slot_direct(&self, axis: u64) -> Result<Noun> {
+        slot_direct(self, axis)
+    }
+
+    #[inline(always)]
+    fn raw_slot_indirect(&self, axis: &[u64]) -> Result<Noun> {
+        slot_indirect(self, axis)
     }
 }
 
@@ -1490,12 +1650,31 @@ impl fmt::Debug for Noun {
 
 impl Slots for Noun {}
 impl private::RawSlots for Noun {
-    fn raw_slot(&self, axis: &BitSlice<u64, Lsb0>) -> Result<Noun> {
+    #[inline(always)]
+    fn raw_slot_direct(&self, axis: u64) -> Result<Noun> {
         match self.as_either_atom_cell() {
-            Right(cell) => cell.raw_slot(axis),
+            Right(cell) => cell.raw_slot_direct(axis),
             Left(_atom) => {
-                if axis.last_one() == Some(0) {
+                if axis == 1 {
                     Ok(*self)
+                } else {
+                    // Axis tried to descend through atom
+                    Err(Error::NotCell)
+                }
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn raw_slot_indirect(&self, axis: &[u64]) -> Result<Noun> {
+        match self.as_either_atom_cell() {
+            Right(cell) => cell.raw_slot_indirect(axis),
+            Left(_atom) => {
+                // Check if axis is 1 (all words are 0 except word[0] & 1 == 1)
+                if axis.len() == 1 && axis[0] == 1 {
+                    Ok(*self)
+                } else if axis.is_empty() || (axis.len() == 1 && axis[0] == 0) {
+                    Err(Error::NotRepresentable)
                 } else {
                     // Axis tried to descend through atom
                     Err(Error::NotCell)
@@ -1534,7 +1713,7 @@ pub trait Slots: private::RawSlots {
      * Retrieve component Noun at given axis, or fail with descriptive error
      */
     fn slot(&self, axis: u64) -> Result<Noun> {
-        self.raw_slot(BitSlice::from_element(&axis))
+        self.raw_slot_direct(axis)
     }
 
     /**
@@ -1542,8 +1721,8 @@ pub trait Slots: private::RawSlots {
      */
     fn slot_atom(&self, atom: Atom) -> Result<Noun> {
         match atom.as_either() {
-            Left(direct) => self.slot(direct.data()),
-            Right(indirect) => self.raw_slot(indirect.as_bitslice()),
+            Left(direct) => self.raw_slot_direct(direct.data()),
+            Right(indirect) => self.raw_slot_indirect(indirect.as_slice()),
         }
     }
 }
@@ -1552,16 +1731,76 @@ pub trait Slots: private::RawSlots {
  * Implementation methods that should not be made available to derived crates
  */
 mod private {
-    use crate::noun::{BitSlice, Lsb0, Noun, Result};
+    use crate::noun::{Noun, Result};
 
     /**
      * Implementation of the Slots trait
      */
     pub trait RawSlots {
         /**
-         * Actual logic of retreiving Noun object at some axis
+         * Actual logic of retreiving Noun object at some axis (direct)
          */
-        fn raw_slot(&self, axis: &BitSlice<u64, Lsb0>) -> Result<Noun>;
+        fn raw_slot_direct(&self, axis: u64) -> Result<Noun>;
+
+        /**
+         * Actual logic of retreiving Noun object at some axis (indirect)
+         */
+        fn raw_slot_indirect(&self, axis: &[u64]) -> Result<Noun>;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::jets::util::test::init_context;
+    use crate::noun::{Cell, Slots, D};
+
+    #[test]
+    fn test_slot_direct_simple() {
+        let mut context = init_context();
+        let cell = Cell::new(&mut context.stack, D(1), D(2));
+
+        // axis 1 returns the whole cell
+        assert_eq!(
+            unsafe { cell.slot(1).unwrap().raw_equals(&cell.as_noun()) },
+            true
+        );
+
+        // axis 2 returns head
+        assert_eq!(unsafe { cell.slot(2).unwrap().raw_equals(&D(1)) }, true);
+
+        // axis 3 returns tail
+        assert_eq!(unsafe { cell.slot(3).unwrap().raw_equals(&D(2)) }, true);
+    }
+
+    #[test]
+    fn test_slot_direct_nested() {
+        let mut context = init_context();
+        let inner = Cell::new(&mut context.stack, D(3), D(4));
+        // cell = [1 [3 4]]
+        let cell = Cell::new(&mut context.stack, D(1), inner.as_noun());
+
+        // axis 6 = 110 binary = tail then head = head of tail = 3
+        assert_eq!(unsafe { cell.slot(6).unwrap().raw_equals(&D(3)) }, true);
+
+        // axis 7 = 111 binary = tail then tail = tail of tail = 4
+        assert_eq!(unsafe { cell.slot(7).unwrap().raw_equals(&D(4)) }, true);
+
+        // axis 4 = 100 binary = head then stop = should fail (head is atom)
+        assert!(cell.slot(4).is_err());
+
+        // cell2 = [[3 4] 2]
+        let cell2 = Cell::new(&mut context.stack, inner.as_noun(), D(2));
+        // axis 5 = 101 binary = head then tail = tail of head = 4
+        assert_eq!(unsafe { cell2.slot(5).unwrap().raw_equals(&D(4)) }, true);
+    }
+
+    #[test]
+    fn test_slot_zero_axis() {
+        let mut context = init_context();
+        let cell = Cell::new(&mut context.stack, D(1), D(2));
+
+        // axis 0 should fail
+        assert!(cell.slot(0).is_err());
     }
 }
 

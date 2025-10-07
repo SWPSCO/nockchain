@@ -41,6 +41,7 @@ cc = "1.0"
 # run with e.g. 'cargo build --features check_forwarding,check_acyclic'
 [features]
 default = ["mmap"]
+nock_opcode_census = []
 malloc = []
 mmap = []
 # Dangerous
@@ -53,3 +54,7 @@ check_junior = []
 sham_hints = []
 stop_for_debug = []
 hint_dont = []
+
+[[bench]]
+name = "hoonc_hotspots"
+harness = false

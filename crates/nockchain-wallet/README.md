@@ -30,7 +30,7 @@ nockchain-wallet import-keys --seedphrase "your seed phrase here"
 nockchain-wallet import-keys --master-privkey <private-key> --chain-code <chain-code>
 
 # Import a watch-only public key
-nockchain-wallet import-keys --watch-only-pubkey <public-key-base58>
+nockchain-wallet import-keys --watch-only <public-key-base58>
 
 # Import a master public key from exported file
 nockchain-wallet import-master-pubkey keys.export
@@ -121,6 +121,17 @@ nockchain-wallet list-notes-by-pubkey <public-key>
 
 Shows only the notes associated with the specified public key. Useful for filtering wallet contents by address or for multisig scenarios.
 
+### List Arbitrary Notes by Public Key (Watch-Only)
+
+```bash
+nockchain-wallet import-keys --watch-only <public-key>
+nockchain-wallet list-notes-by-pubkey <public-key> --include-watch-only
+```
+
+Shows only the notes associated with the specified public key. Useful for filtering wallet contents by address or for multisig scenarios.
+
+You must add the watch-only pubkey to the wallet before it will be recognized.
+
 ### List Notes by Public Key (CSV format)
 
 ```bash
@@ -128,7 +139,6 @@ nockchain-wallet list-notes-by-pubkey-csv <public-key>
 ```
 
 Outputs matching notes in CSV format suitable for analysis or reporting. The output csv has the format: `notes-<public-key>.csv`.
-
 
 ## Transaction Creation
 
@@ -150,14 +160,16 @@ The create-tx command supports two modes: single recipient and multiple recipien
 # Send to a single recipient
 nockchain-wallet create-tx \
   --names "[first1 last1]" \
-  --recipient "[1 pk1]" \
-  --gift 100 \
+  --recipients "[1 pk1]" \
+  --gifts 100 \
   --fee 10
 ```
 
+Gifts and fees are denominated in nicks (65536 nicks = 1 nock).
+
 For single recipient transactions:
-- `--recipient` specifies one recipient as `[<num-of-signatures> <public-key-1>,<public-key-2>,...]`
-- `--gift` specifies the amount to send to that recipient
+- `--recipients` specifies one recipient as `[<num-of-signatures> <public-key-1>,<public-key-2>,...]`
+- `--gifts` specifies the amount to send to that recipient
 - Multiple names can still be provided to use funds from multiple notes
 
 #### Multiple Recipients Transaction
@@ -171,6 +183,8 @@ nockchain-wallet create-tx \
   --fee 10
 ```
 
+Gifts and fees are denominated in nicks (65536 nicks = 1 nock).
+
 For multiple recipient transactions:
 - `--recipients` specifies a list of recipients, each as `[<num-of-signatures> <public-key-1>,<public-key-2>,...]`
 - `--gifts` specifies a list of amounts, one for each recipient (must match the number of recipients)
@@ -179,7 +193,7 @@ For multiple recipient transactions:
 
 - The number of signatures required is specified as the first number in each recipient specification
 - The `names` argument is a list of `[first-name last-name]` pairs specifying funding notes
-- The `fee` argument is the transaction fee to pay
+- The `fee` argument is the transaction fee to pay (in nicks, 65536 nicks to 1 nock)
 - For multisig recipients, list multiple public keys after the signature count
 - Optional timelock constraints are specified with a single flag: `--timelock <SPEC>`, where `SPEC` is a comma-separated list of `absolute=<range>` and/or `relative=<range>`.
   - Ranges use the `min..max` syntax. (`10..`, `..500`, `0..1`).

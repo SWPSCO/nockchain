@@ -109,6 +109,9 @@ impl IBig {
     /// assert_eq!(ibig!(-3).pow(3), ibig!(-27));
     /// ```
     #[inline]
+    #[deprecated(
+        note = "This uses global allocator. Use pow_stack instead to prevent memory leaks"
+    )]
     pub fn pow(&self, exp: usize) -> IBig {
         let sign = if self.sign() == Negative && exp % 2 == 1 {
             Negative

@@ -7,6 +7,8 @@ use bincode::config::Configuration;
 use bincode::{config, encode_to_vec, Decode, Encode};
 use blake3::{Hash, Hasher};
 use bytes::Bytes;
+use either::Either;
+use nockvm::noun::{Atom, Cell, Noun};
 use nockvm_macros::tas;
 use thiserror::Error;
 use tokio::fs::create_dir_all;
@@ -15,7 +17,7 @@ use tracing::{debug, error, trace, warn};
 
 use crate::metrics::NockAppMetrics;
 use crate::noun::slab::{Jammer, NockJammer, NounSlab};
-use crate::JammedNoun;
+use crate::{AtomExt, JammedNoun};
 
 const JAM_MAGIC_BYTES: u64 = tas!(b"CHKJAM");
 const SNAPSHOT_VERSION_0: u32 = 0;
@@ -259,7 +261,7 @@ impl SaveableCheckpoint {
         jammed: JammedCheckpointV1,
         metrics: Option<Arc<NockAppMetrics>>,
     ) -> Result<Self, CheckpointError> {
-        let mut slab = NounSlab::new();
+        let mut slab: NounSlab = NounSlab::new();
         let cue_start = Instant::now();
         let root = slab.cue_into(jammed.jam.0)?;
         metrics.map(|m| m.load_cue_time.add_timing(&cue_start.elapsed()));
@@ -308,7 +310,13 @@ pub enum CheckpointError {
     SwordInterpreterError,
     #[error("Cue error: {0}")]
     CueError(#[from] crate::noun::slab::CueError),
-    #[error("Loading at version 1 failed: {v1}\nLoading at version 0 failed: {v0}")]
+    #[error("No checkpoint jams provided to merge")]
+    NoCheckpoints,
+    #[error(
+        "Kernel hash mismatch while merging checkpoint jams (expected {expected:?}, found {found:?})"
+    )]
+    KernelHashMismatch { expected: Hash, found: Hash },
+    #[error("Loading at version 1 failed: {v1}\\nLoading at version 0 failed: {v0}")]
     VersionsFailed {
         v1: Box<CheckpointError>,
         v0: Box<CheckpointError>,
@@ -317,7 +325,7 @@ pub enum CheckpointError {
 
 pub type JammedCheckpoint = JammedCheckpointV1;
 
-#[derive(Encode, Decode, PartialEq, Debug)]
+#[derive(Clone, Encode, Decode, PartialEq, Debug)]
 pub struct JammedCheckpointV1 {
     /// Magic bytes to identify checkpoint format
     pub magic_bytes: u64,
@@ -397,6 +405,109 @@ impl JammedCheckpointV1 {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MergePrecedence {
+    /// Preserve the value already present in the merged tree when conflicts arise.
+    ExistingWins,
+    /// Allow later checkpoints to overwrite previously merged values on conflict.
+    IncomingWins,
+}
+
+pub fn merge_checkpoint_jams(
+    checkpoints: &[JammedCheckpointV1],
+    precedence: MergePrecedence,
+) -> Result<JammedCheckpointV1, CheckpointError> {
+    let mut iter = checkpoints.iter();
+    let first = iter.next().ok_or(CheckpointError::NoCheckpoints)?;
+    let mut merged_owned = checkpoint_to_owned(first)?;
+    let ker_hash = first.ker_hash;
+    let mut max_event_num = first.event_num;
+
+    for checkpoint in iter {
+        if checkpoint.ker_hash != ker_hash {
+            return Err(CheckpointError::KernelHashMismatch {
+                expected: ker_hash,
+                found: checkpoint.ker_hash,
+            });
+        }
+        if checkpoint.event_num > max_event_num {
+            max_event_num = checkpoint.event_num;
+        }
+        let overlay = checkpoint_to_owned(checkpoint)?;
+        merged_owned = merge_owned(merged_owned, &overlay, precedence);
+    }
+
+    let mut slab: NounSlab = NounSlab::new();
+    let noun = merged_owned.to_noun(&mut slab);
+    slab.set_root(noun);
+    let jammed = JammedNoun::new(slab.jam());
+    Ok(JammedCheckpointV1::new(ker_hash, max_event_num, jammed))
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum OwnedNoun {
+    Atom(Bytes),
+    Cell(Box<OwnedNoun>, Box<OwnedNoun>),
+}
+
+impl OwnedNoun {
+    fn from_noun(noun: Noun) -> Self {
+        match noun.as_either_atom_cell() {
+            Either::Left(atom) => OwnedNoun::Atom(Bytes::copy_from_slice(atom.as_ne_bytes())),
+            Either::Right(cell) => {
+                let head_owned = OwnedNoun::from_noun(cell.head());
+                let tail_owned = OwnedNoun::from_noun(cell.tail());
+                OwnedNoun::Cell(Box::new(head_owned), Box::new(tail_owned))
+            }
+        }
+    }
+
+    fn to_noun<J: Jammer>(&self, slab: &mut NounSlab<J>) -> Noun {
+        match self {
+            OwnedNoun::Atom(bytes) => Atom::from_bytes(slab, bytes).as_noun(),
+            OwnedNoun::Cell(head, tail) => {
+                let head_noun = head.to_noun(slab);
+                let tail_noun = tail.to_noun(slab);
+                Cell::new(slab, head_noun, tail_noun).as_noun()
+            }
+        }
+    }
+
+    fn is_zero_atom(&self) -> bool {
+        match self {
+            OwnedNoun::Atom(bytes) => bytes.iter().all(|byte| *byte == 0),
+            OwnedNoun::Cell(_, _) => false,
+        }
+    }
+}
+
+fn merge_owned(base: OwnedNoun, overlay: &OwnedNoun, precedence: MergePrecedence) -> OwnedNoun {
+    if base.is_zero_atom() {
+        return overlay.clone();
+    }
+    if overlay.is_zero_atom() {
+        return base;
+    }
+
+    match (base, overlay) {
+        (OwnedNoun::Cell(base_head, base_tail), OwnedNoun::Cell(overlay_head, overlay_tail)) => {
+            let merged_head = merge_owned(*base_head, overlay_head, precedence);
+            let merged_tail = merge_owned(*base_tail, overlay_tail, precedence);
+            OwnedNoun::Cell(Box::new(merged_head), Box::new(merged_tail))
+        }
+        (base_node, overlay_node) => match precedence {
+            MergePrecedence::ExistingWins => base_node,
+            MergePrecedence::IncomingWins => overlay_node.clone(),
+        },
+    }
+}
+
+fn checkpoint_to_owned(checkpoint: &JammedCheckpointV1) -> Result<OwnedNoun, CheckpointError> {
+    let mut slab: NounSlab = NounSlab::new();
+    let noun = slab.cue_into(checkpoint.jam.0.clone())?;
+    Ok(OwnedNoun::from_noun(noun))
+}
+
 impl From<JammedCheckpointV0> for JammedCheckpoint {
     fn from(v0: JammedCheckpointV0) -> Self {
         JammedCheckpointV1 {
@@ -410,7 +521,7 @@ impl From<JammedCheckpointV0> for JammedCheckpoint {
     }
 }
 
-#[derive(Encode, Decode, PartialEq, Debug)]
+#[derive(Clone, Encode, Decode, PartialEq, Debug)]
 pub struct JammedCheckpointV0 {
     /// Magic bytes to identify checkpoint format
     pub magic_bytes: u64,
@@ -512,3 +623,113 @@ mod tests {
     }
 }
 */
+
+#[cfg(test)]
+mod tests {
+    use nockvm::noun::{Cell, D};
+
+    use super::*;
+
+    fn checkpoint_with_root<F>(ker_hash: Hash, event_num: u64, build: F) -> JammedCheckpointV1
+    where
+        F: FnOnce(&mut NounSlab) -> Noun,
+    {
+        let mut slab: NounSlab = NounSlab::new();
+        let root = build(&mut slab);
+        slab.set_root(root);
+        let jammed = JammedNoun::new(slab.jam());
+        JammedCheckpointV1::new(ker_hash, event_num, jammed)
+    }
+
+    #[test]
+    fn merge_checkpoint_jams_preserves_unique_paths() -> Result<(), CheckpointError> {
+        let ker_hash = blake3::hash(b"merge-unique-paths");
+        let first = checkpoint_with_root(ker_hash, 1, |slab| {
+            let left_leaf = Cell::new(slab, D(1), D(100)).as_noun();
+            Cell::new(slab, left_leaf, D(0)).as_noun()
+        });
+        let second = checkpoint_with_root(ker_hash, 2, |slab| {
+            let right_leaf = Cell::new(slab, D(2), D(200)).as_noun();
+            Cell::new(slab, D(0), right_leaf).as_noun()
+        });
+        let checkpoints = [first.clone(), second.clone()];
+
+        let merged = merge_checkpoint_jams(&checkpoints, MergePrecedence::IncomingWins)?;
+        assert_eq!(merged.event_num, 2);
+        assert_eq!(merged.ker_hash, ker_hash);
+
+        let mut slab: NounSlab = NounSlab::new();
+        let merged_root = slab.cue_into(merged.jam.0.clone())?;
+        let merged_cell = merged_root.as_cell()?;
+        let head_pair = merged_cell.head().as_cell()?;
+        assert_eq!(head_pair.head().as_atom()?.as_u64()?, 1);
+        assert_eq!(head_pair.tail().as_atom()?.as_u64()?, 100);
+        let tail_pair = merged_cell.tail().as_cell()?;
+        assert_eq!(tail_pair.head().as_atom()?.as_u64()?, 2);
+        assert_eq!(tail_pair.tail().as_atom()?.as_u64()?, 200);
+        Ok(())
+    }
+
+    #[test]
+    fn merge_checkpoint_jams_applies_precedence() -> Result<(), CheckpointError> {
+        let ker_hash = blake3::hash(b"merge-precedence");
+        let first = checkpoint_with_root(ker_hash, 3, |slab| {
+            let head_leaf = Cell::new(slab, D(7), D(300)).as_noun();
+            Cell::new(slab, head_leaf, D(0)).as_noun()
+        });
+        let second = checkpoint_with_root(ker_hash, 4, |slab| {
+            let head_leaf = Cell::new(slab, D(7), D(999)).as_noun();
+            Cell::new(slab, head_leaf, D(0)).as_noun()
+        });
+        let checkpoints = [first.clone(), second.clone()];
+
+        let merged_last_wins = merge_checkpoint_jams(&checkpoints, MergePrecedence::IncomingWins)?;
+        assert_eq!(merged_last_wins.event_num, 4);
+        {
+            let mut slab: NounSlab = NounSlab::new();
+            let root = slab.cue_into(merged_last_wins.jam.0.clone())?;
+            let value = root
+                .as_cell()?
+                .head()
+                .as_cell()?
+                .tail()
+                .as_atom()?
+                .as_u64()?;
+            assert_eq!(value, 999);
+        }
+
+        let merged_first_wins = merge_checkpoint_jams(&checkpoints, MergePrecedence::ExistingWins)?;
+        assert_eq!(merged_first_wins.event_num, 4);
+        {
+            let mut slab: NounSlab = NounSlab::new();
+            let root = slab.cue_into(merged_first_wins.jam.0.clone())?;
+            let value = root
+                .as_cell()?
+                .head()
+                .as_cell()?
+                .tail()
+                .as_atom()?
+                .as_u64()?;
+            assert_eq!(value, 300);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn merge_checkpoint_jams_detects_kernel_mismatch() {
+        let first = checkpoint_with_root(blake3::hash(b"a"), 1, |slab| {
+            let pair = Cell::new(slab, D(1), D(10)).as_noun();
+            Cell::new(slab, pair, D(0)).as_noun()
+        });
+        let second = checkpoint_with_root(blake3::hash(b"b"), 2, |slab| {
+            let pair = Cell::new(slab, D(2), D(20)).as_noun();
+            Cell::new(slab, pair, D(0)).as_noun()
+        });
+
+        let result = merge_checkpoint_jams(&[first, second], MergePrecedence::IncomingWins);
+        assert!(matches!(
+            result,
+            Err(CheckpointError::KernelHashMismatch { .. })
+        ));
+    }
+}
