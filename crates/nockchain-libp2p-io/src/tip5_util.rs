@@ -40,6 +40,7 @@ pub fn tip5_hash_to_base58_stack<S: Stack>(
     Ok(base58_string)
 }
 
+// FIXME: This use of ibig's pow will leak memory.
 fn accum_prime_ubig(prime: &UBig, acc: &mut UBig, value: u64, i: usize) {
     *acc += UBig::from(value) * prime.pow(i);
 }

@@ -334,6 +334,7 @@ pub struct Hash(pub [Belt; 5]);
 
 impl Hash {
     // TODO: use stackful UBig or different bigint crate
+    // FIXME: This use of ibig's pow will leak memory.
     pub fn to_base58(&self) -> String {
         fn base_p_to_decimal<const N: usize>(belts: [Belt; N]) -> String {
             let prime_ubig = UBig::from(PRIME);

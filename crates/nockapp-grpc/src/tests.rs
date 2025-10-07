@@ -22,7 +22,7 @@ mod tests {
 
         // Test that error codes are defined
         assert_eq!(ErrorCode::PeekFailed as i32, 2);
-        assert_eq!(ErrorCode::PokeFailed as i32, 3);
-        assert_eq!(ErrorCode::Timeout as i32, 5);
+        assert_eq!(ErrorCode::PokeFailed as i32, 4);
+        assert_eq!(ErrorCode::Timeout as i32, 6);
     }
 }

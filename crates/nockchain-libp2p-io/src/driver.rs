@@ -2278,7 +2278,7 @@ fn dial_peers(
     swarm: &mut Swarm<NockchainBehaviour>,
     peers: &[Multiaddr],
 ) -> Result<(), NockAppError> {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     let cloned_peers: &mut [libp2p::Multiaddr] = &mut peers.to_vec();
     cloned_peers.shuffle(&mut rng);
@@ -2388,7 +2388,7 @@ fn dial_more_peers(swarm: &mut Swarm<NockchainBehaviour>, state_guard: MutexGuar
             }
         }
     }
-    addresses_to_dial.shuffle(&mut rand::thread_rng());
+    addresses_to_dial.shuffle(&mut rand::rng());
     for address in addresses_to_dial {
         info!("Redialing {}", address);
         if let Err(err) = swarm.dial(address) {

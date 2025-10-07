@@ -191,6 +191,7 @@ pub enum ClientType {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum WalletWire {
     ListNotes,
     UpdateBalance,

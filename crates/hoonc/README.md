@@ -1,4 +1,4 @@
-# Choo: compile hoon
+# `hoonc`: compile hoon
 
 To self-bootstrap:
 
@@ -19,6 +19,21 @@ cargo build --release
 ```
 
 and use the resulting binary in `target/release/hoonc` (in the `nockapp` directory) to build NockApp kernels or arbitrary hoon files as detailed in the following section.
+
+## Bootstraps
+
+The repository ships with two bootstrap jams:
+
+- `bootstrap/hoonc-prewarm.jam` – pre-booted and used by default.
+- `bootstrap/hoonc.jam` – the minimal bootstrap, kept as a fallback.
+
+Regenerate the prewarmed bootstrap after changing the kernel or bundled Hoon text:
+
+```bash
+cargo run --release --bin prewarm -- --output bootstrap/hoonc-prewarm.jam
+```
+
+The helper writes to a temporary data directory by default; pass `--data-dir` if you need to inspect the intermediate checkpoint.
 
 ## Usage
 
@@ -45,9 +60,15 @@ echo '%trivial' > hoon/trivial.hoon
 hoonc --new --arbitrary hoon/trivial.hoon
 ```
 
+For ad-hoc Hoon experiments without wiring up `hoonc`, you can also run the `hoon` CLI directly (see `open/crates/hoon/src/main.rs`):
+
+```bash
+cargo run --release -p hoon -- <path-to-generator.hoon>
+```
+
 ## Hoon
 
-Choo supports the Hoon language as defined in `/sys/hoon`.  However, the build system does not replicate Urbit's `+ford`
+`hoonc` supports the Hoon language as defined in `/sys/hoon`.  However, the build system does not replicate Urbit's `+ford`
 functionality exactly, as that is closely tied to the Urbit Arvo operating system.  `hoonc` supports the following build
 runes:
 
@@ -60,11 +81,11 @@ runes:
 
 ## Developer Troubleshooting
 
-If you make changes to the `poke` arm in `bootstrap/kernel.hoon` or in `hoon-deps/wrapper.hoon`, you'll need to update the `hoonc.jam` file by running:
+If you make changes to the `poke` arm in `bootstrap/kernel.hoon` or in `hoon-deps/wrapper.hoon`, you'll need to update the minimal `hoonc.jam` file by running:
 
 ```bash
 cargo run --release bootstrap/kernel.hoon ../hoon-deps
 mv out.jam bootstrap/hoonc.jam
 ```
 
-and committing the changes to `hoonc.jam` so that the CI can properly bootstrap the `hoonc` kernel.
+and committing the changes to `hoonc.jam` so that the CI can properly bootstrap the `hoonc` kernel. Afterwards, re-run the prewarm helper to refresh `bootstrap/hoonc-prewarm.jam`.
