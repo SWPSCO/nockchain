@@ -48,11 +48,6 @@ install-nockchain: assets/dumb.jam assets/miner.jam
 	$(call show_env_vars)
 	cargo install --locked --force --path crates/nockchain --bin nockchain
 
-.PHONY: install-nockchain-wallet
-install-nockchain-wallet: assets/wal.jam
-	$(call show_env_vars)
-	cargo install --locked --force --path crates/nockchain-wallet --bin nockchain-wallet
-
 .PHONY: ensure-dirs
 ensure-dirs:
 	mkdir -p hoon
@@ -79,10 +74,6 @@ nuke-assets:
 nuke-dumb:
 	rm -f assets/dumb.jam
 
-.PHONY: nuke-wallet
-nuke-wallet:
-	rm -f assets/wal.jam
-
 .PHONY: nuke-miner
 nuke-miner:
 	rm -f assets/miner.jam
@@ -97,10 +88,6 @@ build-hoon-all: nuke-assets update-hoonc ensure-dirs build-trivial $(HOON_TARGET
 
 .PHONY: build-dumb
 build-dumb: nuke-dumb update-hoonc ensure-dirs build-trivial assets/dumb.jam
-	$(call show_env_vars)
-
-.PHONY: build-wallet
-build-wallet: nuke-wallet update-hoonc ensure-dirs build-trivial assets/wal.jam
 	$(call show_env_vars)
 
 .PHONY: build-miner
@@ -127,13 +114,6 @@ assets/dumb.jam: ensure-dirs hoon/apps/dumbnet/outer.hoon $(HOON_SRCS)
 	rm -f assets/dumb.jam
 	hoonc hoon/apps/dumbnet/outer.hoon hoon
 	mv out.jam assets/dumb.jam
-
-## Build wal.jam with hoonc
-assets/wal.jam: ensure-dirs hoon/apps/wallet/wallet.hoon $(HOON_SRCS)
-	$(call show_env_vars)
-	rm -f assets/wal.jam
-	hoonc hoon/apps/wallet/wallet.hoon hoon
-	mv out.jam assets/wal.jam
 
 ## Build mining.jam with hoonc
 assets/miner.jam: ensure-dirs hoon/apps/dumbnet/miner.hoon $(HOON_SRCS)
