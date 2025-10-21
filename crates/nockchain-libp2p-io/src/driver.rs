@@ -41,7 +41,9 @@ use crate::messages::{NockchainDataRequest, NockchainFact, NockchainRequest, Noc
 use crate::metrics::NockchainP2PMetrics;
 use crate::p2p_state::{CacheResponse, P2PState};
 use crate::p2p_util::{log_fail2ban_ipv4, log_fail2ban_ipv6, MultiaddrExt, PeerIdExt};
+#[cfg(test)]
 use crate::tip5_util::tip5_hash_to_base58;
+use crate::tip5_util::tip5_hash_to_base58_stack;
 use crate::tracked_join_set::TrackedJoinSet;
 use crate::traffic_cop;
 
@@ -187,7 +189,9 @@ pub fn make_libp2p_driver(
                                 error!("Failed to send exit signal: {}", e);
                             }
                         });
-                        return Err(NockAppError::OtherError);
+                        return Err(NockAppError::OtherError(String::from(
+                            "Could not start swarm",
+                        )));
                     }
                 };
             let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmAction>(1000); // number needs to be high enough to send gossips to peers
@@ -463,7 +467,7 @@ async fn send_timer_poke(
 }
 
 async fn handle_effect(
-    noun_slab: NounSlab,
+    mut noun_slab: NounSlab,
     swarm_tx: mpsc::Sender<SwarmAction>,
     equix_builder: equix::EquiXBuilder,
     local_peer_id: PeerId,
@@ -504,7 +508,9 @@ async fn handle_effect(
                         request: gossip_request_clone,
                     })
                     .await
-                    .map_err(|_e| NockAppError::OtherError)?;
+                    .map_err(|_e| {
+                        NockAppError::OtherError(String::from("Failed to send gossip request"))
+                    })?;
             }
         }
         EffectType::Request => {
@@ -539,7 +545,7 @@ async fn handle_effect(
                 if let Ok(raw_tx_cell) = request_body.tail().as_cell() {
                     if raw_tx_cell.head().eq_bytes(b"by-id") {
                         trace!("Requesting raw transaction by ID, removing ID from seen set");
-                        let tx_id = tip5_hash_to_base58(raw_tx_cell.tail())?;
+                        let tx_id = tip5_hash_to_base58_stack(&mut noun_slab, raw_tx_cell.tail())?;
                         let mut state_guard = driver_state.clone().lock_owned().await;
                         state_guard.seen_txs.remove(&tx_id);
                     }
@@ -557,7 +563,9 @@ async fn handle_effect(
                 swarm_tx
                     .send(SwarmAction::SendRequest { peer_id, request })
                     .await
-                    .map_err(|_e| NockAppError::OtherError)?;
+                    .map_err(|_e| {
+                        NockAppError::OtherError(String::from("Failed to send SwarmAction request"))
+                    })?;
             }
         }
         EffectType::LiarPeer => {
@@ -572,6 +580,7 @@ async fn handle_effect(
             let bytes = peer_id_atom
                 .to_bytes_until_nul()
                 .expect("failed to strip null bytes");
+
             let peer_id_str = String::from_utf8(bytes).map_err(|_| {
                 NockAppError::IoError(std::io::Error::new(
                     std::io::ErrorKind::Other,
@@ -589,7 +598,9 @@ async fn handle_effect(
             swarm_tx
                 .send(SwarmAction::BlockPeer { peer_id })
                 .await
-                .map_err(|_| NockAppError::OtherError)?;
+                .map_err(|_| {
+                    NockAppError::OtherError(String::from("Failed to send SwarmAction request"))
+                })?;
         }
         EffectType::LiarBlockId => {
             let effect_cell = unsafe { noun_slab.root().as_cell()? };
@@ -604,7 +615,9 @@ async fn handle_effect(
                 swarm_tx
                     .send(SwarmAction::BlockPeer { peer_id })
                     .await
-                    .map_err(|_| NockAppError::OtherError)?;
+                    .map_err(|_| {
+                        NockAppError::OtherError(String::from("Failed to send SwarmAction request"))
+                    })?;
             }
         }
         EffectType::Track => {
@@ -620,7 +633,9 @@ async fn handle_effect(
 
                 // Convert peer_id from base58 string to PeerId
                 let Ok(peer_id) = PeerId::from_noun(peer_id_atom.as_noun()) else {
-                    return Err(NockAppError::OtherError);
+                    return Err(NockAppError::OtherError(String::from(
+                        "Invalid peer ID format",
+                    )));
                 };
 
                 // Add to message tracker
@@ -649,7 +664,7 @@ async fn handle_effect(
                 let seen_pq = seen_cell.tail().as_cell()?;
                 let block_id = seen_pq.head().as_cell()?;
                 let mut state_guard = driver_state.lock().await;
-                let block_id_str = tip5_hash_to_base58(block_id.as_noun())
+                let block_id_str = tip5_hash_to_base58_stack(&mut noun_slab, block_id.as_noun())
                     .expect("failed to convert block ID to base58");
                 trace!("seen block id: {:?}", &block_id_str);
                 state_guard.seen_blocks.insert(block_id_str);
@@ -679,7 +694,7 @@ async fn handle_effect(
             } else if seen_type.eq_bytes(b"tx") {
                 let tx_id = seen_cell.tail().as_cell()?;
                 let mut state_guard = driver_state.lock().await;
-                let tx_id_str = tip5_hash_to_base58(tx_id.as_noun())
+                let tx_id_str = tip5_hash_to_base58_stack(&mut noun_slab, tx_id.as_noun())
                     .expect("failed to convert tx ID to base58");
                 trace!("seen tx id: {:?}", &tx_id_str);
                 state_guard.seen_txs.insert(tx_id_str);
@@ -717,7 +732,9 @@ async fn handle_request_response(
                 swarm_tx
                     .send(SwarmAction::BlockPeer { peer_id: peer })
                     .await
-                    .map_err(|_| NockAppError::OtherError)?;
+                    .map_err(|_| {
+                        NockAppError::OtherError(String::from("Failed to send SwarmAction request"))
+                    })?;
                 return Ok(());
             };
             trace!("handle_request_response: powork verified");
@@ -771,7 +788,11 @@ async fn handle_request_response(
                                         response: NockchainResponse::Ack { acked: true },
                                     })
                                     .await
-                                    .map_err(|_| NockAppError::OtherError)?;
+                                    .map_err(|_| {
+                                        NockAppError::OtherError(String::from(
+                                            "Failed to send SwarmAction response",
+                                        ))
+                                    })?;
                                 return Ok(());
                             }
                             Ok(CacheResponse::NotCached) => None,
@@ -833,7 +854,11 @@ async fn handle_request_response(
                                     response: NockchainResponse::Ack { acked: true },
                                 })
                                 .await
-                                .map_err(|_| NockAppError::OtherError)?;
+                                .map_err(|_| {
+                                    NockAppError::OtherError(String::from(
+                                        "Failed to send SwarmAction response",
+                                    ))
+                                })?;
                             return Ok(());
                         };
                         (scry_res_slab, false)
@@ -900,7 +925,11 @@ async fn handle_request_response(
                     swarm_tx
                         .send(SwarmAction::SendResponse { channel, response })
                         .await
-                        .map_err(|_| NockAppError::OtherError)?;
+                        .map_err(|_| {
+                            NockAppError::OtherError(String::from(
+                                "Failed to send SwarmAction response",
+                            ))
+                        })?;
                 }
                 NockchainRequest::Gossip { message } => {
                     trace!("handle_request_response: Gossip received");
@@ -915,12 +944,17 @@ async fn handle_request_response(
                             swarm_tx
                                 .send(SwarmAction::SendResponse { channel, response })
                                 .await
-                                .map_err(|_| NockAppError::OtherError)?;
+                                .map_err(|_| {
+                                    NockAppError::OtherError(String::from(
+                                        "Failed to send SwarmAction response",
+                                    ))
+                                })?;
                             Ok(())
                         });
 
                     let poke_kernel = tokio::task::spawn(async move {
-                        let gossip = NockchainFact::from_noun_slab(&request_slab)?;
+                        let mut request_slab = request_slab;
+                        let gossip = NockchainFact::from_noun_slab(&mut request_slab)?;
                         let state_arc = driver_state.clone();
                         let metrics_arc = metrics.clone();
                         let enable_fut: Pin<Box<dyn Future<Output = bool> + Send>> = match gossip {
@@ -1080,7 +1114,7 @@ async fn handle_request_response(
                     nockvm::noun::FullDebugCell(&response_noun.as_cell()?)
                 );
 
-                let response = NockchainFact::from_noun_slab(&response_slab)?;
+                let response = NockchainFact::from_noun_slab(&mut response_slab)?;
                 let response_cell = unsafe { response_slab.root().as_cell() }?;
                 let state_arc = driver_state.clone();
                 let metrics_arc = metrics.clone();
@@ -1363,14 +1397,14 @@ fn create_scry_response(
                 res_slab.set_root(response_noun);
                 Right(Ok(NockchainResponse::new_response_result(res_slab.jam())))
             } else {
-                error!("Failed to prepend tas to response noun");
-                Right(Err(NockAppError::OtherError))
+                Right(Err(NockAppError::OtherError(String::from(
+                    "Failed to prepend tas to response noun",
+                ))))
             }
         }
-        ScryResult::Invalid => {
-            error!("Invalid scry result");
-            Right(Err(NockAppError::OtherError))
-        }
+        ScryResult::Invalid => Right(Err(NockAppError::OtherError(String::from(
+            "Invalid scry result",
+        )))),
     }
 }
 
@@ -2244,7 +2278,7 @@ fn dial_peers(
     swarm: &mut Swarm<NockchainBehaviour>,
     peers: &[Multiaddr],
 ) -> Result<(), NockAppError> {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     let cloned_peers: &mut [libp2p::Multiaddr] = &mut peers.to_vec();
     cloned_peers.shuffle(&mut rng);
@@ -2354,7 +2388,7 @@ fn dial_more_peers(swarm: &mut Swarm<NockchainBehaviour>, state_guard: MutexGuar
             }
         }
     }
-    addresses_to_dial.shuffle(&mut rand::thread_rng());
+    addresses_to_dial.shuffle(&mut rand::rng());
     for address in addresses_to_dial {
         info!("Redialing {}", address);
         if let Err(err) = swarm.dial(address) {

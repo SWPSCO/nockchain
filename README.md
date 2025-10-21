@@ -15,7 +15,7 @@ Install `rustup` by following their instructions at: [https://rustup.rs/](https:
 Ensure you have these dependencies installed if running on Debian/Ubuntu:
 ```
 sudo apt update
-sudo apt install clang llvm-dev libclang-dev make
+sudo apt install clang llvm-dev libclang-dev make protobuf-compiler
 ```
 Clone the repo and cd into it:
 ```
@@ -33,6 +33,8 @@ Install `hoonc`, the Hoon compiler:
 make install-hoonc
 export PATH="$HOME/.cargo/bin:$PATH"
 ```
+
+(If you build manually with `cargo build`, be sure to use `--release` for `hoonc`.)
 
 ## Install Wallet
 
@@ -65,11 +67,24 @@ nockchain-wallet keygen
 
 This will print a new public/private key pair + chain code to the console, as well as the seed phrase for the private key.
 
-Now, copy the public key to the `.env` file:
+Use `.env_example` as a template and copy the public key to the `.env` file:
 
 ```
 MINING_PUBKEY=<public-key>
 ```
+When the v1 protocol cut-off block-height is reached, the miner will automatically generate v1 coinbases for blocks that it mines.
+You will need to supply a pkh for the coinbase ahead of time by generating a v1 key using the latest wallet. pkhs cannot be generated
+from v0 keys.
+
+Generate the v1 pkh by running `nockchain-wallet generate-mining-pkh` on the latest version of the wallet. The pkh should be listed as the `Address`.
+Then, in your `.env` file, set the `MINING_PKH` variable to the address of the v1 key you generated.
+
+```
+MINING_PKH=<address>
+```
+
+To reiterate, before the upgrade cutoff, the miner will generate v0 coinbases spendable by the `MINING_PUBKEY`. After the cutoff, it will generate
+v1 coinbases spendable by the `MINING_PKH`.
 
 ## Backup Keys
 
@@ -84,7 +99,7 @@ This will save your keys to a file called `keys.export` in the current directory
 They can be imported later with:
 
 ```
-nockchain-wallet import-keys --input keys.export
+nockchain-wallet import-keys --file keys.export
 ```
 
 ## Running Nodes
@@ -227,7 +242,7 @@ To check your wallet balance:
 
 ```bash
 # List all notes by pubkey
-nockchain-wallet --nockchain-socket ./nockchain.sock list-notes-by-pubkey -p <your-pubkey>
+nockchain-wallet list-notes-by-pubkey <your-pubkey>
 ```
 
 ### How do I configure logging levels?

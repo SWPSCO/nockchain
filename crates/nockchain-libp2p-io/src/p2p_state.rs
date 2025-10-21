@@ -153,7 +153,7 @@ impl P2PState {
             .keys()
             .cloned()
             .collect::<Vec<ConnectionId>>();
-        inbound_connections_vec.shuffle(&mut rand::thread_rng());
+        inbound_connections_vec.shuffle(&mut rand::rng());
         let prune_actual = std::cmp::min(prune_n, inbound_connections_vec.len());
         for connection_id in &inbound_connections_vec[0..prune_actual] {
             metrics.incoming_connections_pruned.increment();

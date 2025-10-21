@@ -25,5 +25,4 @@ num_threads=$((threads > 1 ? threads : 1))
 
 echo "Starting nockchain miner with $num_threads mining threads:"
 
-nockchain --mining-pubkey ${MINING_PUBKEY} --mine --num-threads $num_threads
-
+nockchain --mining-pubkey ${MINING_PUBKEY} --mining-pkh ${MINING_PKH} --mine --num-threads $num_threads
