@@ -1067,8 +1067,12 @@ pub fn interpret(context: &mut Context, mut subject: Noun, formula: Noun) -> Res
                     continue;
                 }
                 NockWork::Work11S(ref mut sint) => {
-                    cold_paths::step_work11s(context, sint, &mut subject, &mut res)?;
-                    continue;
+                    match cold_paths::step_work11s(context, sint, &mut subject, &mut res) {
+                        Ok(_) => {}
+                        Err(err) => {
+                            break Err(err);
+                        }
+                    };
                 }
                 NockWork::Work12(ref mut scry) => {
                     cold_paths::step_work12(context, scry, &mut res)?;

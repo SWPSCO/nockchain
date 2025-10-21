@@ -459,9 +459,10 @@
         (bind (~(get z-by blocks.c.k) u.id) to-page:local-page:t)
       ?~  pag
         [~ ~]
-      ?~  pow.u.pag
+      =/  pow-data  ~(pow get:page:t u.pag)
+      ?~  pow-data
         [~ ~]
-      =/  prf  u.pow.u.pag
+      =/  prf  u.pow-data
       ?:  =((lent objects.prf) 0)
         [~ ~]
       =/  puzzle  (snag 0 objects.prf)
@@ -477,11 +478,11 @@
         (block-commitment:page:t candidate-block.m.k)
       ::
       =/  network-target
-        (~(got z-by targets.c.k) parent.candidate-block.m.k)
+        (~(got z-by targets.c.k) ~(parent get:page:t candidate-block.m.k))
       ::
       =/  pool-target  (chunk:bignum:zeke (div max-tip5-atom:tip5:zeke (bex difficulty.pole)))
       ::
-      =/  height  height.candidate-block.m.k
+      =/  height  ~(height get:page:t candidate-block.m.k)
       ::
       =/  version=proof-version:sp
         (height-to-proof-version:con height)
