@@ -58,11 +58,6 @@ install-nockchain: assets/dumb.jam assets/miner.jam
 	$(call show_env_vars)
 	cargo install --locked --force --path crates/nockchain --bin nockchain
 
-.PHONY: install-nockchain-wallet
-install-nockchain-wallet: assets/wal.jam
-	$(call show_env_vars)
-	cargo install --locked --force --path crates/nockchain-wallet --bin nockchain-wallet
-
 .PHONY: ensure-dirs
 ensure-dirs:
 	mkdir -p hoon
@@ -74,7 +69,7 @@ build-trivial: ensure-dirs
 	echo '%trivial' > hoon/trivial.hoon
 	hoonc --arbitrary hoon/trivial.hoon
 
-HOON_TARGETS=assets/dumb.jam assets/wal.jam assets/miner.jam
+HOON_TARGETS=assets/dumb.jam assets/wal.jam assets/miner.jam assets/verifier.jam
 
 .PHONY: nuke-hoonc-data
 nuke-hoonc-data:
@@ -85,8 +80,32 @@ nuke-hoonc-data:
 nuke-assets:
 	rm -f assets/*.jam
 
+.PHONY: nuke-dumb
+nuke-dumb:
+	rm -f assets/dumb.jam
+
+.PHONY: nuke-miner
+nuke-miner:
+	rm -f assets/miner.jam
+
+.PHONY: nuke-verifier
+nuke-verifier:
+	rm -f assets/verifier.jam
+
 .PHONY: build-hoon-all
 build-hoon-all: nuke-assets update-hoonc ensure-dirs build-trivial $(HOON_TARGETS)
+	$(call show_env_vars)
+
+.PHONY: build-dumb
+build-dumb: nuke-dumb update-hoonc ensure-dirs build-trivial assets/dumb.jam
+	$(call show_env_vars)
+
+.PHONY: build-miner
+build-miner: nuke-miner update-hoonc ensure-dirs build-trivial assets/miner.jam
+	$(call show_env_vars)
+
+.PHONY: build-verifier
+build-verifier: nuke-verifier update-hoonc ensure-dirs build-trivial assets/verifier.jam
 	$(call show_env_vars)
 
 .PHONY: build-hoon
@@ -106,16 +125,16 @@ assets/dumb.jam: ensure-dirs hoon/apps/dumbnet/outer.hoon $(HOON_SRCS)
 	hoonc hoon/apps/dumbnet/outer.hoon hoon
 	mv out.jam assets/dumb.jam
 
-## Build wal.jam with hoonc
-assets/wal.jam: ensure-dirs hoon/apps/wallet/wallet.hoon $(HOON_SRCS)
-	$(call show_env_vars)
-	rm -f assets/wal.jam
-	hoonc hoon/apps/wallet/wallet.hoon hoon
-	mv out.jam assets/wal.jam
-
 ## Build mining.jam with hoonc
 assets/miner.jam: ensure-dirs hoon/apps/dumbnet/miner.hoon $(HOON_SRCS)
 	$(call show_env_vars)
 	rm -f assets/miner.jam
 	hoonc hoon/apps/dumbnet/miner.hoon hoon
 	mv out.jam assets/miner.jam
+
+## Build verifier.jam with hoonc
+assets/verifier.jam: update-hoonc ensure-dirs hoon/apps/verifier/verifier.hoon $(HOON_SRCS)
+	$(call show_env_vars)
+	rm -f assets/verifier.jam
+	RUST_LOG=trace hoonc hoon/apps/verifier/verifier.hoon hoon
+	mv out.jam assets/verifier.jam
