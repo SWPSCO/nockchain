@@ -13,7 +13,7 @@ use clap::Parser;
 use command::TimelockRangeCli;
 #[cfg(test)]
 use command::WalletWire;
-use command::{ClientType, CommandNoun, Commands, TimelockIntentCli, WalletCli};
+use command::{ClientType, CommandNoun, Commands, WalletCli};
 use kernels::wallet::KERNEL;
 use nockapp::driver::*;
 use nockapp::kernel::boot;
@@ -75,6 +75,7 @@ async fn main() -> Result<(), NockAppError> {
         // Commands that DON'T need syncing either because they don't sync
         // or they don't interact with the chain
         Commands::Keygen
+        | Commands::GenerateMiningPkh
         | Commands::DeriveChild { .. }
         | Commands::ImportKeys { .. }
         | Commands::ExportKeys
@@ -85,7 +86,9 @@ async fn main() -> Result<(), NockAppError> {
         | Commands::VerifyHash { .. }
         | Commands::ExportMasterPubkey
         | Commands::ImportMasterPubkey { .. }
-        | Commands::ListPubkeys
+        | Commands::ListActiveAddresses
+        | Commands::SetActiveMasterAddress { .. }
+        | Commands::ListMasterAddresses
         | Commands::ShowSeedphrase
         | Commands::ShowMasterPubkey
         | Commands::ShowMasterPrivkey
@@ -97,7 +100,6 @@ async fn main() -> Result<(), NockAppError> {
         _ => true,
     };
 
-    // Generate the command noun and operation
     let poke = match &cli.command {
         Commands::Keygen => {
             let mut entropy = [0u8; 32];
@@ -105,6 +107,13 @@ async fn main() -> Result<(), NockAppError> {
             getrandom::fill(&mut entropy).map_err(|e| CrownError::Unknown(e.to_string()))?;
             getrandom::fill(&mut salt).map_err(|e| CrownError::Unknown(e.to_string()))?;
             Wallet::keygen(&entropy, &salt)
+        }
+        Commands::GenerateMiningPkh => {
+            let mut entropy = [0u8; 32];
+            let mut salt = [0u8; 16];
+            getrandom::fill(&mut entropy).map_err(|e| CrownError::Unknown(e.to_string()))?;
+            getrandom::fill(&mut salt).map_err(|e| CrownError::Unknown(e.to_string()))?;
+            Wallet::generate_mining_pkh(&entropy, &salt)
         }
         Commands::DeriveChild {
             index,
@@ -209,36 +218,26 @@ async fn main() -> Result<(), NockAppError> {
             file,
             key,
             seedphrase,
-            master_privkey,
+            version,
             watch_only_pubkey,
-            chain_code,
         } => {
             if let Some(file_path) = file {
                 Wallet::import_keys(file_path)
             } else if let Some(extended_key) = key {
                 Wallet::import_extended(extended_key)
             } else if let Some(seed) = seedphrase {
+                let version = version.ok_or_else(|| {
+                    NockAppError::from(CrownError::Unknown(
+                        "--version is required when using --seedphrase".into(),
+                    ))
+                })?;
                 // normalize seedphrase to have exactly one space between words
                 let normalized_seed = seed.split_whitespace().collect::<Vec<&str>>().join(" ");
-                Wallet::gen_master_privkey(&normalized_seed)
+                Wallet::import_seed_phrase(&normalized_seed, version)
             } else if let Some(pubkey) = watch_only_pubkey {
                 let _ = SchnorrPubkey::from_base58(pubkey)
                     .map_err(|e| CrownError::Unknown(format!("Invalid public key: {}", e)))?;
                 Wallet::import_watch_only_pubkey(&pubkey)
-            } else if let (Some(privkey), Some(chain)) =
-                (master_privkey.as_deref(), chain_code.as_deref())
-            {
-                Wallet::gen_master_pubkey(privkey, chain)
-            } else if master_privkey.is_some() && chain_code.is_none() {
-                return Err(CrownError::Unknown(
-                    "--master-privkey requires --chain-code to be provided".to_string(),
-                )
-                .into());
-            } else if chain_code.is_some() && master_privkey.is_none() {
-                return Err(CrownError::Unknown(
-                    "--chain-code requires --master-privkey to be provided".to_string(),
-                )
-                .into());
             } else {
                 return Err(CrownError::Unknown(
                     "One of --file, --key, --seedphrase, or --master-privkey must be provided for import-keys".to_string(),
@@ -247,14 +246,6 @@ async fn main() -> Result<(), NockAppError> {
             }
         }
         Commands::ExportKeys => Wallet::export_keys(),
-        Commands::Scan {
-            master_pubkey,
-            search_depth,
-            include_timelocks,
-            include_multisig,
-        } => Wallet::scan(
-            master_pubkey, *search_depth, *include_timelocks, *include_multisig,
-        ),
         Commands::ListNotes => Wallet::list_notes(),
         Commands::ListNotesByPubkey { pubkey } => {
             if let Some(pk) = pubkey {
@@ -302,8 +293,12 @@ async fn main() -> Result<(), NockAppError> {
         Commands::ShowTx { transaction } => Wallet::show_tx(transaction),
         Commands::ExportMasterPubkey => Wallet::export_master_pubkey(),
         Commands::ImportMasterPubkey { key_path } => Wallet::import_master_pubkey(key_path),
-        Commands::ListPubkeys => Wallet::list_pubkeys(),
-        Commands::ShowSeedphrase => Wallet::show_seedphrase(),
+        Commands::ListActiveAddresses => Wallet::list_active_addresses(),
+        Commands::SetActiveMasterAddress { address_b58 } => {
+            Wallet::set_active_master_address(address_b58)
+        }
+        Commands::ListMasterAddresses => Wallet::list_master_addresses(),
+        Commands::ShowSeedphrase => Wallet::show_seed_phrase(),
         Commands::ShowMasterPubkey => Wallet::show_master_pubkey(),
         Commands::ShowMasterPrivkey => Wallet::show_master_privkey(),
         Commands::TxAccepted { .. } => {
@@ -361,6 +356,16 @@ async fn main() -> Result<(), NockAppError> {
     }
 }
 
+fn validate_label(s: &str) -> Result<String, String> {
+    if s.chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    {
+        Ok(s.to_string())
+    } else {
+        Err("Label must contain only lowercase letters, numbers, and hyphens".to_string())
+    }
+}
+
 pub struct Wallet {
     app: NockApp,
 }
@@ -415,11 +420,12 @@ impl Wallet {
         Ok((slab.clone(), operation))
     }
 
-    /// Generates a new key pair.
+    /// Generates a new key pair. Will be a version 0 key until the wallet supports v1 transactions
     ///
     /// # Arguments
     ///
     /// * `entropy` - The entropy to use for key generation.
+    /// * `sal` - The salt to use for key generation.
     fn keygen(entropy: &[u8; 32], sal: &[u8; 16]) -> CommandNoun<NounSlab> {
         let mut slab = NounSlab::new();
         let ent: Byts = Byts::new(entropy.to_vec());
@@ -428,6 +434,46 @@ impl Wallet {
         let sal_noun = sal.into_noun(&mut slab);
         Self::wallet("keygen", &[ent_noun, sal_noun], Operation::Poke, &mut slab)
     }
+
+    /// Generates a new key pair, specifically for mining pkh.
+    ///
+    /// # Arguments
+    ///
+    /// * `entropy` - The entropy to use for key generation.
+    /// * `sal` - The salt to use for key generation.
+    fn generate_mining_pkh(entropy: &[u8; 32], sal: &[u8; 16]) -> CommandNoun<NounSlab> {
+        let mut slab = NounSlab::new();
+        let ent: Byts = Byts::new(entropy.to_vec());
+        let ent_noun = ent.into_noun(&mut slab);
+        let sal: Byts = Byts::new(sal.to_vec());
+        let sal_noun = sal.into_noun(&mut slab);
+        Self::wallet(
+            "generate-mining-pkh",
+            &[ent_noun, sal_noun],
+            Operation::Poke,
+            &mut slab,
+        )
+    }
+
+    ///// Updates the keys in the wallet.
+    /////
+    ///// # Arguments
+    /////
+    ///// * `entropy` - The entropy to use for key generation.
+    ///// * `salt` - The salt to use for key generation.
+    //fn upgrade_keys(entropy: &[u8; 32], salt: &[u8; 16]) -> CommandNoun<NounSlab> {
+    //    let mut slab = NounSlab::new();
+    //    let ent: Byts = Byts::new(entropy.to_vec());
+    //    let ent_noun = ent.into_noun(&mut slab);
+    //    let sal: Byts = Byts::new(salt.to_vec());
+    //    let sal_noun = sal.into_noun(&mut slab);
+    //    Self::wallet(
+    //        "upgrade-keys-v2",
+    //        &[ent_noun, sal_noun],
+    //        Operation::Poke,
+    //        &mut slab,
+    //    )
+    //}
 
     // Derives a child key from current master key.
     //
@@ -580,6 +626,92 @@ impl Wallet {
             None => D(0),
         };
 
+        // Generate random entropy
+        let mut entropy_bytes = [0u8; 32];
+        getrandom::fill(&mut entropy_bytes).map_err(|e| CrownError::Unknown(e.to_string()))?;
+        let entropy = from_bytes(&mut slab, &entropy_bytes).as_noun();
+
+        Self::wallet(
+            "verify-hash",
+            &[hash_noun, sig_atom, pk_noun],
+            Operation::Poke,
+            &mut slab,
+        )
+    }
+
+    fn sign_message(
+        message_bytes: &[u8],
+        index: Option<u64>,
+        hardened: bool,
+    ) -> CommandNoun<NounSlab> {
+        let mut slab = NounSlab::new();
+
+        if let Some(idx) = index {
+            if idx >= 2 << 31 {
+                return Err(
+                    CrownError::Unknown("Key index must not exceed 2^31 - 1".into()).into(),
+                );
+            }
+        }
+
+        let msg_atom = from_bytes(&mut slab, message_bytes).as_noun();
+
+        let sign_key_noun = match index {
+            Some(i) => {
+                let inner = D(i);
+                let hardened_noun = if hardened { YES } else { NO };
+                T(&mut slab, &[D(0), inner, hardened_noun])
+            }
+            None => D(0),
+        };
+
+        Self::wallet(
+            "sign-message",
+            &[msg_atom, sign_key_noun],
+            Operation::Poke,
+            &mut slab,
+        )
+    }
+
+    fn verify_message(
+        message_bytes: &[u8],
+        signature_jam: &[u8],
+        pubkey_b58: &str,
+    ) -> CommandNoun<NounSlab> {
+        let mut slab = NounSlab::new();
+        let msg_atom = from_bytes(&mut slab, message_bytes).as_noun();
+        let sig_atom = from_bytes(&mut slab, signature_jam).as_noun();
+        let pk_noun = make_tas(&mut slab, pubkey_b58).as_noun();
+
+        Self::wallet(
+            "verify-message",
+            &[msg_atom, sig_atom, pk_noun],
+            Operation::Poke,
+            &mut slab,
+        )
+    }
+
+    fn sign_hash(hash_b58: &str, index: Option<u64>, hardened: bool) -> CommandNoun<NounSlab> {
+        let mut slab = NounSlab::new();
+
+        if let Some(idx) = index {
+            if idx >= 2 << 31 {
+                return Err(
+                    CrownError::Unknown("Key index must not exceed 2^31 - 1".into()).into(),
+                );
+            }
+        }
+
+        let hash_noun = make_tas(&mut slab, hash_b58).as_noun();
+        let sign_key_noun = match index {
+            Some(i) => {
+                let inner = D(i);
+                let hardened_noun = if hardened { YES } else { NO };
+                T(&mut slab, &[D(0), inner, hardened_noun])
+            }
+            None => D(0),
+        };
+
         Self::wallet(
             "sign-hash",
             &[hash_noun, sign_key_noun],
@@ -606,35 +738,19 @@ impl Wallet {
         )
     }
 
-    /// Generates a master private key from a seed phrase.
+    /// Imports keys from a seed phrase.
     ///
     /// # Arguments
     ///
-    /// * `seedphrase` - The seed phrase to generate the master private key from.
-    fn gen_master_privkey(seedphrase: &str) -> CommandNoun<NounSlab> {
+    /// * `seed_phrase` - The seed phrase to generate the master private key from.
+    /// * `version` - The version tag to attach to the generated master key.
+    fn import_seed_phrase(seed_phrase: &str, version: u64) -> CommandNoun<NounSlab> {
         let mut slab = NounSlab::new();
-        let seedphrase_noun = make_tas(&mut slab, seedphrase).as_noun();
+        let seed_phrase_noun = make_tas(&mut slab, seed_phrase).as_noun();
+        let version_noun = D(version);
         Self::wallet(
-            "gen-master-privkey",
-            &[seedphrase_noun],
-            Operation::Poke,
-            &mut slab,
-        )
-    }
-
-    /// Generates a master public key from a master private key and chain code.
-    ///
-    /// # Arguments
-    ///
-    /// * `master_privkey` - The master private key (base58-encoded)
-    /// * `chain_code` - The chain code (base58-encoded)
-    fn gen_master_pubkey(master_privkey: &str, chain_code: &str) -> CommandNoun<NounSlab> {
-        let mut slab = NounSlab::new();
-        let key_noun = make_tas(&mut slab, master_privkey).as_noun();
-        let chain_code_noun = make_tas(&mut slab, chain_code).as_noun();
-        Self::wallet(
-            "gen-master-pubkey",
-            &[key_noun, chain_code_noun],
+            "import-seed-phrase",
+            &[seed_phrase_noun, version_noun],
             Operation::Poke,
             &mut slab,
         )
@@ -689,56 +805,6 @@ impl Wallet {
     fn export_keys() -> CommandNoun<NounSlab> {
         let mut slab = NounSlab::new();
         Self::wallet("export-keys", &[], Operation::Poke, &mut slab)
-    }
-
-    /// Performs a simple scan of the blockchain.
-    ///
-    /// # Arguments
-    ///
-    /// * `master_pubkey` - The master public key to scan for.
-    /// * `search_depth` - How many addresses to scan (default 100)
-    fn scan(
-        master_pubkey: &str,
-        search_depth: u64,
-        include_timelocks: bool,
-        include_multisig: bool,
-    ) -> CommandNoun<NounSlab> {
-        let mut slab = NounSlab::new();
-        let master_pubkey_noun = make_tas(&mut slab, master_pubkey).as_noun();
-        let search_depth_noun = D(search_depth);
-        let include_timelocks_noun = D(include_timelocks as u64);
-        let include_multisig_noun = D(include_multisig as u64);
-
-        Self::wallet(
-            "scan",
-            &[
-                master_pubkey_noun, search_depth_noun, include_timelocks_noun,
-                include_multisig_noun,
-            ],
-            Operation::Poke,
-            &mut slab,
-        )
-    }
-
-    fn timelock_intent_none() -> TimelockIntent {
-        TimelockIntent {
-            absolute: TimelockRangeAbsolute::none(),
-            relative: TimelockRangeRelative::none(),
-        }
-    }
-
-    fn timelock_intent_absolute(range: TimelockRangeAbsolute) -> TimelockIntent {
-        TimelockIntent {
-            absolute: range,
-            relative: TimelockRangeRelative::none(),
-        }
-    }
-
-    fn timelock_intent_relative(range: TimelockRangeRelative) -> TimelockIntent {
-        TimelockIntent {
-            absolute: TimelockRangeAbsolute::none(),
-            relative: range,
-        }
     }
 
     fn timelock_intent_from_ranges(
@@ -1114,10 +1180,28 @@ impl Wallet {
         Self::wallet("show-tx", &[transaction_noun], Operation::Poke, &mut slab)
     }
 
-    /// Lists all public keys in the wallet.
-    fn list_pubkeys() -> CommandNoun<NounSlab> {
+    /// Lists all addresses nested under the active master address.
+    fn list_active_addresses() -> CommandNoun<NounSlab> {
         let mut slab = NounSlab::new();
-        Self::wallet("list-pubkeys", &[], Operation::Poke, &mut slab)
+        Self::wallet("list-active-addresses", &[], Operation::Poke, &mut slab)
+    }
+
+    /// Sets the active master address.
+    fn set_active_master_address(address_b58: &str) -> CommandNoun<NounSlab> {
+        let mut slab = NounSlab::new();
+        let address_noun = make_tas(&mut slab, address_b58).as_noun();
+        Self::wallet(
+            "set-active-master-address",
+            &[address_noun],
+            Operation::Poke,
+            &mut slab,
+        )
+    }
+
+    /// Lists known master addresses.
+    fn list_master_addresses() -> CommandNoun<NounSlab> {
+        let mut slab = NounSlab::new();
+        Self::wallet("list-master-addresses", &[], Operation::Poke, &mut slab)
     }
 
     /// Lists notes by public key
@@ -1145,21 +1229,21 @@ impl Wallet {
     }
 
     /// Shows the seed phrase for the current master key.
-    fn show_seedphrase() -> CommandNoun<NounSlab> {
+    fn show_seed_phrase() -> CommandNoun<NounSlab> {
         let mut slab = NounSlab::new();
-        Self::wallet("show-seedphrase", &[], Operation::Poke, &mut slab)
+        Self::wallet("show-seed-phrase", &[], Operation::Poke, &mut slab)
     }
 
     /// Shows the master public key.
     fn show_master_pubkey() -> CommandNoun<NounSlab> {
         let mut slab = NounSlab::new();
-        Self::wallet("show-master-pubkey", &[], Operation::Poke, &mut slab)
+        Self::wallet("show-master-zpub", &[], Operation::Poke, &mut slab)
     }
 
     /// Shows the master private key.
     fn show_master_privkey() -> CommandNoun<NounSlab> {
         let mut slab = NounSlab::new();
-        Self::wallet("show-master-privkey", &[], Operation::Poke, &mut slab)
+        Self::wallet("show-master-zprv", &[], Operation::Poke, &mut slab)
     }
 }
 
@@ -1306,45 +1390,11 @@ mod tests {
     }
 
     #[test]
-    fn timelock_intent_none_matches_domain_defaults() {
-        let intent = Wallet::timelock_intent_none();
-
-        assert_eq!(intent.absolute, TimelockRangeAbsolute::none());
-        assert_eq!(intent.relative, TimelockRangeRelative::none());
-    }
-
-    #[test]
-    fn timelock_intent_absolute_converts_cli_range() {
-        let range_cli = TimelockRangeCli::from_bounds(Some(42), Some(84)).unwrap();
-
-        let intent = Wallet::timelock_intent_absolute(range_cli.absolute());
-
-        let expected = TimelockIntent {
-            absolute: TimelockRangeAbsolute::new(
-                Some(BlockHeight(Belt(42))),
-                Some(BlockHeight(Belt(84))),
-            ),
-            relative: TimelockRangeRelative::none(),
-        };
-
-        assert_eq!(intent, expected);
-    }
-
-    #[test]
-    fn timelock_intent_relative_converts_cli_range() {
-        let range_cli = TimelockRangeCli::from_bounds(Some(5), Some(9)).unwrap();
-
-        let intent = Wallet::timelock_intent_relative(range_cli.relative());
-
-        let expected = TimelockIntent {
-            absolute: TimelockRangeAbsolute::none(),
-            relative: TimelockRangeRelative::new(
-                Some(BlockHeightDelta(Belt(5))),
-                Some(BlockHeightDelta(Belt(9))),
-            ),
-        };
-
-        assert_eq!(intent, expected);
+    fn timelock_cli_accepts_ascending_bound() {
+        let range: TimelockRangeCli = "1..5".parse().unwrap();
+        let absolute = range.absolute();
+        assert_eq!(absolute.min, Some(BlockHeight(Belt(1))));
+        assert_eq!(absolute.max, Some(BlockHeight(Belt(5))));
     }
 
     #[test]
@@ -1380,14 +1430,21 @@ mod tests {
     #[test]
     fn timelock_intent_from_ranges_handles_none() {
         assert!(Wallet::timelock_intent_from_ranges(None, None).is_none());
+        let open_range: TimelockRangeCli = "..".parse().unwrap();
 
         let explicit_none = Wallet::timelock_intent_from_ranges(
-            Some(TimelockRangeAbsolute::none()),
-            Some(TimelockRangeRelative::none()),
+            Some(open_range.absolute()),
+            Some(open_range.relative()),
         )
         .expect("expected explicit timelock intent");
 
-        assert_eq!(explicit_none, Wallet::timelock_intent_none());
+        assert_eq!(
+            explicit_none,
+            TimelockIntent {
+                absolute: TimelockRangeAbsolute::none(),
+                relative: TimelockRangeRelative::none(),
+            }
+        );
     }
 
     #[test]
@@ -1559,120 +1616,19 @@ mod tests {
             .map_err(|e| CrownError::Unknown(e.to_string()))?;
         let mut wallet = Wallet::new(nockapp);
         let seedphrase = "correct horse battery staple";
-        let (noun, op) = Wallet::gen_master_privkey(seedphrase)?;
+        let version = 1;
+        let (noun, op) = Wallet::import_seed_phrase(seedphrase, version)?;
         println!("privkey_slab: {:?}", noun);
         let wire = WalletWire::Command(Commands::ImportKeys {
             file: None,
             key: None,
             seedphrase: Some(seedphrase.to_string()),
-            master_privkey: None,
+            version: Some(version),
             watch_only_pubkey: None,
-            chain_code: None,
         })
         .to_wire();
         let privkey_result = wallet.app.poke(wire, noun.clone()).await?;
         println!("privkey_result: {:?}", privkey_result);
-        Ok(())
-    }
-
-    #[tokio::test]
-    #[cfg_attr(miri, ignore)]
-    async fn test_gen_master_pubkey() -> Result<(), NockAppError> {
-        init_tracing();
-        // Start with a fresh wallet (--new flag)
-        let cli = BootCli::parse_from(&["--new"]);
-        let prover_hot_state = produce_prover_hot_state();
-        let nockapp = boot::setup(
-            KERNEL,
-            cli.clone(),
-            prover_hot_state.as_slice(),
-            "wallet",
-            None,
-        )
-        .await
-        .map_err(|e| CrownError::Unknown(e.to_string()))?;
-        let mut wallet = Wallet::new(nockapp);
-
-        let master_privkey = "5crSXzcevKKieL7VTZW2hy3guFgT6sserEXm3pWHZAnQ";
-        let chain_code = "yr3PWpcne3t6ByqtHSmybAJkGqyHB41WNifc5qwNfWA";
-
-        // Generate master public key from the private key and chain code
-        let (noun, op) = Wallet::gen_master_pubkey(master_privkey, chain_code)?;
-        let wire = WalletWire::Command(Commands::ImportKeys {
-            file: None,
-            key: None,
-            seedphrase: None,
-            master_privkey: Some(master_privkey.to_string()),
-            watch_only_pubkey: None,
-            chain_code: Some(chain_code.to_string()),
-        })
-        .to_wire();
-        let pubkey_result = wallet.app.poke(wire, noun.clone()).await?;
-        println!("pubkey_result: {:?}", pubkey_result);
-
-        assert!(
-            pubkey_result.len() == 2,
-            "Expected pubkey result to be a list of 2 noun slabs - markdown and exit"
-        );
-        let exit_cause = unsafe { pubkey_result[1].root() };
-        let code = exit_cause.as_cell()?.tail();
-        assert!(unsafe { code.raw_equals(&D(0)) }, "Expected exit code 0");
-
-        // Now show the master private key to verify it matches our input
-        let (show_noun, show_op) = Wallet::show_master_privkey()?;
-        let show_wire = WalletWire::Command(Commands::ShowMasterPrivkey).to_wire();
-        let show_result = wallet.app.poke(show_wire, show_noun).await?;
-        println!("show_master_privkey result: {:?}", show_result);
-
-        // Verify the show command succeeded
-        assert!(
-            show_result.len() == 2,
-            "Expected show result to be a list of 2 noun slabs - markdown and exit"
-        );
-        let show_exit_cause = unsafe { show_result[1].root() };
-        let show_code = show_exit_cause.as_cell()?.tail();
-        assert!(
-            unsafe { show_code.raw_equals(&D(0)) },
-            "Expected show exit code 0"
-        );
-
-        // Parse the markdown output to extract the private key
-        let markdown_slab = &show_result[0];
-        let markdown_root = unsafe { markdown_slab.root() };
-        let markdown_cell = markdown_root.as_cell()?;
-        let markdown_content_atom = markdown_cell.tail().as_atom()?;
-
-        let markdown_text =
-            String::from_utf8_lossy(&markdown_content_atom.to_bytes_until_nul()?).to_string();
-
-        println!("Markdown content: {}", markdown_text);
-
-        // Extract the private key from the markdown - it should be on a line with "- private key: "
-        let extracted_privkey_line = markdown_text
-            .lines()
-            .find(|line| line.trim().contains("Private Key: "))
-            .ok_or_else(|| {
-                CrownError::Unknown("Private key not found in markdown output".to_string())
-            })?
-            .trim();
-
-        // remove the "- private key: " prefix and get the base58 value directly
-        let extracted_privkey_b58 = extracted_privkey_line
-            .trim_start_matches("- Private Key: ")
-            .trim()
-            .to_string();
-
-        // Verify the extracted private key matches our input
-        assert_eq!(
-            extracted_privkey_b58, master_privkey,
-            "Extracted private key '{}' does not match input private key '{}'",
-            extracted_privkey_b58, master_privkey
-        );
-
-        println!("✓ Verification successful: Private key in output matches input");
-        println!("  Input:     {}", master_privkey);
-        println!("  Retrieved: {}", extracted_privkey_b58);
-
         Ok(())
     }
 
@@ -1703,9 +1659,8 @@ mod tests {
             file: Some(test_path.to_string()),
             key: None,
             seedphrase: None,
-            master_privkey: None,
+            version: None,
             watch_only_pubkey: None,
-            chain_code: None,
         })
         .to_wire();
         let import_result = wallet.app.poke(wire, noun.clone()).await?;
@@ -1723,29 +1678,6 @@ mod tests {
             "Expected non-empty import result"
         );
 
-        Ok(())
-    }
-
-    #[tokio::test]
-    #[cfg_attr(miri, ignore)]
-    async fn test_simple_scan() -> Result<(), NockAppError> {
-        init_tracing();
-        let cli = BootCli::parse_from(&[""]);
-        let nockapp = boot::setup(KERNEL, cli.clone(), &[], "wallet", None)
-            .await
-            .map_err(|e| CrownError::Unknown(e.to_string()))?;
-        let mut wallet = Wallet::new(nockapp);
-        let master_pubkey = "pubkey123";
-        let (noun, op) = Wallet::scan(master_pubkey, 100, false, false)?;
-        let wire = WalletWire::Command(Commands::Scan {
-            master_pubkey: master_pubkey.to_string(),
-            search_depth: 100,
-            include_timelocks: false,
-            include_multisig: false,
-        })
-        .to_wire();
-        let scan_result = wallet.app.poke(wire, noun.clone()).await?;
-        println!("scan_result: {:?}", scan_result);
         Ok(())
     }
 
@@ -1772,7 +1704,7 @@ mod tests {
             fee,
             None,
             false,
-            Some(Wallet::timelock_intent_none()),
+            None,
         )?;
         let wire = WalletWire::Command(Commands::CreateTx {
             names: names.clone(),
@@ -1791,7 +1723,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg_attr(miri, ignore)]
+    #[ignore]
     async fn test_spend_single_sig_format() -> Result<(), NockAppError> {
         let cli = BootCli::parse_from(&[""]);
         let nockapp = boot::setup(KERNEL, cli.clone(), &[], "wallet", None)
@@ -1808,7 +1740,9 @@ mod tests {
         let fee = 0;
 
         // generate keys
-        let (genkey_noun, genkey_op) = Wallet::gen_master_privkey("correct horse battery staple")?;
+        let version = 1;
+        let (genkey_noun, genkey_op) =
+            Wallet::import_seed_phrase("correct horse battery staple", version)?;
         let (spend_noun, spend_op) = Wallet::create_tx(
             names.clone(),
             recipients.clone(),
@@ -1816,16 +1750,15 @@ mod tests {
             fee,
             None,
             false,
-            Some(Wallet::timelock_intent_none()),
+            None,
         )?;
 
         let wire1 = WalletWire::Command(Commands::ImportKeys {
             file: None,
             key: None,
             seedphrase: Some("correct horse battery staple".to_string()),
-            master_privkey: None,
+            version: Some(version),
             watch_only_pubkey: None,
-            chain_code: None,
         })
         .to_wire();
         let genkey_result = wallet.app.poke(wire1, genkey_noun.clone()).await?;

@@ -4,7 +4,7 @@ use anyhow::Result;
 use ibig::{ubig, UBig};
 use nockapp::Noun;
 use nockchain_math::belt::{Belt, PRIME};
-use nockchain_math::crypto::cheetah::{CheetahError, CheetahPoint};
+use nockchain_math::crypto::cheetah::{CheetahError, CheetahPoint, P_BIG};
 use nockchain_math::noun_ext::NounMathExt;
 use nockchain_math::structs::HoonMapIter;
 use nockchain_math::zoon::common::DefaultTipHasher;
@@ -32,23 +32,12 @@ use serde::{Deserialize, Serialize};
 //    assets=coins
 //  ==
 //
-// #[derive(Clone, PartialEq, ::prost::Message)]
-//pub struct WalletBalanceData {
-//    /// note name -> amount
-//    #[prost(message, repeated, tag = "1")]
-//    pub notes: ::prost::alloc::vec::Vec<BalanceEntry>,
-//    /// block height where balance was computed
-//    #[prost(uint64, repeated, tag = "2")]
-//    pub height: ::prost::alloc::vec::Vec<u64>,
-//    /// block where balance was computed
-//    #[prost(string, optional, tag = "3")]
-//    pub block_id: ::core::option::Option<::prost::alloc::string::String>,
-//}
-//
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, NounDecode, NounEncode)]
 pub struct SchnorrPubkey(pub CheetahPoint);
 
 impl SchnorrPubkey {
+    pub const BYTES_BASE58: usize = 132;
     pub fn to_base58(&self) -> Result<String, CheetahError> {
         Ok(CheetahPoint::into_base58(&self.0)?)
     }
@@ -327,6 +316,13 @@ impl TimelockIntent {
         }
     }
 }
+#[derive(Debug, thiserror::Error)]
+pub enum HashDecodeError {
+    #[error("Provided base58 corresponds to a value too large to be a tip5 hash")]
+    ProvidedValueTooLarge,
+    #[error("base58 decode error: {0}")]
+    Base58(#[from] bs58::decode::Error),
+}
 
 // A 5-cell of Belts
 #[derive(Debug, Clone, PartialEq, Eq, Hash, NounDecode, NounEncode, Serialize, Deserialize)]
@@ -351,14 +347,16 @@ impl Hash {
         base_p_to_decimal(self.0)
     }
 
-    // TODO: test
-    pub fn from_base58(s: &str) -> Result<Self, bs58::decode::Error> {
+    pub fn from_base58(s: &str) -> Result<Self, HashDecodeError> {
         let bytes = bs58::decode(s).into_vec()?;
         let mut value = UBig::from_be_bytes(&bytes);
         let mut belts = [Belt(0); 5];
         for i in 0..5 {
             belts[i] = Belt((value.clone() % PRIME) as u64);
             value /= PRIME;
+        }
+        if value > *P_BIG {
+            return Err(HashDecodeError::ProvidedValueTooLarge);
         }
         Ok(Hash(belts))
     }

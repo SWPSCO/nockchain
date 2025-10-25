@@ -23,7 +23,7 @@ use nockvm::noun::{D, T, YES};
 use nockvm_macros::tas;
 use tracing::{debug, info, instrument};
 
-use crate::mining::MiningKeyConfig;
+use crate::mining::{MiningKeyConfig, MiningPkhConfig};
 
 /// Module for handling driver initialization signals
 pub mod driver_init {
@@ -382,11 +382,13 @@ pub async fn init_with_kernel<J: Jammer + Send + 'static>(
     let born_init_tx = if cli.fakenet {
         let pow_len = cli.fakenet_pow_len.unwrap_or(2);
         let target = cli.fakenet_log_difficulty.unwrap_or(1);
+        let mut fakenet_constants = setup::fakenet_blockchain_constants(pow_len, target);
+        if let Some(v1_phase) = cli.fakenet_v1_phase {
+            fakenet_constants = fakenet_constants.with_v1_phase(v1_phase);
+        }
         setup::poke(
             &mut nockapp,
-            setup::SetupCommand::PokeFakenetConstants(setup::fakenet_blockchain_constants(
-                pow_len, target,
-            )),
+            setup::SetupCommand::PokeFakenetConstants(fakenet_constants),
         )
         .await?;
         if let Some(true) = is_kernel_mainnet {
@@ -441,6 +443,17 @@ pub async fn init_with_kernel<J: Jammer + Send + 'static>(
         None
     };
 
+    let mining_pkh_config = if let Some(pkh) = &cli.mining_pkh {
+        Some(vec![MiningPkhConfig {
+            share: 1,
+            pkh: pkh.clone(),
+        }])
+    } else if let Some(mining_pkh_adv) = &cli.mining_pkh_adv {
+        Some(mining_pkh_adv.clone())
+    } else {
+        None
+    };
+
     let prune_inbound = cli.prune_inbound;
 
     let mine = cli.mine;
@@ -451,8 +464,13 @@ pub async fn init_with_kernel<J: Jammer + Send + 'static>(
         1
     };
 
-    let mining_driver =
-        crate::mining::create_mining_driver(mining_config, mine, threads, Some(mining_init_tx));
+    let mining_driver = crate::mining::create_mining_driver(
+        mining_config,
+        mining_pkh_config,
+        mine,
+        threads,
+        Some(mining_init_tx),
+    );
     nockapp.add_io_driver(mining_driver).await;
 
     let libp2p_driver = nockchain_libp2p_io::driver::make_libp2p_driver(

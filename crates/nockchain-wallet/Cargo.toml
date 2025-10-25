@@ -15,7 +15,7 @@ noun-serde = { workspace = true }
 
 bardecoder = { workspace = true }
 bs58 = { workspace = true }
-clap = { workspace = true, features = ["derive"] }
+clap = { workspace = true, features = ["derive", "cargo"] }
 crossterm.workspace = true
 either.workspace = true
 getrandom.workspace = true

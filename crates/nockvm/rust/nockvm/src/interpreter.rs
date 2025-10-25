@@ -1067,8 +1067,12 @@ pub fn interpret(context: &mut Context, mut subject: Noun, formula: Noun) -> Res
                     continue;
                 }
                 NockWork::Work11S(ref mut sint) => {
-                    cold_paths::step_work11s(context, sint, &mut subject, &mut res)?;
-                    continue;
+                    match cold_paths::step_work11s(context, sint, &mut subject, &mut res) {
+                        Ok(_) => {}
+                        Err(err) => {
+                            break Err(err);
+                        }
+                    };
                 }
                 NockWork::Work12(ref mut scry) => {
                     cold_paths::step_work12(context, scry, &mut res)?;
@@ -1983,7 +1987,16 @@ mod hint {
                                 context.warm = Warm::init(stack, cold, hot, &context.test_jets)
                             }
                             Err(cold::Error::NoParent) => {
-                                flog!(context, "serf: cold: register: could not match parent battery at given axis: {:?} {:?}", chum, parent_formula_ax);
+                                let Ok(chum_atom) = chum.as_atom() else {
+                                    flog!(context, "serf: cold: register: cell chum");
+                                    return None;
+                                };
+                                let chum_bytes = Vec::from(chum_atom.as_ne_bytes());
+                                let Ok(chum_str) = String::from_utf8(chum_bytes) else {
+                                    flog!(context, "serf: cold: register: unprintable chum");
+                                    return None;
+                                };
+                                flog!(context, "serf: cold: register: could not match parent battery at given axis: {} {:?}", chum_str, parent_formula_ax);
                             }
                             Err(cold::Error::BadNock) => {
                                 flog!(

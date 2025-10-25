@@ -2,6 +2,7 @@
 /=  zo  /common/zoon
 /=  *  /common/zose
 /=  dumb  /apps/dumbnet/lib/types
+/=  s10  /apps/wallet/lib/s10
 |%
 ::    $key: public or private key
 ::
@@ -13,6 +14,9 @@
   $%  [%pub p=@ux]
       [%prv p=@ux]
   ==
++$  coil-data  [=key =cc]
+::
+::
 ::    $coil: key and chaincode
 ::
 ::  a wallet consists of a collection of +coil (address and entropy pair). the
@@ -23,44 +27,104 @@
 ::  .key:  public or private key
 ::  .cc: associated entropy (chain code)
 ::
-++  coil
++$  coil-v0  $+(coil-v0 [%coil coil-data])
++$  coil-v1  $+(coil-v1 coil-v0)
++$  coil-v2  $+(coil-v2 coil-v1)
+++  coil-v3
   =<  form
   |%
-    +$  form  [%coil =key =cc]
+    +$  form
+      $+  coil-v3
+      $%  [%0 coil-data]
+          [%1 coil-data]
+      ==
+    ++  get
+      |_  =form
+      ++  key
+        ^-  ^key
+        ?-    -.form
+            %0  key.form
+            %1  key.form
+        ==
+      ++  cc
+        ^-  ^cc
+        ?-    -.form
+            %0  cc.form
+            %1  cc.form
+        ==
+      ++  keyc
+        ^-  keyc:s10
+        ::  [key chaincode version]
+        [p.key cc -]:form
+      --:: +get
+    ::
+    ++  extended-key
+      |=  =form
+      ^-  @t
+      =/  =keyc:s10  ~(keyc get form)
+      ?:  ?=(%pub -.key.form)
+        extended-public-key:(from-public:s10 keyc)
+      extended-private-key:(from-private:s10 keyc)
     ::
     ++  to-b58
-      |=  =form
-      ^-  [key-b58=@t cc-b58=@t]
-      :-  (crip (en:base58:wrap p.key.form))
-      (crip (en:base58:wrap cc.form))
+      |_  =form
+      ++  key
+        ^-  @t
+        =/  key=@ux  p.key.form
+        (crip (en:base58:wrap key))
+      ::
+      ++  address
+        ^-  @t
+        ?>  ?=(%pub -.key.form)
+        ?-    -.form
+            %0  ::  return b58 pubkey
+          (crip (en:base58:wrap p.key.form))
+        ::
+            %1    ::  return b58 pkh address
+          %-  to-b58:hash:transact
+          %-  hash:schnorr-pubkey:transact
+          (from-ser:schnorr-pubkey:transact p.key.form)
+        ==
+      --
   --
+++  coil  coil-v3
 ::
 ::    $meta: stored metadata for a key
-+$  meta
-  $%  coil
+::
++$  meta-v0
+  $%  coil-v0
       [%label p=@t]
       [%seed p=@t]
       [%watch-key p=@t]
   ==
++$  meta-v1  $+(meta-v1 meta-v0)
++$  meta-v2  $+(meta-v2 meta-v1)
++$  meta-v3
+  $+  meta-v3
+  $%  [%coil p=coil-v3]
+      [%label p=@t]
+      [%seed p=@t]
+      [%watch-key p=@t]
+  ==
++$  meta  meta-v3
 ::
 ::    $keys: path indexed map for keys
 ::
-::  path format for keys state:
+::  path -> value format for keys state:
 ::
-::  /keys                                                        ::  root path (holds nothing in its fil)
-::  /keys/watch/[t/watch-key][coil/watch-key]                    ::  watch key path
-::  /keys/[t/master]/[key-type]/m/[coil/key]                     ::  master key path
-::  /keys/[t/master]/[key-type]/[ud/index]/[coil/key]            ::  derived key path
-::  /keys/[t/master]/[key-type]/[ud/index]/[coil/key]            ::  specific key path
-::  /keys/[t/master]/[key-type]/[ud/index]/label/[label/label]   ::  key label path for derived key
-::  /keys/[t/master]/[key-type]/m/label/[label/label]            ::  key label path for master key
-::  /keys/[t/master]/seed/[seed/seed-phrase]                     ::  seed-phrase path
-::
-::  Note the terminal entry of the path holds that value, this value is the
-::  non-unit `fil` in the $axal definition
+::  /keys                                                           ::  root path (holds nothing in its fil)
+::  /keys/watch/[t/watch-key] -> [coil/watch-key]                   ::  watch key
+::  /keys/[t/master]/[key-type]/m -> [coil/key]                     ::  master key
+::  /keys/[t/master]/[key-type]/[ud/index] -> [coil/key]            ::  derived key
+::  /keys/[t/master]/[key-type]/[ud/index]/label -> [label/label]   ::  key label for derived key
+::  /keys/[t/master]/[key-type]/m/label -> [label/label]            ::  key label for master key
+::  /keys/[t/master]/seed -> [seed/seed-phrase]                     ::  seed-phrase
 ::
 ::  where:
-::  - [t/master] is the base58 encoded master public key as @t
+::  - the entry after -> is the non-unit .fil (see the $axal definition in zose)
+::  - [t/master] is the base58 encoded address corresponding to the master pubkey.
+::     -  for v0, this is the base58 encoded master public key as @t.
+::     -  for v1 or higher, this is the base58 encoded hash of the master public key.
 ::  - m denotes the master key
 ::  - [ud/index] is the derivation index as @ud
 ::  - [key-type] is either %pub or %prv
@@ -74,7 +138,11 @@
 ::  labels are stored as children of their associated keys.
 ::  seed is a seed phrase and is only stored as a child of [t/master]
 ::
-+$  keys  $+(keys-axal (axal meta))
++$  keys-v0  $+(keys-axal (axal meta-v0))
++$  keys-v1  $+(keys-axal keys-v0)
++$  keys-v2  $+(keys-axal keys-v1)
++$  keys-v3  $+(keys-axal (axal meta-v3))
++$  keys  keys-v3
 ::
 ::    $transaction-tree: structured tree of transaction, input, and seed data
 ::
@@ -90,22 +158,31 @@
 ::  /input/[input-name]/seed/[seed-name]   :: seed in an input
 ::  /seed/[seed-name]                      :: seed node
 ::
-::  +master: master key pair
-++  master
+::  +active: active master public address
+++  active-v0  $+(active-v0 (unit coil-v0))
+++  active-v1  $+(active-v1 active-v0)
+++  active-v2  $+(active-v2 active-v1)
+::
+++  active-v3
   =<  form
   |%
-    +$  form  (unit coil)
+    +$  form  $+(active-v3 (unit coil))
     ++  public
       |=  =form
       ?:  ?=(^ form)
+        ?.  ?=(%pub -.key.u.form)
+          ~|('fatal: active master public key set to a private key' !!)
         u.form
-      ~|("master public key not found" !!)
+      ~|("active master public key not found" !!)
     ::
+    ::  returns active master address
     ++  to-b58
       |=  =form
       ^-  @t
-      (crip (en:base58:wrap p.key:(public form)))
+      =/  pubcoil=coil  (public form)
+      ~(address to-b58:coil pubcoil)
   --
+++  active  active-v3
 ::
 +$  transaction-tree
   $+  wallet-transaction-tree
@@ -129,12 +206,13 @@
       block-id=hash:transact   :: block hash of balance
       notes=(z-map:zo nname:transact nnote:transact)  :: notes
   ==
-+$  balance  balance-v2
++$  balance-v3  $+(balance-v3 balance-v2)
++$  balance  balance-v3
 ::
 +$  ledger
   %-  list
   $:  name=nname:transact
-      recipient=lock:transact
+      recipient=sig:transact
       gifts=coins:transact
       =timelock-intent:transact
   ==
@@ -145,8 +223,8 @@
         hash-to-name=(z-map:zo hash:transact nname:transact)  ::  hash of note -> name of note
         name-to-hash=(z-map:zo nname:transact hash:transact)  ::  name of note -> hash of note
         receive-address=lock:transact
-        =master
-        =keys
+        active-master=active-v0
+        keys=keys-v0
         transactions=$+(transactions (map * transaction))
         last-block=(unit block-id:transact)
         peek-requests=$+(peek-requests (map @ud ?(%balance %block)))
@@ -160,8 +238,8 @@
   +$  state-1
     $:  %1
         balance=balance-v1
-        =master
-        =keys
+        active-master=active-v1
+        keys=keys-v1
         last-block=(unit block-id:transact)
         peek-requests=$+(peek-requests (map @ud ?(%balance %block)))
         active-transaction=(unit transaction-name)
@@ -174,8 +252,22 @@
   +$  state-2
     $:  %2
         balance=balance-v2
-        =master
-        =keys
+        active-master=active-v2
+        keys=keys-v2
+        last-block=(unit block-id:transact)
+        peek-requests=$+(peek-requests (map @ud ?(%balance %block)))
+        active-transaction=(unit transaction-name)
+        active-input=(unit input-name)
+        active-seed=(unit seed-name)             ::  currently selected seed
+        transaction-tree=transaction-tree                    ::  structured tree of transactions, inputs, and seeds
+        pending-commands=(z-map:zo @ud [phase=?(%block %balance %ready) wrapped=cause])  ::  commands waiting for sync
+    ==
+  ::
+  +$  state-3
+    $:  %3
+        balance=balance-v3
+        active-master=active-v3
+        keys=keys-v3
         last-block=(unit block-id:transact)
         peek-requests=$+(peek-requests (map @ud ?(%balance %block)))
         active-transaction=(unit transaction-name)
@@ -191,9 +283,10 @@
     $%  state-0
         state-1
         state-2
+        state-3
     ==
   ::
-  +$  state  $>(%2 versioned-state)
+  +$  state  $>(%3 versioned-state)
   ::
   +$  seed-name   $~('default-seed' @t)
   ::
@@ -211,15 +304,17 @@
     $%  [%grpc-bind result=*]
     ==
   ::
+  ++  key-version  ?(%0 %1)
   +$  cause
     $%  [%keygen entropy=byts salt=byts]
+        [%generate-mining-pkh entropy=byts salt=byts]
         [%derive-child i=@ hardened=? label=(unit @tas)]
-        [%import-keys keys=(list (pair trek meta))]
+        [%import-keys keys=(list (pair trek *))]
         [%import-extended extended-key=@t]                ::  extended key string
         [%import-watch-only-pubkey key=@t]                ::  imports base58-encoded pubkey
         [%export-keys ~]
         [%export-master-pubkey ~]
-        [%import-master-pubkey =coil]                     ::  base58-encoded pubkey + chain code
+        [%import-master-pubkey coil=*]                    ::  base58-encoded pubkey + chain code
         grpc-bind-cause
         [%send-tx dat=transaction]
         [%show-tx dat=transaction]
@@ -237,66 +332,19 @@
             =timelock-intent:transact                     ::  timelock constraint
         ==
         [%sign-tx dat=transaction sign-key=(unit [child-index=@ud hardened=?]) entropy=@]
-        [%list-pubkeys ~]
+        [%list-active-addresses ~]
         [%list-notes ~]
-        [%show-seedphrase ~]
-        [%show-master-pubkey ~]
-        [%show-master-privkey ~]
+        [%show-seed-phrase ~]
+        [%show-master-zpub ~]
+        [%show-master-zprv ~]
         [%show =path]
-        [%gen-master-privkey seedphrase=@t]
-        [%gen-master-pubkey privkey-b58=@t cc-b58=@t]
+        [%import-seed-phrase seed-phrase=@t version=key-version]
         [%update-balance-grpc balance=*]
-        $:  %scan
-            master-pubkey=@t              ::  base58 encoded master public key to scan for
-            search-depth=$~(100 @ud)      ::  how many addresses to scan (default 100)
-            include-timelocks=$~(%.n ?)   ::  include timelocked notes (default false)
-            include-multisig=$~(%.n ?)    ::  include notes with multisigs (default false)
-        ==
-        [%advanced-spend advanced-spend]
+        [%set-active-master-address address-b58=@t]
+        [%list-master-addresses ~]
         [%file %write path=@t contents=@t success=?]
     ==
   ::
-  +$  advanced-spend
-    $%  [%seed advanced-spend-seed]
-        [%input advanced-spend-input]
-        [%transaction advanced-spend-transaction]
-    ==
-  ::
-  +$  advanced-spend-seed
-    $%  [%new name=@t]                          ::  new empty seed in transaction
-        $:  %set-name
-            seed-name=@t
-            new-name=@t
-        ==
-        $:  %set-source                                  ::  set .output-source
-            seed-name=@t
-            source=(unit [hash=@t is-coinbase=?])
-        ==
-        $:  %set-recipient                               ::  set .recipient
-            seed-name=@t
-            recipient=[m=@ pks=(list @t)]
-        ==
-        $:  %set-timelock                                ::  set .timelock-intent
-            seed-name=@t
-            absolute=timelock-range:transact
-            relative=timelock-range:transact
-        ==
-        $:  %set-gift
-            seed-name=@t
-            gift=coins:transact
-        ==
-        $:  %set-parent-hash
-            seed-name=@t
-            parent-hash=@t
-        ==
-        $:  %set-parent-hash-from-name
-            seed-name=@t
-            name=[@t @t]
-        ==
-        $:  %print-status                                ::  do the needful
-            seed-name=@t
-        ==
-    ==
   ::  $seed-mask: tracks which fields of a $seed:transact have been set
   ::
   ::    this might have been better as a "unitized seed" but would have been
@@ -320,46 +368,6 @@
         fee=?
     ==
   ::
-  +$  advanced-spend-input
-    ::  there is only one right way to create an $input from a $spend, so we don't need
-    ::  the mask or other commands.
-    $%  [%new name=@t]                                   :: new empty input
-        $:  %set-name
-            input-name=@t
-            new-name=@t
-        ==
-        $:  %add-seed
-            input-name=@t
-            seed-name=@t
-        ==
-        $:  %set-fee
-            input-name=@t
-            fee=coins:transact
-        ==
-        $:  %set-note-from-name                          ::  set .note using .name
-            input-name=@t
-            name=[@t @t]
-        ==
-        $:  %set-note-from-hash                          ::  set .note using hash
-            input-name=@t
-            hash=@t
-        ==
-        $:  %derive-note-from-seeds                      ::  derive note from seeds
-            input-name=@t
-        ==
-        $:  %remove-seed
-            input-name=@t
-            seed-name=@t
-        ==
-        $:  %remove-seed-by-hash
-            input-name=@t
-            hash=@t
-        ==
-        $:  %print-status
-            input-name=@t
-        ==
-    ==
-  ::
   +$  input-mask
     $~  [%.n *spend-mask]
     $:  note=?
@@ -368,28 +376,8 @@
   ::
   +$  preinput  [name=@t (pair input:transact input-mask)]
   ::
-  +$  transaction  [name=@t p=inputs:transact]
+  +$  transaction  [name=@t p=inputs:v0:transact]
   ::
-  +$  advanced-spend-transaction
-    $%  [%new name=@t]                                    ::  new input transaction
-        $:  %set-name
-            transaction-name=@t
-            new-name=@t
-        ==
-        $:  %add-input
-            transaction-name=@t
-            input-name=@t
-        ==
-        $:  %remove-input
-            transaction-name=@t
-            input-name=@t
-        ==
-        $:  %remove-input-by-name
-            transaction-name=@t
-            name=[first=@t last=@t]
-        ==
-        [%print-status =transaction-name]                            ::  print transaction status
-    ==
   ::
   +$  nockchain-grpc-effect
     $%  [%send-tx tx=raw-tx:transact]
@@ -402,6 +390,7 @@
         [%grpc grpc-effect]
         [%nockchain-grpc nockchain-grpc-effect]
         [%exit code=@]
+        grpc-effect
     ==
   ::
   +$  file-effect
@@ -413,5 +402,9 @@
   +$  grpc-effect
     $%  [%poke pid=@ $>(%fact cause:dumb)]
         [%peek pid=@ typ=@tas path=path]
+    ==
+  ::
+  +$  upgrade-effect
+    $%  [%upgrade-1-to-2 ~]
     ==
 --

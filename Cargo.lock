@@ -3895,6 +3895,7 @@ dependencies = [
  "nockchain-libp2p-io",
  "nockvm",
  "nockvm_macros",
+ "noun-serde",
  "num_cpus",
  "rand 0.9.2",
  "tempfile",
@@ -3999,6 +4000,7 @@ dependencies = [
  "kernels",
  "nockapp",
  "nockapp-grpc",
+ "nockchain-math",
  "nockchain-types",
  "nockvm",
  "nockvm_macros",
@@ -4105,6 +4107,7 @@ dependencies = [
 name = "noun-serde"
 version = "0.1.0"
 dependencies = [
+ "ibig",
  "nockapp",
  "nockvm",
  "noun-serde-derive",

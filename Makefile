@@ -33,6 +33,16 @@ test:
 fmt:
 	cargo fmt
 
+.PHONY: build-hoonc
+build-hoonc: nuke-hoonc-data ## Build hoonc from this repo
+	$(call show_env_vars)
+	cargo build --release --locked --bin hoonc
+
+.PHONY: build-hoonc-tracing
+build-hoonc-tracing: nuke-hoonc-data ## Build hoonc with tracing
+	$(call show_env_vars)
+	cargo build --release --bin hoonc --features tracing-tracy
+
 .PHONY: install-hoonc
 install-hoonc: nuke-hoonc-data ## Install hoonc from this repo
 	$(call show_env_vars)

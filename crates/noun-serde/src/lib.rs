@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+use ibig::UBig;
 pub mod wallet;
 
 #[allow(unused_imports)]
@@ -136,6 +137,12 @@ impl NounEncode for u32 {
     fn to_noun<A: NounAllocator>(&self, allocator: &mut A) -> Noun {
         // Convert to u64 and use Atom::new
         Atom::new(allocator, *self as u64).as_noun()
+    }
+}
+
+impl NounEncode for UBig {
+    fn to_noun<A: NounAllocator>(&self, allocator: &mut A) -> Noun {
+        Atom::from_ubig(allocator, self).as_noun()
     }
 }
 

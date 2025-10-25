@@ -1637,14 +1637,21 @@
         ?>  (lth sk g-order:curve)
         =/  pubkey  (ch-scal:affine:curve sk a-gen:curve)
         =/  transcript=(list (list belt))
-          [(f6lt-to-list x.pubkey) (f6lt-to-list y.pubkey) m-list ~]
+          [(f6lt-to-list x.pubkey) (f6lt-to-list y.pubkey) m-list sk-as-32-bit-belts ~]
         =/  nonce
           (trunc-g-order (hash-varlen:tip5 (zing transcript)))
         ?<  =(nonce 0)
         =/  scalar  (ch-scal:affine:curve nonce a-gen:curve)
-        =.  transcript  [(f6lt-to-list x.scalar) (f6lt-to-list y.scalar) transcript]
+        =/  pre-image
+          %-  zing
+          :~  (f6lt-to-list x.scalar)
+              (f6lt-to-list y.scalar)
+              (f6lt-to-list x.pubkey)
+              (f6lt-to-list y.pubkey)
+              m-list
+          ==
         =/  chal
-          (trunc-g-order (hash-varlen:tip5 (zing transcript)))
+          (trunc-g-order (hash-varlen:tip5 pre-image))
         ?<  =(chal 0)
         =/  sig
           %+  mod

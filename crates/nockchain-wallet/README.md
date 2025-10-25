@@ -5,7 +5,8 @@
 ### Generate New Key Pair
 
 ```bash
-# Generate a new key pair with random entropy
+# Generate a new key pair with random entropy. If no active master key set, switches the active key
+# to the new key. Otherwise, the active key remains the same
 nockchain-wallet keygen
 ```
 
@@ -23,8 +24,11 @@ nockchain-wallet import-keys --file keys.export
 # Import an extended key string
 nockchain-wallet import-keys --key "zprv..."
 
-# Generate master private key from seed phrase
-nockchain-wallet import-keys --seedphrase "your seed phrase here"
+# Generate master private key from seed phrase (version required)
+# If you generated your seedphrase before October 2025 then it’s probably version 0
+# If you import with version 0 and find that you cannot spend your notes, try
+# importing the seed phrase again with version 1.
+nockchain-wallet import-keys --seedphrase "your seed phrase here" --version <version | 1 or 0>
 
 # Generate master public key from private key and chain code
 nockchain-wallet import-keys --master-privkey <private-key> --chain-code <chain-code>
@@ -99,6 +103,24 @@ nockchain-wallet derive-child 42 --hardened --label "my-key"
 ```
 
 Derives a child public or private key at the given index from the current master key.
+
+### Managing Addresses
+
+```bash
+# List active addresses, shows the current active master addresses and all of its child addresses:
+nockchain-wallet list-active-addresses
+
+# List all stored master addresses and see which one is active
+nockchain-wallet list-master-addresses
+
+# Promote an existing address (pubkey or pkh) to be the active master
+nockchain-wallet set-active-master-address <address-b58>
+
+```
+
+- `%set-active-master-address` accepts either the base58-encoded master pubkey (v0 wallets) or the base58-encoded payee hash address (v1+ wallets) already present in your key store.
+- `%list-master-addresses` prints every tracked master address and highlights the one currently in use, making it easy to confirm which derivation tree future operations will follow.
+- Both commands operate purely on local state; no network sync is required.
 
 
 

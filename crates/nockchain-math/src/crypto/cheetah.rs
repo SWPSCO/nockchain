@@ -62,6 +62,8 @@ pub struct CheetahPoint {
 }
 
 impl CheetahPoint {
+    ///  A pubkey consists of a leading 1 byte and 12 base field elements that are 8 bytes each. (12*8) + 1 = 97.
+    const BYTES: usize = 97;
     pub fn into_base58(&self) -> Result<String, CheetahError> {
         if self.inf {
             return Err(CheetahError::NotOnCurve);
@@ -75,9 +77,8 @@ impl CheetahPoint {
         Ok(bs58::encode(bytes).into_string())
     }
     pub fn from_base58(b58: &str) -> Result<Self, CheetahError> {
-        let v = bs58::decode(b58).into_vec()?; // auto-converts into CheetahError::Base58
-
-        if v.len() != 97 {
+        let v = bs58::decode(b58).into_vec()?;
+        if v.len() != Self::BYTES {
             return Err(CheetahError::InvalidLength(v.len()));
         }
 
