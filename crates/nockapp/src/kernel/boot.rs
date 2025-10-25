@@ -109,12 +109,8 @@ pub struct Cli {
     #[command(flatten)]
     pub trace_opts: TraceOpts,
 
-    #[arg(
-        long,
-        default_value_t = DEFAULT_SAVE_INTERVAL,
-        help = "Set the save interval for checkpoints (in ms)"
-    )]
-    pub save_interval: u64,
+    #[arg(long, help = "Set the save interval for checkpoints (in ms)")]
+    pub save_interval: Option<u64>,
 
     #[arg(long, help = "Control colored output", value_enum, default_value_t = ColorChoice::Auto)]
     pub color: ColorChoice,
@@ -150,7 +146,7 @@ pub enum SetupResult<J> {
 
 pub fn default_boot_cli(new: bool) -> Cli {
     Cli {
-        save_interval: DEFAULT_SAVE_INTERVAL,
+        save_interval: Some(DEFAULT_SAVE_INTERVAL),
         new,
         trace_opts: Default::default(),
         color: ColorChoice::Auto,
@@ -401,7 +397,7 @@ pub async fn setup_<J: Jammer + Send + 'static>(
         res
     };
 
-    let save_interval = std::time::Duration::from_millis(cli.save_interval);
+    let save_interval = cli.save_interval.map(std::time::Duration::from_millis);
 
     let app: NockApp<J> = NockApp::new(kernel_f, &jams_dir, save_interval).await?;
 

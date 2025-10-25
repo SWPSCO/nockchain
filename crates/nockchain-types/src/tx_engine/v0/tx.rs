@@ -1,4 +1,3 @@
-use nockchain_math::belt::Belt;
 use nockchain_math::noun_ext::NounMathExt;
 use nockchain_math::structs::HoonMapIter;
 use nockchain_math::zoon::common::DefaultTipHasher;
@@ -6,8 +5,8 @@ use nockchain_math::zoon::{zmap, zset};
 use nockvm::noun::{Noun, NounAllocator, D};
 use noun_serde::{NounDecode, NounDecodeError, NounEncode};
 
-use super::note::{Hash, Name, Note, SchnorrPubkey, Source, TimelockIntent};
-use crate::{Lock, Nicks, TimelockRangeAbsolute};
+use super::note::{Lock, NoteV0, TimelockIntent};
+use crate::tx_engine::common::{Hash, Name, Nicks, Signature, Source, TimelockRangeAbsolute, TxId};
 
 //  +$  form
 //    $:  id=tx-id  :: hash of +.raw-tx
@@ -48,20 +47,11 @@ use crate::{Lock, Nicks, TimelockRangeAbsolute};
 //
 //
 
-#[derive(Debug, Clone, PartialEq, Eq, NounDecode, NounEncode)]
-pub struct SchnorrSignature {
-    pub chal: [Belt; 8],
-    pub sig: [Belt; 8],
-}
-
 #[derive(Debug, Clone, PartialEq, NounDecode, NounEncode)]
 pub struct Input {
-    pub note: Note,
+    pub note: NoteV0,
     pub spend: Spend,
 }
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Signature(pub Vec<(SchnorrPubkey, SchnorrSignature)>);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Spend {
@@ -99,8 +89,6 @@ impl NounDecode for Inputs {
         Ok(Self(entries))
     }
 }
-
-pub type TxId = Hash;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RawTx {
@@ -156,42 +144,6 @@ pub struct Seed {
     pub timelock_intent: Option<TimelockIntent>,
     pub gift: Nicks,
     pub parent_hash: Hash,
-}
-
-impl NounEncode for Signature {
-    fn to_noun<A: NounAllocator>(&self, stack: &mut A) -> Noun {
-        self.0.iter().fold(D(0), |map, (pubkey, sig)| {
-            let mut key = pubkey.to_noun(stack);
-            let mut value = sig.to_noun(stack);
-            zmap::z_map_put(stack, &map, &mut key, &mut value, &DefaultTipHasher)
-                .expect("z-map put for signature should not fail")
-        })
-    }
-}
-
-impl NounDecode for Signature {
-    fn from_noun(noun: &Noun) -> Result<Self, NounDecodeError> {
-        if let Ok(atom) = noun.as_atom() {
-            if atom.as_u64()? == 0 {
-                return Ok(Signature(Vec::new()));
-            }
-            return Err(NounDecodeError::Custom("signature node not a cell".into()));
-        }
-
-        let entries = HoonMapIter::from(*noun)
-            .filter(|entry| entry.is_cell())
-            .map(|entry| {
-                let [key, value] = entry
-                    .uncell()
-                    .map_err(|_| NounDecodeError::Custom("signature entry not a pair".into()))?;
-                let pubkey = SchnorrPubkey::from_noun(&key)?;
-                let signature = SchnorrSignature::from_noun(&value)?;
-                Ok((pubkey, signature))
-            })
-            .collect::<Result<Vec<_>, NounDecodeError>>()?;
-
-        Ok(Signature(entries))
-    }
 }
 
 impl NounEncode for Seeds {

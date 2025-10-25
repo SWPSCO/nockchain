@@ -402,6 +402,27 @@
       %-  ~(get z-by balance.c.k)
       u.heaviest-block.c.k
     ::
+        [%balance-by-first-name first-name=@t ~]
+      ^-  (unit (unit [page-number:t block-id:t (z-map nname:t nnote:t)]))
+      =/  first-name=hash:t  (from-b58:hash:t first-name.pole)
+      ?~  heaviest-block.c.k
+        [~ ~]
+      ?.  (~(has z-by blocks.c.k) u.heaviest-block.c.k)
+        [~ ~]
+      ?~  bal=(~(get z-by balance.c.k) u.heaviest-block.c.k)
+        [~ ~]
+      ?~  highest=highest-block-height.d.k
+        [~ ~]
+      %-  some
+      %-  some
+      :+  u.highest
+        u.heaviest-block.c.k
+      %-  ~(rep z-by u.bal)
+      |=  [[k=nname:t v=nnote:t] bal=(z-map nname:t nnote:t)]
+      ?.  =(~(first-name get:nnote:t v) first-name)
+        bal
+      (~(put z-by bal) k v)
+    ::
         [%balance-by-pubkey key-b58=@t ~]
       ^-  (unit (unit [page-number:t block-id:t (z-map nname:t nnote:t)]))
       =/  pubkey=schnorr-pubkey:t  (from-b58:schnorr-pubkey:t key-b58.pole)
@@ -899,7 +920,7 @@
         =/  log-message
           %^  cat  3
             'heard-tx: Invalid transaction id: '
-        id-b58
+          id-b58
         ~>  %slog.[1 log-message]
         :_  k
         [(liar-effect wir %tx-id-invalid)]~

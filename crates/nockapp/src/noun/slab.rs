@@ -706,7 +706,6 @@ impl Jammer for NockJammer {
             );
             buffer.extend_from_bitslice(&atom.as_bitslice()[0..atom_sz]);
         }
-
         let mut backref_map = NounMap::<usize>::new();
         let mut stack = vec![noun];
         let mut buffer = bitvec![u8, Lsb0; 0; 0];

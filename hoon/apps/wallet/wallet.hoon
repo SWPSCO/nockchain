@@ -10,7 +10,7 @@
 /=  *  /common/wrapper
 /=  wt  /apps/wallet/lib/types
 /=  wutils  /apps/wallet/lib/utils
-/=  tx-builder  /apps/wallet/lib/tx-builder-v0
+/=  tx-builder  /apps/wallet/lib/tx-builder-v1
 /=  s10  /apps/wallet/lib/s10
 =>
 =|  bug=_&
@@ -35,13 +35,14 @@
   ^-  state:wt
   |^
   |-
-  ?:  ?=(%3 -.old)
+  ?:  ?=(%4 -.old)
     old
   ~>  %slog.[0 'load: State upgrade required']
   ?-  -.old
     %0  $(old state-0-1)
     %1  $(old state-1-2)
     %2  $(old state-2-3)
+    %3  $(old state-3-4)
   ==
   ::
   ++  state-0-1
@@ -66,7 +67,7 @@
     ?>  ?=(%1 -.old)
     ~>  %slog.[0 'upgrade version 1 to 2']
     :*  %2
-        balance=*balance:wt
+        balance=*balance-v2:wt
         active-master.old
         keys.old
         last-block.old
@@ -79,7 +80,7 @@
     ==
   ::
   ++  state-2-3
-    ^-  state:wt
+    ^-  state-3:wt
     ?>  ?=(%2 -.old)
     ~>  %slog.[0 'upgrade version 2 to 3']
     =/  new-keys=keys:wt
@@ -106,6 +107,17 @@
         transaction-tree.old
         pending-commands.old
     ==
+  ::
+  ++  state-3-4
+    ^-  state:wt
+    ?>  ?=(%3 -.old)
+    ~>  %slog.[0 'upgrade version 3 to 4']
+    :*  %4
+        balance.old
+        :: delete active master
+        active-master.old
+        keys.old
+    ==
   --
 ::
 ++  peek
@@ -120,6 +132,32 @@
     ::
       [%state ~]
     ``state
+    ::
+    ::  returns a list of tracked first names
+      [%tracked-names include-watch-only=? ~]
+    :+  ~
+      ~
+    =/  signing-names=(list @t)
+      %+  roll
+        ~(coils get:v %pub)
+      |=  [=coil:wt names=(list @t)]
+      ::  exclude names for v0 keys because those are handled through tracked pubkeys
+      ?:  ?=(%0 -.coil)
+        names
+      :+  (to-b58:hash:transact (simple-first-name:coil:wt coil))
+        (to-b58:hash:transact (coinbase-first-name:coil:wt coil))
+      names
+    ?.  include-watch-only.pole
+      signing-names
+    %+  weld  signing-names
+    %+  turn  watch-keys:get:v
+    |=  addr=@t
+    ::  v0 keys have at least 132 bytes
+    ?:  (gte (met 3 addr) 132)
+      =+  pubkey=(from-b58:schnorr-pubkey:transact addr)
+      (to-b58:hash:transact (simple:v0:first-name:transact pubkey))
+    =+  pubkey-hash=(from-b58:hash:transact addr)
+    (to-b58:hash:transact (simple:v1:first-name:transact pubkey-hash))
     ::
     ::  returns a list of pubkeys
       [%tracked-pubkeys include-watch-only=? ~]
@@ -164,12 +202,10 @@
     ?+    -.cause  ~|("unsupported cause: {<-.cause>}" !!)
         %show                  (show:utils state path.cause)
         %keygen                (do-keygen cause)
-        %generate-mining-pkh   (do-generate-mining-pkh cause)
         %derive-child          (do-derive-child cause)
-        %sign-tx               (do-sign-tx cause)
         %list-notes            (do-list-notes cause)
-        %list-notes-by-pubkey  (do-list-notes-by-pubkey cause)
-        %list-notes-by-pubkey-csv  (do-list-notes-by-pubkey-csv cause)
+        %list-notes-by-address  (do-list-notes-by-address cause)
+        %list-notes-by-address-csv  (do-list-notes-by-address-csv cause)
         %create-tx             (do-create-tx cause)
         %update-balance-grpc   (do-update-balance-grpc cause)
         %sign-message          (do-sign-message cause)
@@ -187,7 +223,9 @@
         %show-tx               (do-show-tx cause)
         %list-active-addresses  (do-list-active-addresses cause)
         %show-seed-phrase       (do-show-seed-phrase cause)
+        ::  TODO: replace with  show-zpub <KEY>
         %show-master-zpub    (do-show-master-zpub cause)
+        ::  TODO: replace with  show-zprv <KEY>
         %show-master-zprv  (do-show-master-zprv cause)
         %list-master-addresses  (do-list-master-addresses cause)
         %set-active-master-address  (do-set-active-master-address cause)
@@ -251,7 +289,7 @@
           raw-meta
         ::  it's a coil, check if it's already versioned
         ::  meta-v3 coil: [%coil [%0|%1 coil-data]]
-        ::  meta-v0 coil: [%coil coil-data]
+        ::  meta-{v0,v1,v2} coil: [%coil coil-data]
         ::  we can check if +.raw-meta is itself a cell with %0 or %1 head
         =/  inner  +.raw-meta
         ?:  ?&  ?=(^ inner)
@@ -579,12 +617,12 @@
     ?>  ?=(%send-tx -.cause)
     %-  (debug "send-tx: creating raw-tx")
     ::
-    ::  note that new:raw-tx calls +validate already
-    =/  raw=raw-tx:transact  (new:raw-tx:v0:transact p.dat.cause)
+    =/  raw=raw-tx:v1:transact  (new:raw-tx:v1:transact p.dat.cause)
     =/  nock-cause=$>(%fact cause:dumb)
       [%fact %0 %heard-tx raw]
     %-  (debug "send-tx: made raw-tx, sending poke request over grpc")
-    =/  pid  generate-pid:v
+    ::  we currently do not need to assign pids. shim is here in case
+    =/  pid  *@
     :_  state
     :~
       [%grpc %poke pid nock-cause]
@@ -598,8 +636,12 @@
     %-  (debug "show-tx: displaying transaction")
     =/  =transaction:wt  dat.cause
     =/  transaction-name=@t  name.transaction
-    =/  ins-transaction=inputs:v0:transact  p.transaction
-    =/  markdown-text=@t  (transaction:v0:display:utils transaction-name ins-transaction)
+    =/  =spends:transact  p.transaction
+    =/  fees=@  (roll-fees:spends:v1:transact spends)
+    =/  =raw-tx:v1:transact  (new:raw-tx:v1:transact spends)
+    =/  =tx:v1:transact  (new:tx:v1:transact raw-tx height.balance.state)
+    =/  markdown-text=@t
+      (transaction:v1:display:utils transaction-name outputs.tx fees)
     :_  state
     :~
       [%markdown markdown-text]
@@ -756,32 +798,49 @@
       =-  ?:  =("" -)  "No notes found"  -
       %-  zing
       %+  turn  ~(val z-by:zo notes.balance.state)
-      |=  =nnote:transact
-      %-  trip
-      (note:v0:display:utils nnote)
+      |=  note=nnote:transact
+      ?^  -.note
+        (trip (note:v0:display:utils note))
+      (trip (note:v1:display:utils note %.n))
       ::
       [%exit 0]
     ==
   ::
-  ++  do-list-notes-by-pubkey
+  ++  do-list-notes-by-address
     |=  =cause:wt
-    ?>  ?=(%list-notes-by-pubkey -.cause)
-    =/  target-pubkey=schnorr-pubkey:transact
-      (from-b58:schnorr-pubkey:transact pubkey.cause)
+    ?>  ?=(%list-notes-by-address -.cause)
     =/  matching-notes=(list [name=nname:transact note=nnote:transact])
+      ::  v0 address case
+      ?:  (gte (met 3 address.cause) 132)
+        =/  target-pubkey=schnorr-pubkey:transact
+          (from-b58:schnorr-pubkey:transact address.cause)
+        %+  skim  ~(tap z-by:zo notes.balance.state)
+        |=  [name=nname:transact note=nnote:transact]
+        ::  skip v1 notes
+        ?@  -.note  %.n
+        ::  this should cover all cases because we only
+        ::  sync coinbase notes or non-coinbase notes with m=1 locks.
+        (~(has z-in:zo pubkeys.sig.note) target-pubkey)
+      ::  v1 address case
+      =/  target-pkh=hash:transact
+        (from-b58:hash:transact address.cause)
       %+  skim  ~(tap z-by:zo notes.balance.state)
       |=  [name=nname:transact note=nnote:transact]
-      ?^  -.note
-        ::  v0 note
-        (~(has z-in:zo pubkeys.sig.note) target-pubkey)
-      =+  (make-pkh:spend-condition:transact 1 ~[target-pubkey])
-      =(-.name (first:nname:transact root))
+      ::  skip v0 notes
+      ?^  -.note  %.n
+      ::  look for coinbase notes with target-pkh
+      ::  or notes with simple 1-of-1 lock containing
+      =+  simple-fn=(simple:v1:first-name:transact target-pkh)
+      =+  coinbase-fn=(coinbase:v1:first-name:transact target-pkh)
+      ?|  =(simple-fn -.name.note)
+          =(coinbase-fn -.name.note)
+      ==
     :_  state
     :~  :-  %markdown
         %-  crip
         %+  welp
           """
-          ## Wallet Notes for Public Key {<(to-b58:schnorr-pubkey:transact target-pubkey)>}
+          ## Wallet Notes for Address {(trip address.cause)}
 
           """
         =-  ?:  =("" -)  "No notes found"  -
@@ -789,41 +848,61 @@
         %+  turn  matching-notes
         |=  [* =nnote:transact]
         %-  trip
-        (note:v0:display:utils nnote)
+        ?^  -.nnote
+          (note:v0:display:utils nnote)
+        (note:v1:display:utils nnote output=%.n)
         ::
         [%exit 0]
     ==
   ::
-  ++  do-list-notes-by-pubkey-csv
+  ++  do-list-notes-by-address-csv
     |=  =cause:wt
-    ?>  ?=(%list-notes-by-pubkey-csv -.cause)
-    =/  target-pubkey=schnorr-pubkey:transact
-      (from-b58:schnorr-pubkey:transact pubkey.cause)
+    ?>  ?=(%list-notes-by-address-csv -.cause)
     =/  matching-notes=(list [name=nname:transact note=nnote:transact])
+      ::  v0 address case
+      ?:  (gte (met 3 address.cause) 132)
+        =/  target-pubkey=schnorr-pubkey:transact
+          (from-b58:schnorr-pubkey:transact address.cause)
+        %+  skim  ~(tap z-by:zo notes.balance.state)
+        |=  [name=nname:transact note=nnote:transact]
+        ::  skip v1 notes
+        ?@  -.note  %.n
+        ::  this should cover all cases because we only
+        ::  sync coinbase notes or non-coinbase notes with m=1 locks.
+        (~(has z-in:zo pubkeys.sig.note) target-pubkey)
+      ::  v1 address case
+      =/  target-pkh=hash:transact
+        (from-b58:hash:transact address.cause)
       %+  skim  ~(tap z-by:zo notes.balance.state)
       |=  [name=nname:transact note=nnote:transact]
-      ?^  -.note
-        ::  v0 note
-        (~(has z-in:zo pubkeys.sig.note) target-pubkey)
-      =+  (make-pkh:spend-condition:transact 1 ~[target-pubkey])
-      =(-.name (first:nname:transact root))
+      ::  skip v0 notes
+      ?^  -.note  %.n
+      ::  look for coinbase notes with target-pkh
+      ::  or notes with simple 1-of-1 lock containing
+      =+  simple-fn=(simple:v1:first-name:transact target-pkh)
+      =+  coinbase-fn=(coinbase:v1:first-name:transact target-pkh)
+      ?|  =(simple-fn -.name.note)
+          =(coinbase-fn -.name.note)
+      ==
     =/  csv-header=tape
-      "name_first,name_last,assets,block_height,source_hash"
+      "version,name_first,name_last,assets,block_height,source_hash"
     =/  csv-rows=(list tape)
       %+  turn  matching-notes
       |=  [name=nname:transact note=nnote:transact]
       ?^  -.note
         ::  v0 note
+        =+  version=0
         =/  name-b58=[first=@t last=@t]  (to-b58:nname:transact name)
         =/  source-hash-b58=@t  (to-b58:hash:transact p.source.note)
         """
-        {(trip first.name-b58)},{(trip last.name-b58)},{(ui-to-tape:utils assets.note)},{(ui-to-tape:utils origin-page.note)},{(trip source-hash-b58)}
+        {(ui-to-tape:utils version)},{(trip first.name-b58)},{(trip last.name-b58)},{(ui-to-tape:utils assets.note)},{(ui-to-tape:utils origin-page.note)},{(trip source-hash-b58)}
         """
       ::  v1 note
+      =+  version=1
       =/  name-b58=[first=@t last=@t]  (to-b58:nname:transact name)
       =/  source-hash-b58=@t  'N/A'
       """
-      {(trip first.name-b58)},{(trip last.name-b58)},{(ui-to-tape:utils assets.note)},{(ui-to-tape:utils origin-page.note)},{(trip source-hash-b58)}
+      {(ui-to-tape:utils version)},{(trip first.name-b58)},{(trip last.name-b58)},{(ui-to-tape:utils assets.note)},{(ui-to-tape:utils origin-page.note)},{(trip source-hash-b58)}
       """
     =/  csv-content=tape
       %+  welp  csv-header
@@ -834,13 +913,15 @@
       "{row}\0a"
     =/  filename=@t
       %-  crip
-      "notes-{(trip (to-b58:schnorr-pubkey:transact target-pubkey))}.csv"
+      "notes-{(trip address.cause)}.csv"
+    =/  markdown=tape
+      """
+      ## Result
+      Output csv written to {(trip filename)} in current working directory
+      """
     :_  state
-    :~  :-  %file
-        :-  %write
-        :-  filename
-        %-  crip
-        csv-content
+    :~  [%file %write filename (crip csv-content)]
+        [%markdown (crip markdown)]
         [%exit 0]
     ==
   ::
@@ -859,30 +940,13 @@
           """
           [%exit 0]
       ==
-    ?:  ?=(%1 -.u.active-master.state)
-      :_  state
-      :~  :-  %markdown
-          %-  crip
-          """
-          Active address corresponds to v1 key. Cannot sign a v0 transaction with v1 keys. Use the `list-master-addresses`
-          command to list your master addresses. Then use `set-active-master-address` to set your active address to one corresponding
-          to a v0 key if available. If you have a v0 key stored as a seed phrase, you can import it by running
-          `nockchain-wallet import-keys --seedphrase <seed-phrase> --version 0`. If your key was generated before the release of the
-          v1 protocol upgrade on October 15, 2025, it is most likely a v0 key.
-          """
-          [%exit 0]
-      ==
     =/  sign-key  (sign-key:get:v sign-key.cause)
-    =/  ins=inputs:v0:transact
-      =+  ins=(tx-builder names order.cause fee.cause sign-key timelock-intent.cause get-note-v0:v)
-      %-  ~(gas z-by:zo *(z-map:zo nname:transact input:v0:transact))
-      %+  turn
-        ~(tap z-by:zo ins)
-      |=  [name=nname:transact input=input:transact]
-      ^-  [nname:transact input:v0:transact]
-      ?>  ?=(%0 -.input)
-      [name +.input]
-    (save-transaction ins)
+    =/  pubkey=schnorr-pubkey:transact
+      %-  from-sk:schnorr-pubkey:transact
+      (to-atom:schnorr-seckey:transact sign-key)
+    =/  =spends:transact
+      (tx-builder names order.cause fee.cause sign-key pubkey refund-pkh.cause get-note:v)
+    (save-transaction spends)
     ::
     ++  parse-names
       |=  raw-names=(list [first=@t last=@t])
@@ -891,131 +955,62 @@
       |=  [first=@t last=@t]
       (from-b58:nname:transact [first last])
     ::
-    ++  validate-inputs
-      |=  =inputs:v0:transact
-      ^-  ?
-      ?&  (validate:inputs:v0:transact inputs)
-          %+  levy  ~(tap z-by:zo inputs)
-          |=  [name=nname:transact inp=input:v0:transact]
-          (spendable:sig:transact sig.note.inp)
-      ==
-    ::
     ++  save-transaction
-      |=  ins=inputs:v0:transact
+      |=  =spends:transact
       ^-  [(list effect:wt) state:wt]
       ~&  "Validating transaction before saving"
-      ::  we fallback to the hash of the inputs as the transaction name
+      ::  we fallback to the hash of the spends as the transaction name
       ::  if the tx is invalid. this is just for display
       ::  in the error message, as an invalid tx is not saved.
       =/  transaction-name=@t
         %-  to-b58:hash:transact
-        =-  %+  fall  -
-            (hash:inputs:v0:transact ins)
-        %-  mole
-        |.
-        ::  TODO: this also calls validate:inputs, but we need it to
-        ::  get the id of the transaction. we should deduplicate this.
-        id:(new:raw-tx:v0:transact ins)
-      ::  jam inputs and save as transaction
-      =/  =transaction:wt
-        %*  .  *transaction:wt
-          p  ins
-          name  transaction-name
-        ==
-      ?.  (validate-inputs ins)
+        id:(new:raw-tx:v1:transact spends)
+      ::  TODO: modulate blockchain constants from wallet with poke
+      =+  data=data:*blockchain-constants:transact
+      =/  valid=(reason:dumb ~)
+        %-  validate-with-context:spends:transact
+        [notes.balance.state spends height.balance.state max-size.data]
+      =/  =raw-tx:v1:transact  (new:raw-tx:v1:transact spends)
+      =/  =tx:v1:transact  (new:tx:v1:transact raw-tx height.balance.state)
+      =/  fees=@  (roll-fees:spends:v1:transact spends)
+      =/  markdown-text=@t  (transaction:v1:display:utils transaction-name outputs.tx fees)
+      ?-    -.valid
+          %.y
+        ::  jam inputs and save as transaction
+        =/  =transaction:wt  [transaction-name spends]
+        =/  transaction-jam  (jam transaction)
+        =/  path=@t
+          %-  crip
+          "./txs/{(trip name.transaction)}.tx"
+        %-  (debug "saving transaction to {<path>}")
+        =/  =effect:wt  [%file %write path transaction-jam]
+        :_  state
+        ~[effect [%markdown markdown-text] [%exit 0]]
+      ::
+          %.n
         =/  msg=@t
-          %^  cat  3
             %-  crip
             """
             # TX Validation Failed
 
             Failed to validate the correctness of transaction {(trip transaction-name)}.
+            Reason: {(trip p.valid)}
 
-            Check that the note(s) you are spending from:
-
-            1. Can be spent by the public key you are signing with.
-            2. Have enough assets to cover the gift and fee.
-            3. Have the correct timelock intent.
-
+            {(trip markdown-text)}
             ---
 
-
             """
-          (transaction:v0:display:utils transaction-name ins)
         %-  (debug "{(trip msg)}")
         :_  state
         :~  [%markdown msg]
             [%exit 1]
         ==
-      =/  transaction-jam  (jam transaction)
-      =/  markdown-text=@t  (transaction:v0:display:utils transaction-name ins)
-      =/  path=@t
-        %-  crip
-        "./txs/{(trip name.transaction)}.tx"
-      %-  (debug "saving transaction to {<path>}")
-      =/  =effect:wt  [%file %write path transaction-jam]
-      :-  ~[effect [%markdown markdown-text] [%exit 0]]
-      state
+      ==
     --
   ::
   ++  do-keygen
     |=  =cause:wt
     ?>  ?=(%keygen -.cause)
-    =+  [seed-phrase=@t cor]=(gen-master-key:s10 entropy.cause salt.cause)
-    =/  [master-public-coil=coil:wt master-private-coil=coil:wt]
-      :-  [%0 [%pub public-key] chain-code]:cor
-      [%0 [%prv private-key] chain-code]:cor
-    =/  old-active  active-master.state
-    =.  active-master.state  (some master-public-coil)
-    %-  (debug "keygen: public key: {<(en:base58:wrap public-key:cor)>}")
-    %-  (debug "keygen: private key: {<(en:base58:wrap private-key:cor)>}")
-    =/  pub-label  `(crip "master-public-{<(end [3 4] public-key:cor)>}")
-    =/  prv-label  `(crip "master-public-{<(end [3 4] public-key:cor)>}")
-    =.  keys.state  (key:put:v master-public-coil ~ pub-label)
-    =.  keys.state  (key:put:v master-private-coil ~ prv-label)
-    =.  keys.state  (seed:put:v seed-phrase)
-    =/  extended-private=@t  extended-private-key:cor
-    =/  extended-public=@t  extended-public-key:cor
-    =/  addr-b58=@t  ~(address to-b58:coil:wt master-public-coil)
-    ::  If there was already an active master address, set it back to the old master address
-    ::  The new keys generated are stored in the keys state and the user can manually
-    ::  switch to them by running `set-active-master-address`
-    =?  active-master.state  ?=(^ old-active)
-      old-active
-    =/  active-addr=@t  (to-b58:active:wt active-master.state)
-    :_  state
-    :~  :-  %markdown
-        %-  crip
-        """
-        ## Generated New Master Key (version 0)
-        - Added keys to wallet.
-        - Active master key is set to {(trip active-addr)}.
-          - To switch the active address, run `nockchain-wallet set-active-master-address <master-address>`.
-          - To see the available master addresses, run `nockchain-wallet list-master-addresses`.
-          - To see the current active address and its child keys, run `nockchain-wallet list-active-addresses`.
-
-        ### Address
-        {(trip addr-b58)}
-
-        ### Extended Private Key (save this for import)
-        {(trip extended-private)}
-
-        ### Extended Public Key (save this for import)
-        {(trip extended-public)}
-
-        ### Seed Phrase (save this for import)
-        {<seed-phrase>}
-
-        ### Version (keep this for import with seed phrase)
-        0
-
-        """
-        [%exit 0]
-    ==
-  ::
-  ++  do-generate-mining-pkh
-    |=  =cause:wt
-    ?>  ?=(%generate-mining-pkh -.cause)
     =+  [seed-phrase=@t cor]=(gen-master-key:s10 entropy.cause salt.cause)
     =/  [master-public-coil=coil:wt master-private-coil=coil:wt]
       :-  [%1 [%pub public-key] chain-code]:cor
@@ -1042,14 +1037,14 @@
     :~  :-  %markdown
         %-  crip
         """
-        ## Generated New v1 Master Key for Mining Public Key Hash Address
+        ## Generated New Master Key (version 1)
         - Added keys to wallet.
         - Active master key is set to {(trip active-addr)}.
           - To switch the active address, run `nockchain-wallet set-active-master-address <master-address>`.
           - To see the available master addresses, run `nockchain-wallet list-master-addresses`.
           - To see the current active address and its child keys, run `nockchain-wallet list-active-addresses`.
 
-        ### Address (pkh address)
+        ### Address
         {(trip addr-b58)}
 
         ### Extended Private Key (save this for import)

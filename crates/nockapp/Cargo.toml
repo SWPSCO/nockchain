@@ -66,8 +66,6 @@ webpki-roots = { workspace = true }
 x509-parser = { workspace = true }
 yaque = { workspace = true }
 
-[dev-dependencies]
-
 [lib]
 name = "nockapp"
 path = "src/lib.rs"

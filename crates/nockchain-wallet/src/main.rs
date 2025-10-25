@@ -26,20 +26,20 @@ use nockapp::{
     NockApp, NockAppError, ToBytesExt,
 };
 use nockapp_grpc::pb::common::v1::Base58Hash as PbBase58Hash;
-use nockapp_grpc::pb::public::v1::transaction_accepted_response;
+use nockapp_grpc::pb::public::v2::transaction_accepted_response;
 use nockapp_grpc::{private_nockapp, public_nockchain};
-use nockchain_types::tx_engine::note::{
-    BalanceUpdate, Hash as DomainHash, TimelockIntent, TimelockRangeAbsolute, TimelockRangeRelative,
-};
-use nockchain_types::SchnorrPubkey;
+use nockchain_types::common::{Hash, SchnorrPubkey, TimelockRangeAbsolute, TimelockRangeRelative};
+use nockchain_types::{v0, v1};
 use nockvm::jets::cold::Nounable;
-use nockvm::noun::{Atom, Cell, FullDebugCell, IndirectAtom, Noun, D, NO, SIG, T, YES};
+use nockvm::noun::{Atom, Cell, IndirectAtom, Noun, D, NO, SIG, T, YES};
 use noun_serde::prelude::*;
 use noun_serde::NounDecodeError;
 use termimad::MadSkin;
 use tokio::fs as tokio_fs;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use zkvm_jetpack::hot::produce_prover_hot_state;
+
+use crate::public_nockchain::v2::client::BalanceRequest;
 
 #[tokio::main]
 async fn main() -> Result<(), NockAppError> {
@@ -75,11 +75,9 @@ async fn main() -> Result<(), NockAppError> {
         // Commands that DON'T need syncing either because they don't sync
         // or they don't interact with the chain
         Commands::Keygen
-        | Commands::GenerateMiningPkh
         | Commands::DeriveChild { .. }
         | Commands::ImportKeys { .. }
         | Commands::ExportKeys
-        | Commands::SignTx { .. }
         | Commands::SignMessage { .. }
         | Commands::VerifyMessage { .. }
         | Commands::SignHash { .. }
@@ -90,9 +88,8 @@ async fn main() -> Result<(), NockAppError> {
         | Commands::SetActiveMasterAddress { .. }
         | Commands::ListMasterAddresses
         | Commands::ShowSeedphrase
-        | Commands::ShowMasterPubkey
-        | Commands::ShowMasterPrivkey
-        | Commands::CreateTx { .. }
+        | Commands::ShowMasterZPub
+        | Commands::ShowMasterZPrv
         | Commands::ShowTx { .. }
         | Commands::TxAccepted { .. } => false,
 
@@ -107,13 +104,6 @@ async fn main() -> Result<(), NockAppError> {
             getrandom::fill(&mut entropy).map_err(|e| CrownError::Unknown(e.to_string()))?;
             getrandom::fill(&mut salt).map_err(|e| CrownError::Unknown(e.to_string()))?;
             Wallet::keygen(&entropy, &salt)
-        }
-        Commands::GenerateMiningPkh => {
-            let mut entropy = [0u8; 32];
-            let mut salt = [0u8; 16];
-            getrandom::fill(&mut entropy).map_err(|e| CrownError::Unknown(e.to_string()))?;
-            getrandom::fill(&mut salt).map_err(|e| CrownError::Unknown(e.to_string()))?;
-            Wallet::generate_mining_pkh(&entropy, &salt)
         }
         Commands::DeriveChild {
             index,
@@ -247,50 +237,32 @@ async fn main() -> Result<(), NockAppError> {
         }
         Commands::ExportKeys => Wallet::export_keys(),
         Commands::ListNotes => Wallet::list_notes(),
-        Commands::ListNotesByPubkey { pubkey } => {
-            if let Some(pk) = pubkey {
-                Wallet::list_notes_by_pubkey(pk)
+        Commands::ListNotesByAddress { address } => {
+            if let Some(pk) = address {
+                Wallet::list_notes_by_address(pk)
             } else {
-                return Err(CrownError::Unknown("Public key is required".into()).into());
+                return Err(CrownError::Unknown("Address is required".into()).into());
             }
         }
-        Commands::ListNotesByPubkeyCsv { pubkey } => Wallet::list_notes_by_pubkey_csv(pubkey),
+        Commands::ListNotesByAddressCsv { address } => Wallet::list_notes_by_address_csv(address),
         Commands::CreateTx {
             names,
-            recipients,
-            gifts,
+            recipient,
             fee,
+            refund_pkh,
             index,
             hardened,
-            timelock_intent,
-        } => {
-            let parsed_timelock_intent = match timelock_intent {
-                Some(intent) => {
-                    let absolute_range = intent.absolute_range();
-                    let relative_range = intent.relative_range();
-
-                    let has_upper_bound = intent.has_upper_bound();
-
-                    if has_upper_bound {
-                        confirm_upper_bound_warning()?;
-                    }
-                    Wallet::timelock_intent_from_ranges(absolute_range, relative_range)
-                }
-                None => None,
-            };
-
-            Wallet::create_tx(
-                names.clone(),
-                recipients.clone(),
-                gifts.clone(),
-                *fee,
-                *index,
-                *hardened,
-                parsed_timelock_intent,
-            )
-        }
+        } => Wallet::create_tx(
+            names.clone(),
+            recipient.clone(),
+            *fee,
+            refund_pkh.clone(),
+            *index,
+            *hardened,
+        ),
         Commands::SendTx { transaction } => Wallet::send_tx(transaction),
         Commands::ShowTx { transaction } => Wallet::show_tx(transaction),
+        Commands::ShowBalance => Wallet::show_balance(),
         Commands::ExportMasterPubkey => Wallet::export_master_pubkey(),
         Commands::ImportMasterPubkey { key_path } => Wallet::import_master_pubkey(key_path),
         Commands::ListActiveAddresses => Wallet::list_active_addresses(),
@@ -299,8 +271,8 @@ async fn main() -> Result<(), NockAppError> {
         }
         Commands::ListMasterAddresses => Wallet::list_master_addresses(),
         Commands::ShowSeedphrase => Wallet::show_seed_phrase(),
-        Commands::ShowMasterPubkey => Wallet::show_master_pubkey(),
-        Commands::ShowMasterPrivkey => Wallet::show_master_privkey(),
+        Commands::ShowMasterZPub => Wallet::show_master_pubkey(),
+        Commands::ShowMasterZPrv => Wallet::show_master_privkey(),
         Commands::TxAccepted { .. } => {
             unreachable!("transaction-accepted handled earlier")
         }
@@ -317,16 +289,37 @@ async fn main() -> Result<(), NockAppError> {
         let path = T(&mut pubkey_peek_slab, &[tracked_tag, watch_only, SIG]);
         pubkey_peek_slab.set_root(path);
         let pubkey_slab = wallet.app.peek_handle(pubkey_peek_slab).await?;
-        if let Some(slab) = pubkey_slab {
-            let pubkeys = slab
+
+        let first_name_slab = if pubkey_slab.is_some() {
+            let mut first_name_peek_slab = NounSlab::new();
+            let tracked_tag = make_tas(&mut first_name_peek_slab, "tracked-names").as_noun();
+            let watch_only = cli.include_watch_only.to_noun(&mut first_name_peek_slab);
+            let path = T(&mut first_name_peek_slab, &[tracked_tag, watch_only, SIG]);
+            first_name_peek_slab.set_root(path);
+            wallet.app.peek_handle(first_name_peek_slab).await?
+        } else {
+            None
+        };
+
+        if let Some(pubkey_slab) = pubkey_slab {
+            let pubkeys = pubkey_slab
                 .to_vec()
                 .iter()
                 .map(|key| String::from_noun(unsafe { key.root() }))
                 .collect::<Result<Vec<String>, NounDecodeError>>()?;
 
+            let first_names: Vec<String> = if let Some(name_slab) = first_name_slab {
+                let names_noun = unsafe { name_slab.root() };
+                <Vec<String>>::from_noun(names_noun)?
+            } else {
+                Vec::new()
+            };
+
             let connection_target = cli.connection.target();
-            let pokes =
-                connection::sync_wallet_balance(&mut wallet, &connection_target, pubkeys).await?;
+            let pokes = connection::sync_wallet_balance(
+                &mut wallet, &connection_target, pubkeys, first_names,
+            )
+            .await?;
 
             for poke in pokes {
                 let _ = wallet.app.poke(SystemWire.to_wire(), poke).await.unwrap();
@@ -356,6 +349,7 @@ async fn main() -> Result<(), NockAppError> {
     }
 }
 
+#[allow(dead_code)]
 fn validate_label(s: &str) -> Result<String, String> {
     if s.chars()
         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
@@ -433,26 +427,6 @@ impl Wallet {
         let sal: Byts = Byts::new(sal.to_vec());
         let sal_noun = sal.into_noun(&mut slab);
         Self::wallet("keygen", &[ent_noun, sal_noun], Operation::Poke, &mut slab)
-    }
-
-    /// Generates a new key pair, specifically for mining pkh.
-    ///
-    /// # Arguments
-    ///
-    /// * `entropy` - The entropy to use for key generation.
-    /// * `sal` - The salt to use for key generation.
-    fn generate_mining_pkh(entropy: &[u8; 32], sal: &[u8; 16]) -> CommandNoun<NounSlab> {
-        let mut slab = NounSlab::new();
-        let ent: Byts = Byts::new(entropy.to_vec());
-        let ent_noun = ent.into_noun(&mut slab);
-        let sal: Byts = Byts::new(sal.to_vec());
-        let sal_noun = sal.into_noun(&mut slab);
-        Self::wallet(
-            "generate-mining-pkh",
-            &[ent_noun, sal_noun],
-            Operation::Poke,
-            &mut slab,
-        )
     }
 
     ///// Updates the keys in the wallet.
@@ -807,154 +781,125 @@ impl Wallet {
         Self::wallet("export-keys", &[], Operation::Poke, &mut slab)
     }
 
+    #[allow(dead_code)]
     fn timelock_intent_from_ranges(
         absolute: Option<TimelockRangeAbsolute>,
         relative: Option<TimelockRangeRelative>,
-    ) -> Option<TimelockIntent> {
+    ) -> Option<v0::TimelockIntent> {
         if absolute.is_none() && relative.is_none() {
             None
         } else {
-            Some(TimelockIntent {
+            Some(v0::TimelockIntent {
                 absolute: absolute.unwrap_or_else(TimelockRangeAbsolute::none),
                 relative: relative.unwrap_or_else(TimelockRangeRelative::none),
             })
         }
     }
 
-    /// Creates a transaction by building transaction inputs from notes.
-    ///
-    /// Takes a list of note names, recipient addresses, and gift amounts to create
-    /// transaction inputs. The fee is subtracted from the first note that has sufficient
-    /// assets to cover both the fee and its corresponding gift amount.
-    ///
-    /// # Arguments
-    ///
-    /// * `names` - Comma-separated list of note name pairs in format "[first last]"
-    ///             Example: "[first1 last1],[first2 last2]"
-    ///
-    /// * `recipients` - Comma-separated list of recipient $locks
-    ///                 Example: "[1 pk1],[2 pk2,pk3,pk4]"
-    ///                 A simple comma-separated list is also supported: "pk1,pk2,pk3",
-    ///                 where it is presumed that all recipients are single-signature,
-    ///                 that is to say, it is the same as "[1 pk1],[1 pk2],[1 pk3]"
-    ///
-    /// * `gifts` - Comma-separated list of amounts to send to each recipient
-    ///             Example: "100,200"
-    ///
-    /// * `fee` - Transaction fee to be subtracted from one of the input notes
-    ///
-    /// # Returns
-    ///
-    /// Returns a `CommandNoun` containing:
-    /// - A `NounSlab` with the encoded create-tx command
-    /// - The `Operation` type (Poke)
-    ///
-    /// # Errors
-    ///
-    /// Returns `NockAppError` if:
-    /// - Name pairs are not properly formatted as "[first last]"
-    /// - Number of names, recipients, and gifts don't match
-    /// - Any input parsing fails
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// let names = "[first1 last1],[first2 last2]";
-    /// let recipients = "[1 pk1],[2 pk2,pk3,pk4]";
-    /// let gifts = "100,200";
-    /// let fee = 10;
-    /// wallet.create_tx(
-    ///     names.to_string(),
-    ///     recipients.to_string(),
-    ///     gifts.to_string(),
-    ///     fee,
-    ///     None,
-    ///     false,
-    ///     None,
-    /// )?;
-    /// ```
+    fn parse_note_names(raw: &str) -> Result<Vec<(String, String)>, NockAppError> {
+        let mut names = Vec::new();
+
+        for piece in raw.split(',') {
+            let trimmed = piece.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            if !trimmed.starts_with('[') || !trimmed.ends_with(']') {
+                return Err(CrownError::Unknown(format!(
+                    "Invalid note name '{}', expected [first last]",
+                    trimmed
+                ))
+                .into());
+            }
+
+            let inner = &trimmed[1..trimmed.len() - 1];
+            let parts: Vec<&str> = inner.split_whitespace().collect();
+            if parts.len() != 2 {
+                return Err(CrownError::Unknown(format!(
+                    "Invalid note name '{}', expected exactly two components",
+                    trimmed
+                ))
+                .into());
+            }
+
+            let first = parts[0].to_string();
+            let last = parts[1].to_string();
+            names.push((first, last));
+        }
+
+        if names.is_empty() {
+            return Err(
+                CrownError::Unknown("At least one note name must be provided".to_string()).into(),
+            );
+        }
+
+        Ok(names)
+    }
+
+    fn parse_single_output(raw: &str) -> Result<(String, u64), NockAppError> {
+        let specs: Vec<&str> = raw
+            .split(',')
+            .map(str::trim)
+            .filter(|spec| !spec.is_empty())
+            .collect();
+
+        if specs.is_empty() {
+            return Err(
+                CrownError::Unknown("At least one output must be provided".to_string()).into(),
+            );
+        }
+
+        if specs.len() > 1 {
+            return Err(CrownError::Unknown(
+                "Multiple outputs are not supported yet. Provide a single <pkh>:<amount> pair."
+                    .to_string(),
+            )
+            .into());
+        }
+
+        let spec = specs[0];
+        let (pkh, amount_str) = spec.split_once(':').ok_or_else(|| {
+            CrownError::Unknown(format!(
+                "Invalid output spec '{}', expected <pkh>:<amount>",
+                spec
+            ))
+        })?;
+
+        let pkh_trimmed = pkh.trim();
+        if pkh_trimmed.is_empty() {
+            return Err(
+                CrownError::Unknown("Output pubkey hash cannot be empty".to_string()).into(),
+            );
+        }
+
+        let amount = amount_str.trim().parse::<u64>().map_err(|err| {
+            CrownError::Unknown(format!(
+                "Invalid amount '{}' in output spec '{}': {}",
+                amount_str.trim(),
+                spec,
+                err
+            ))
+        })?;
+
+        Ok((pkh_trimmed.to_string(), amount))
+    }
+
+    /// Creates a transaction. Use `--refund-pkh` when spending legacy v0 notes so the kernel
+    /// knows where to return change. When spending v1 notes the refund automatically
+    /// defaults back to the note owner, so `--refund-pkh` can be omitted.
     fn create_tx(
         names: String,
         recipients: String,
-        gifts: String,
         fee: u64,
+        refund_pkh: Option<String>,
         index: Option<u64>,
         hardened: bool,
-        timelock_intent: Option<TimelockIntent>,
     ) -> CommandNoun<NounSlab> {
         let mut slab = NounSlab::new();
 
-        // Split the comma-separated inputs
-        // Each name should be in format "[first last]"
-        let names_vec: Vec<(String, String)> = names
-            .split(',')
-            .filter_map(|pair| {
-                let pair = pair.trim();
-                if pair.starts_with('[') && pair.ends_with(']') {
-                    let inner = &pair[1..pair.len() - 1];
-                    let parts: Vec<&str> = inner.split_whitespace().collect();
-                    if parts.len() == 2 {
-                        Some((parts[0].to_string(), parts[1].to_string()))
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        // Convert recipients to list of [number pubkeys] pairs
-        let recipients_vec: Vec<(u64, Vec<String>)> = if recipients.contains('[') {
-            // Parse complex format: "[1 pk1],[2 pk2,pk3,pk4]"
-            recipients
-                .split(',')
-                .filter_map(|pair| {
-                    let pair = pair.trim();
-                    if pair.starts_with('[') && pair.ends_with(']') {
-                        let inner = &pair[1..pair.len() - 1];
-                        let mut parts = inner.splitn(2, ' ');
-
-                        // Parse the number
-                        let number = parts.next()?.parse().ok()?;
-
-                        // Parse the pubkeys
-                        let pubkeys = parts
-                            .next()?
-                            .split(',')
-                            .map(|s| s.trim().to_string())
-                            .collect();
-
-                        Some((number, pubkeys))
-                    } else {
-                        None
-                    }
-                })
-                .collect()
-        } else {
-            // Parse simple format: "pk1,pk2,pk3"
-            recipients
-                .split(',')
-                .map(|addr| (1, vec![addr.trim().to_string()]))
-                .collect()
-        };
-
-        let gifts_vec: Vec<u64> = gifts.split(',').filter_map(|s| s.parse().ok()).collect();
-
-        // Verify lengths based on single vs multiple mode
-        if recipients_vec.len() == 1 && gifts_vec.len() == 1 {
-            // Single mode: can spend from multiple notes to single recipient
-            // No additional validation needed - any number of names is allowed
-        } else {
-            // Multiple mode: all lengths must match
-            if names_vec.len() != recipients_vec.len() || names_vec.len() != gifts_vec.len() {
-                return Err(CrownError::Unknown(
-                    "Multiple recipient mode requires names, recipients, and gifts to have the same length"
-                        .to_string(),
-                )
-                .into());
-            }
-        }
+        let names_vec = Self::parse_note_names(&names)?;
+        let (pkh, amount) = Self::parse_single_output(&recipients)?;
 
         // Convert names to list of pairs
         let names_noun = names_vec
@@ -980,68 +925,32 @@ impl Wallet {
             None => D(0),
         };
 
-        // Create the order noun - use single or multiple mode based on input
-        let order_noun = if recipients_vec.len() == 1 && gifts_vec.len() == 1 {
-            // Single mode: [%single recipient_data gift_amount]
-            let single_tag = make_tas(&mut slab, "single").as_noun();
-            let single_recipient = recipients_vec.into_iter().next().unwrap();
-            let single_gift = gifts_vec.into_iter().next().unwrap();
+        let recipient_pkh = Hash::from_base58(&pkh)
+            .map_err(|err| {
+                NockAppError::from(CrownError::Unknown(format!(
+                    "Invalid output pubkey hash '{}': {}",
+                    pkh, err
+                )))
+            })?
+            .to_noun(&mut slab);
+        let order_noun = T(&mut slab, &[recipient_pkh, D(amount)]);
 
-            // Create the recipient data [number pubkeys_list] for single case
-            let pubkeys_noun = single_recipient
-                .1
-                .into_iter()
-                .rev()
-                .fold(D(0), |acc, pubkey| {
-                    let pubkey_noun = make_tas(&mut slab, &pubkey).as_noun();
-                    Cell::new(&mut slab, pubkey_noun, acc).as_noun()
-                });
-            let recipient_data = T(&mut slab, &[D(single_recipient.0), pubkeys_noun]);
-
-            T(&mut slab, &[single_tag, recipient_data, D(single_gift)])
+        let refund_noun = if let Some(refund) = refund_pkh {
+            let refund_hash = Hash::from_base58(&refund).map_err(|err| {
+                NockAppError::from(CrownError::Unknown(format!(
+                    "Invalid refund pubkey hash '{}': {}",
+                    refund, err
+                )))
+            })?;
+            let refund_atom = refund_hash.to_noun(&mut slab);
+            T(&mut slab, &[SIG, refund_atom])
         } else {
-            // Multiple mode: [%multiple recipients_list gifts_list]
-            let multiple_tag = make_tas(&mut slab, "multiple").as_noun();
-
-            // Convert recipients to list
-            let recipients_noun =
-                recipients_vec
-                    .into_iter()
-                    .rev()
-                    .fold(D(0), |acc, (num, pubkeys)| {
-                        // Create the inner list of pubkeys
-                        let pubkeys_noun = pubkeys.into_iter().rev().fold(D(0), |acc, pubkey| {
-                            let pubkey_noun = make_tas(&mut slab, &pubkey).as_noun();
-                            Cell::new(&mut slab, pubkey_noun, acc).as_noun()
-                        });
-
-                        // Create the pair of [number pubkeys_list]
-                        let pair = T(&mut slab, &[D(num), pubkeys_noun]);
-                        Cell::new(&mut slab, pair, acc).as_noun()
-                    });
-
-            // Convert gifts to list
-            let gifts_noun = gifts_vec.into_iter().rev().fold(D(0), |acc, amount| {
-                Cell::new(&mut slab, D(amount), acc).as_noun()
-            });
-
-            T(&mut slab, &[multiple_tag, recipients_noun, gifts_noun])
+            SIG
         };
-
-        // Convert timelock intent to noun. `~` encodes the absence of intent.
-        let timelock_intent_noun = timelock_intent.to_noun(&mut slab);
-
-        if timelock_intent.is_some() {
-            tracing::debug!(
-                "Converted timelock intent {:?} to noun: {:?}",
-                timelock_intent,
-                FullDebugCell(&timelock_intent_noun.as_cell()?)
-            );
-        }
 
         Self::wallet(
             "create-tx",
-            &[names_noun, order_noun, fee_noun, sign_key_noun, timelock_intent_noun],
+            &[names_noun, order_noun, fee_noun, sign_key_noun, refund_noun],
             Operation::Poke,
             &mut slab,
         )
@@ -1050,26 +959,54 @@ impl Wallet {
     async fn update_balance_grpc_public(
         client: &mut public_nockchain::PublicNockchainGrpcClient,
         pubkeys: Vec<String>,
+        first_names: Vec<String>,
     ) -> Result<Vec<NounSlab>, NockAppError> {
         let mut results = Vec::new();
 
-        for (_index, key) in pubkeys.iter().enumerate() {
-            let mut slab = NounSlab::new(); // Define slab - adjust as needed
-            let response = client
-                .wallet_get_balance(key.to_owned())
-                .await
-                .map_err(|e| {
-                    NockAppError::OtherError(format!("Failed to request current balance: {}", e))
+        if !first_names.is_empty() {
+            for first_name in first_names {
+                let mut slab = NounSlab::new(); // Define slab - adjust as needed
+                let response = client
+                    .wallet_get_balance(&BalanceRequest::FirstName(first_name))
+                    .await
+                    .map_err(|e| {
+                        NockAppError::OtherError(format!(
+                            "Failed to request current balance: {}",
+                            e
+                        ))
+                    })?;
+                let balance_update = v1::BalanceUpdate::try_from(response).map_err(|e| {
+                    NockAppError::OtherError(format!("Failed to parse balance update: {}", e))
                 })?;
-            let balance = BalanceUpdate::try_from(response).map_err(|e| {
-                NockAppError::OtherError(format!("Failed to parse balance update: {}", e))
-            })?;
-            let wrapped_balance = Some(Some(balance));
-            let balance_noun = wrapped_balance.to_noun(&mut slab);
-            let head = make_tas(&mut slab, "update-balance-grpc").as_noun();
-            let full = T(&mut slab, &[head, balance_noun]);
-            slab.set_root(full);
-            results.push(slab);
+                let wrapped_balance = Some(Some(balance_update));
+                let balance_noun = wrapped_balance.to_noun(&mut slab);
+                let head = make_tas(&mut slab, "update-balance-grpc").as_noun();
+                let full = T(&mut slab, &[head, balance_noun]);
+                slab.set_root(full);
+                results.push(slab);
+            }
+        } else {
+            for (_index, key) in pubkeys.iter().enumerate() {
+                let mut slab = NounSlab::new(); // Define slab - adjust as needed
+                let response = client
+                    .wallet_get_balance(&BalanceRequest::Address(key.to_owned()))
+                    .await
+                    .map_err(|e| {
+                        NockAppError::OtherError(format!(
+                            "Failed to request current balance: {}",
+                            e
+                        ))
+                    })?;
+                let balance_update = v1::BalanceUpdate::try_from(response).map_err(|e| {
+                    NockAppError::OtherError(format!("Failed to parse balance update: {}", e))
+                })?;
+                let wrapped_balance = Some(Some(balance_update));
+                let balance_noun = wrapped_balance.to_noun(&mut slab);
+                let head = make_tas(&mut slab, "update-balance-grpc").as_noun();
+                let full = T(&mut slab, &[head, balance_noun]);
+                slab.set_root(full);
+                results.push(slab);
+            }
         }
 
         Ok(results)
@@ -1077,26 +1014,68 @@ impl Wallet {
 
     async fn update_balance_grpc_private(
         client: &mut private_nockapp::PrivateNockAppGrpcClient,
-        pubkeys: Vec<String>,
+        mut pubkeys: Vec<String>,
+        mut first_names: Vec<String>,
     ) -> Result<Vec<NounSlab>, NockAppError> {
+        first_names.sort();
+        first_names.dedup();
+        pubkeys.sort();
+        pubkeys.dedup();
+
+        let mut request_index: i32 = 0;
         let mut results = Vec::new();
 
-        for (index, key) in pubkeys.iter().enumerate() {
-            let mut slab = NounSlab::new(); // Define slab - adjust as needed
-            let peek_path = vec!["balance-by-pubkey".to_string(), key.clone()];
-            let mut path_slab = NounSlab::<NockJammer>::new();
-            let path_noun = peek_path.to_noun(&mut path_slab);
-            path_slab.set_root(path_noun);
-            let path_bytes = path_slab.jam().to_vec();
+        if first_names.is_empty() {
+            warn!("No tracked first names available; skipping balance-by-first-name peeks");
+        } else {
+            for first_name in first_names {
+                let mut slab = NounSlab::new();
 
-            let response = client.peek(index as i32, path_bytes).await.map_err(|e| {
-                NockAppError::OtherError(format!("Failed to peek current balance: {}", e))
-            })?;
-            let balance = slab.cue_into(response.as_bytes()?)?;
-            let head = make_tas(&mut slab, "update-balance-grpc").as_noun();
-            let full = T(&mut slab, &[head, balance]);
-            slab.set_root(full);
-            results.push(slab);
+                let mut path_slab = NounSlab::<NockJammer>::new();
+                let path_noun = vec!["balance-by-first-name".to_string(), first_name.clone()]
+                    .to_noun(&mut path_slab);
+                path_slab.set_root(path_noun);
+                let path_bytes = path_slab.jam().to_vec();
+
+                let response = client.peek(request_index, path_bytes).await.map_err(|e| {
+                    NockAppError::OtherError(format!(
+                        "Failed to peek balance for first name {first_name}: {e}"
+                    ))
+                })?;
+                request_index = request_index.wrapping_add(1);
+
+                let balance = slab.cue_into(response.as_bytes()?)?;
+                let head = make_tas(&mut slab, "update-balance-grpc").as_noun();
+                let full = T(&mut slab, &[head, balance]);
+                slab.set_root(full);
+                results.push(slab);
+            }
+        }
+
+        if pubkeys.is_empty() {
+            warn!("No tracked pubkeys available; skipping balance-by-pubkey peeks");
+        } else {
+            for key in pubkeys {
+                let mut slab = NounSlab::new();
+                let mut path_slab = NounSlab::<NockJammer>::new();
+                let path_noun =
+                    vec!["balance-by-pubkey".to_string(), key.clone()].to_noun(&mut path_slab);
+                path_slab.set_root(path_noun);
+                let path_bytes = path_slab.jam().to_vec();
+
+                let response = client.peek(request_index, path_bytes).await.map_err(|e| {
+                    NockAppError::OtherError(format!(
+                        "Failed to peek balance for pubkey {key}: {e}"
+                    ))
+                })?;
+                request_index = request_index.wrapping_add(1);
+
+                let balance = slab.cue_into(response.as_bytes()?)?;
+                let head = make_tas(&mut slab, "update-balance-grpc").as_noun();
+                let full = T(&mut slab, &[head, balance]);
+                slab.set_root(full);
+                results.push(slab);
+            }
         }
 
         Ok(results)
@@ -1205,11 +1184,11 @@ impl Wallet {
     }
 
     /// Lists notes by public key
-    fn list_notes_by_pubkey(pubkey: &str) -> CommandNoun<NounSlab> {
+    fn list_notes_by_address(pubkey: &str) -> CommandNoun<NounSlab> {
         let mut slab = NounSlab::new();
         let pubkey_noun = make_tas(&mut slab, pubkey).as_noun();
         Self::wallet(
-            "list-notes-by-pubkey",
+            "list-notes-by-address",
             &[pubkey_noun],
             Operation::Poke,
             &mut slab,
@@ -1217,15 +1196,25 @@ impl Wallet {
     }
 
     /// Lists notes by public key in CSV format
-    fn list_notes_by_pubkey_csv(pubkey: &str) -> CommandNoun<NounSlab> {
+    fn list_notes_by_address_csv(pubkey: &str) -> CommandNoun<NounSlab> {
         let mut slab = NounSlab::new();
         let pubkey_noun = make_tas(&mut slab, pubkey).as_noun();
         Self::wallet(
-            "list-notes-by-pubkey-csv",
+            "list-notes-by-address-csv",
             &[pubkey_noun],
             Operation::Poke,
             &mut slab,
         )
+    }
+
+    /// Shows the aggregate wallet balance summary.
+    fn show_balance() -> CommandNoun<NounSlab> {
+        let mut slab = NounSlab::new();
+
+        let balance_tag = make_tas(&mut slab, "balance").as_noun();
+        let path_noun = Cell::new(&mut slab, balance_tag, D(0)).as_noun();
+
+        Self::wallet("show", &[path_noun], Operation::Poke, &mut slab)
     }
 
     /// Shows the seed phrase for the current master key.
@@ -1259,6 +1248,7 @@ pub async fn wallet_data_dir() -> Result<PathBuf, NockAppError> {
     Ok(wallet_data_dir)
 }
 
+#[allow(dead_code)]
 fn confirm_upper_bound_warning() -> Result<(), NockAppError> {
     println!(
         "Warning: specifying an upper timelock bound will make the output unspendable after that height. Only use this feature if you know what you're doing."
@@ -1302,7 +1292,7 @@ async fn run_transaction_accepted(
             ))
         })?;
 
-    DomainHash::from_base58(tx_id).map_err(|_| {
+    Hash::from_base58(tx_id).map_err(|_| {
         NockAppError::OtherError(format!(
             "Invalid transaction ID (expected base58-encoded hash): {}",
             tx_id
@@ -1375,7 +1365,8 @@ mod tests {
     use nockapp::wire::SystemWire;
     use nockapp::{exit_driver, AtomExt, Bytes};
     use nockchain_math::belt::Belt;
-    use nockchain_types::{BlockHeight, BlockHeightDelta};
+    use nockchain_types::tx_engine::common::{BlockHeight, BlockHeightDelta};
+    use nockchain_types::tx_engine::v0;
     use tokio::sync::mpsc;
 
     use super::*;
@@ -1440,7 +1431,7 @@ mod tests {
 
         assert_eq!(
             explicit_none,
-            TimelockIntent {
+            v0::TimelockIntent {
                 absolute: TimelockRangeAbsolute::none(),
                 relative: TimelockRangeRelative::none(),
             }
@@ -1454,6 +1445,55 @@ mod tests {
             .expect("absolute range should produce intent");
         assert_eq!(intent.absolute, absolute);
         assert_eq!(intent.relative, TimelockRangeRelative::none());
+    }
+
+    #[test]
+    fn parse_note_names_accepts_valid_pairs() {
+        let parsed = Wallet::parse_note_names("[foo bar],[baz qux]").expect("valid names");
+        assert_eq!(
+            parsed,
+            vec![("foo".to_string(), "bar".to_string()), ("baz".to_string(), "qux".to_string())]
+        );
+    }
+
+    #[test]
+    fn parse_note_names_rejects_invalid_format() {
+        let err = Wallet::parse_note_names("foo bar").expect_err("expected failure");
+        assert!(
+            err.to_string().contains("Invalid note name"),
+            "unexpected error message: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_single_output_accepts_valid_spec() {
+        let (pkh, amount) = Wallet::parse_single_output(
+            "9phXGACnW4238oqgvn2gpwaUjG3RAqcxq2Ash2vaKp8KjzSd3MQ56Jt:65536",
+        )
+        .expect("valid");
+        assert_eq!(
+            pkh,
+            "9phXGACnW4238oqgvn2gpwaUjG3RAqcxq2Ash2vaKp8KjzSd3MQ56Jt"
+        );
+        assert_eq!(amount, 65_536);
+    }
+
+    #[test]
+    fn parse_single_output_rejects_multiple_outputs() {
+        let err = Wallet::parse_single_output("a:1,b:2").expect_err("expected failure");
+        assert!(
+            err.to_string().contains("Multiple outputs"),
+            "unexpected error message: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_single_output_rejects_bad_amount() {
+        let err = Wallet::parse_single_output("pkh:not-a-number").expect_err("expected failure");
+        assert!(
+            err.to_string().contains("Invalid amount"),
+            "unexpected error message: {err}"
+        );
     }
 
     #[tokio::test]
@@ -1693,27 +1733,24 @@ mod tests {
         let mut wallet = Wallet::new(nockapp);
 
         let names = "[first1 last1],[first2 last2]".to_string();
-        let recipients = "[1 pk1],[2 pk2,pk3,pk4]".to_string();
-        let gifts = "1,2".to_string();
+        let recipients = "pk1:1".to_string();
         let fee = 1;
 
         let (noun, op) = Wallet::create_tx(
             names.clone(),
             recipients.clone(),
-            gifts.clone(),
             fee,
+            None::<String>,
             None,
             false,
-            None,
         )?;
         let wire = WalletWire::Command(Commands::CreateTx {
             names: names.clone(),
-            recipients: recipients.clone(),
-            gifts: gifts.clone(),
+            recipient: recipients.clone(),
             fee: fee.clone(),
+            refund_pkh: None,
             index: None,
             hardened: false,
-            timelock_intent: None,
         })
         .to_wire();
         let spend_result = wallet.app.poke(wire, noun.clone()).await?;
@@ -1734,9 +1771,7 @@ mod tests {
 
         // these should be valid names of notes in the wallet balance
         let names = "[Amt4GcpYievY4PXHfffiWriJ1sYfTXFkyQsGzbzwMVzewECWDV3Ad8Q BJnaDB3koU7ruYVdWCQqkFYQ9e3GXhFsDYjJ1vSmKFdxzf6Y87DzP4n]".to_string();
-        let recipients = "3HKKp7xZgCw1mhzk4iw735S2ZTavCLHc8YDGRP6G9sSTrRGsaPBu1AqJ8cBDiw2LwhRFnQG7S3N9N9okc28uBda6oSAUCBfMSg5uC9cefhrFrvXVGomoGcRvcFZTWuJzm3ch".to_string();
-
-        let gifts = "0".to_string();
+        let recipients = "3HKKp7xZgCw1mhzk4iw735S2ZTavCLHc8YDGRP6G9sSTrRGsaPBu1AqJ8cBDiw2LwhRFnQG7S3N9N9okc28uBda6oSAUCBfMSg5uC9cefhrFrvXVGomoGcRvcFZTWuJzm3ch:100".to_string();
         let fee = 0;
 
         // generate keys
@@ -1746,11 +1781,10 @@ mod tests {
         let (spend_noun, spend_op) = Wallet::create_tx(
             names.clone(),
             recipients.clone(),
-            gifts.clone(),
             fee,
+            None::<String>,
             None,
             false,
-            None,
         )?;
 
         let wire1 = WalletWire::Command(Commands::ImportKeys {
@@ -1766,12 +1800,11 @@ mod tests {
 
         let wire2 = WalletWire::Command(Commands::CreateTx {
             names: names.clone(),
-            recipients: recipients.clone(),
-            gifts: gifts.clone(),
+            recipient: recipients.clone(),
             fee: fee.clone(),
+            refund_pkh: None,
             index: None,
             hardened: false,
-            timelock_intent: None,
         })
         .to_wire();
         let spend_result = wallet.app.poke(wire2, spend_noun.clone()).await?;
@@ -1886,12 +1919,12 @@ mod tests {
     #[test]
     fn domain_hash_from_base58_accepts_valid_id() {
         let tx_id = "3giXkwW4zbFhoyJu27RbP6VNiYgR6yaTfk2AYnEHvxtVaGbmcVD6jb9";
-        DomainHash::from_base58(tx_id).expect("expected valid base58 hash");
+        Hash::from_base58(tx_id).expect("expected valid base58 hash");
     }
 
     #[test]
     fn domain_hash_from_base58_rejects_invalid_id() {
         let invalid_tx_id = "not-a-valid-hash";
-        assert!(DomainHash::from_base58(invalid_tx_id).is_err());
+        assert!(Hash::from_base58(invalid_tx_id).is_err());
     }
 }

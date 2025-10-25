@@ -1,15 +1,15 @@
-use nockchain_types::tx_engine::note as domain;
+use nockchain_types::tx_engine::v0;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct PageKey {
     pub address: String,
     pub height: u64,
-    pub block_id: domain::Hash,
+    pub block_id: v0::Hash,
 }
 
 impl PageKey {
-    pub fn new(address: String, height: u64, block_id: domain::Hash) -> Self {
+    pub fn new(address: String, height: u64, block_id: v0::Hash) -> Self {
         PageKey {
             address,
             height,
@@ -21,16 +21,16 @@ impl PageKey {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PageCursor {
     pub key: PageKey,
-    pub last_first: domain::Hash,
-    pub last_last: domain::Hash,
+    pub last_first: v0::Hash,
+    pub last_last: v0::Hash,
 }
 
 impl PageCursor {
     pub fn new(
         address: String,
-        height: &domain::BlockHeight,
-        block_id: &domain::Hash,
-        name: &domain::Name,
+        height: &v0::BlockHeight,
+        block_id: &v0::Hash,
+        name: &v0::Name,
     ) -> Self {
         PageCursor {
             key: PageKey {
@@ -65,11 +65,11 @@ pub fn decode_cursor(s: &str) -> Option<PageCursor> {
     Some(cur)
 }
 
-pub fn name_key(name: &domain::Name) -> ([u64; 5], [u64; 5]) {
+pub fn name_key(name: &v0::Name) -> ([u64; 5], [u64; 5]) {
     (belts_to_array(&name.first.0), belts_to_array(&name.last.0))
 }
 
-pub fn cmp_name(a: &domain::Name, b: &domain::Name) -> std::cmp::Ordering {
+pub fn cmp_name(a: &v0::Name, b: &v0::Name) -> std::cmp::Ordering {
     let (af, al) = name_key(a);
     let (bf, bl) = name_key(b);
     af.cmp(&bf).then(al.cmp(&bl))
@@ -88,10 +88,10 @@ mod tests {
             key: PageKey {
                 address: A_GEN.into_base58().unwrap(),
                 height: 42,
-                block_id: domain::Hash([Belt(1), Belt(2), Belt(3), Belt(4), Belt(5)]),
+                block_id: v0::Hash([Belt(1), Belt(2), Belt(3), Belt(4), Belt(5)]),
             },
-            last_first: domain::Hash([Belt(10), Belt(20), Belt(30), Belt(40), Belt(50)]),
-            last_last: domain::Hash([Belt(11), Belt(22), Belt(33), Belt(44), Belt(55)]),
+            last_first: v0::Hash([Belt(10), Belt(20), Belt(30), Belt(40), Belt(50)]),
+            last_last: v0::Hash([Belt(11), Belt(22), Belt(33), Belt(44), Belt(55)]),
         };
         let s = encode_cursor(&cur);
         let cur2 = decode_cursor(&s).expect("decode ok");

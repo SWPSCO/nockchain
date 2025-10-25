@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use clap::{arg, command, value_parser, ArgAction, Parser};
-use nockchain_types::tx_engine::note::{Hash, SchnorrPubkey};
+use nockchain_types::tx_engine::common::{Hash, SchnorrPubkey};
 
 use crate::mining::{MiningKeyConfig, MiningPkhConfig};
 
@@ -111,15 +111,23 @@ pub struct NockchainCli {
     #[arg(
         long,
         help = "Size of Proof of Work puzzle for mining on fakenet. Mainnet uses 64. Must be a power of 2. Defaults to 2. Ignored on mainnet.",
-        default_value = "2"
+        default_value = "2",
+        requires = "fakenet"
     )]
-    pub fakenet_pow_len: Option<u64>,
+    pub fakenet_pow_len: u64,
     #[arg(
         long,
         help = "log target difficulty for mining on fakenet. Defaults to 2 (so 2^2 attempts on average find a block). Ignored on mainnet.",
-        default_value = "1"
+        default_value = "1",
+        requires = "fakenet"
     )]
-    pub fakenet_log_difficulty: Option<u64>,
+    pub fakenet_log_difficulty: u64,
+    #[arg(
+        long,
+        help = "Minimum timelock for coinbase transactions on fakenet. Defaults to 100 blocks. Ignored on mainnet.",
+        requires = "fakenet"
+    )]
+    pub fakenet_coinbase_timelock_min: Option<u64>,
     #[arg(
         long,
         help = "Override the v1-phase activation height when running on fakenet. Requires --fakenet.",
@@ -234,10 +242,11 @@ mod tests {
             max_system_memory_fraction: None,
             max_system_memory_bytes: None,
             num_threads: None,
-            fakenet_pow_len: Some(2),
-            fakenet_log_difficulty: Some(1),
+            fakenet_pow_len: 2,
+            fakenet_log_difficulty: 1,
             fakenet_v1_phase: None,
             fakenet_genesis_jam_path: None,
+            fakenet_coinbase_timelock_min: None,
             bind_public_grpc_addr: "127.0.0.1:5555".parse().unwrap(),
             bind_private_grpc_port: 5555,
         }

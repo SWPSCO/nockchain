@@ -147,6 +147,7 @@ pub(crate) async fn sync_wallet_balance(
     wallet: &mut Wallet,
     target: &GrpcTarget,
     pubkeys: Vec<String>,
+    tracked_names: Vec<String>,
 ) -> Result<Vec<NounSlab>, NockAppError> {
     match target {
         GrpcTarget::Private { endpoint } => {
@@ -161,7 +162,7 @@ pub(crate) async fn sync_wallet_balance(
                     endpoint.clone(),
                 ))
                 .await;
-            Wallet::update_balance_grpc_private(&mut client, pubkeys).await
+            Wallet::update_balance_grpc_private(&mut client, pubkeys, tracked_names).await
         }
         GrpcTarget::Public { endpoint } => {
             let mut client = public_nockchain::PublicNockchainGrpcClient::connect(endpoint.clone())
@@ -171,11 +172,11 @@ pub(crate) async fn sync_wallet_balance(
 
             wallet
                 .app
-                .add_io_driver(public_nockchain::driver::grpc_listener_driver(
+                .add_io_driver(public_nockchain::v2::driver::grpc_listener_driver(
                     endpoint.clone(),
                 ))
                 .await;
-            Wallet::update_balance_grpc_public(&mut client, pubkeys).await
+            Wallet::update_balance_grpc_public(&mut client, pubkeys, tracked_names).await
         }
     }
 }

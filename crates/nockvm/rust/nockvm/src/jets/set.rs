@@ -1,11 +1,11 @@
 use std::cmp::Ordering;
 
 use crate::interpreter::Context;
-use crate::jets::sort::util::{dor, gor, mor};
+use crate::jets::sort::util::{gor, mor};
 use crate::jets::util::slot;
 use crate::jets::{JetErr, Result};
 use crate::mem::NockStack;
-use crate::mug::mug;
+//use crate::mug::mug;
 use crate::noun::{Noun, Slots, D, NO, T, YES};
 
 type JetResult<T> = std::result::Result<T, JetErr>;

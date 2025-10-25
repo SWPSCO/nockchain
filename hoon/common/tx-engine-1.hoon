@@ -17,6 +17,9 @@
 ++  bn  bignum
 ++  page-msg  page-msg:v0
 ++  proof  proof:v0
+++  reason
+  |$  object
+  (each object term)
 ::
 ::  $page: page with v1 coinbase-split
 ++  page
@@ -172,7 +175,6 @@
       base-fee=@
       blockchain-constants:v0
   ==
-::
 :: $nname
 ++  nname
   =<  form
@@ -405,7 +407,7 @@
 ++  spend
   =<  form
   |%
-  +$  form  $%([%0 spend-0] [%1 spend-1])
+  +$  form  $+(spend-v1 $%([%0 spend-0] [%1 spend-1]))
   ++  hashable
     |=  =form
     ^-  hashable:tip5
@@ -556,6 +558,7 @@
   =<  form
   |%
   +$  form
+    $+  spend-0
     $:  signature=signature:v0
         =seeds
         fee=coins
@@ -652,6 +655,7 @@
   =<  form
   |%
   +$  form
+    $+  spend-1
     $:  =witness
         =seeds
         fee=coins
@@ -804,6 +808,60 @@
     %-  hash-hashable:tip5
     (hashable form)
   ::
+  ++  validate-with-context
+    |=  [balance=(z-map nname nnote) sps=form page-num=page-number max-size=@]
+    ^-  (reason ~)
+    %+  roll  ~(tap z-by sps)
+    |=  [[nam=nname sp=spend] acc=(reason ~)]
+    ?.  ?=(%.y -.acc)  acc
+    ::  check note-data size limits
+    =/  seed-list=(list seed)
+      ?-  -.sp
+        %0  ~(tap z-in seeds.+.sp)
+        %1  ~(tap z-in seeds.+.sp)
+      ==
+    =/  exceeds-size=?
+      %+  lien  seed-list
+      |=  sed=seed
+      =/  data-size=@
+        %-  num-of-leaves:shape
+        %-  ~(rep z-by note-data.sed)
+        |=  [[k=@tas v=*] tree=*]
+        [k v tree]
+      (gth data-size max-size)
+    ?:  exceeds-size  [%.n %v1-note-data-exceeds-max-size]
+    =/  mnote=(unit nnote)  (~(get z-by balance) nam)
+    ?~  mnote  [%.n %v1-input-missing]
+    =/  note=nnote  u.mnote
+    ?-    -.sp
+      ::
+        %0
+      ::  v0 note must back a %0 spend
+      ?:  ?=(@ -.note)  [%.n %v1-spend-version-mismatch]
+      =/  verified=?  (verify:spend-0 +.sp note)
+      ?.  verified
+        [%.n %v1-spend-0-verify-failed]
+      ?.  (check-gifts-and-fee:spend sp note)
+        [%.n %v1-spend-0-gifts-failed]
+      [%.y ~]
+      ::
+        %1
+      ::  v1 note must back a %1 spend
+      ?:  ?=(^ -.note)  [%.n %v1-spend-version-mismatch]
+      ?:  !=(%1 version.note)  [%.n %v1-note-version-mismatch]
+      =/  ctx=check-context
+        :*  page-num
+            origin-page.note
+            (sig-hash:spend-1 +.sp)
+            witness.+.sp
+        ==
+      ?.  %+  check:check-context  ctx
+          (lock-hash:nnote-1 note)
+        [%.n %v1-spend-1-lock-failed]
+      ?.  (check-gifts-and-fee:spend sp note)
+        [%.n %v1-spend-1-gifts-failed]
+      [%.y ~]
+    ==
   ++  validate
     ~/  %validate
     |=  =form

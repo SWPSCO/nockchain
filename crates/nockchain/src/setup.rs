@@ -35,10 +35,9 @@ pub enum SetupCommand {
 
 pub fn fakenet_blockchain_constants(pow_len: u64, target_bex: u64) -> BlockchainConstants {
     BlockchainConstants::new()
+        .with_update_candidate_timestamp_interval(Seconds(5 * 60))
         .with_pow_len(pow_len)
         .with_genesis_target_atom_bex(target_bex as u128)
-        .with_update_candidate_timestamp_interval(Seconds(5 * 60))
-        .with_coinbase_timelock_min(0)
         .with_first_month_coinbase_min(0)
 }
 
@@ -108,7 +107,7 @@ pub fn heard_fake_genesis_block(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NounEncode)]
-pub struct Seconds(u64);
+pub struct Seconds(pub u64);
 
 impl Seconds {
     pub fn new(seconds: u64) -> Self {

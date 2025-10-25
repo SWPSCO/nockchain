@@ -2,8 +2,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use bincode::config;
-use blake3::Hash;
 use clap::Parser;
 use hoonc::Error;
 use nockapp::export::ExportedState;
@@ -14,7 +12,7 @@ use nockapp::one_punch::OnePunchWire;
 use nockapp::save::JammedCheckpoint;
 use nockapp::wire::Wire;
 use nockapp::{exit_driver, file_driver, AtomExt};
-use nockvm::noun::{Atom, Cell, D, T};
+use nockvm::noun::{Atom, D, T};
 use nockvm_macros::tas;
 use tempfile::TempDir;
 
@@ -133,33 +131,12 @@ fn find_latest_checkpoint(dir: &Path) -> Result<PathBuf, Box<dyn std::error::Err
 }
 
 fn checkpoint_to_exported_state(path: &Path) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    const EXPECTED_MAGIC: u64 = tas!(b"CHKJAM");
-    const EXPECTED_VERSION: u32 = 1;
     let bytes = fs::read(path)?;
-    let (checkpoint, _) =
-        bincode::decode_from_slice::<JammedCheckpoint, _>(&bytes, config::standard())?;
-    if checkpoint.magic_bytes != EXPECTED_MAGIC {
-        return Err(format!("Unexpected checkpoint magic: {:x}", checkpoint.magic_bytes).into());
-    }
-    if checkpoint.version != EXPECTED_VERSION {
-        return Err(format!("Unexpected checkpoint version: {}", checkpoint.version).into());
-    }
-    let expected_checksum = checkpoint_checksum(checkpoint.event_num, &checkpoint.jam.0);
-    if expected_checksum != checkpoint.checksum {
-        return Err("Checkpoint checksum mismatch".into());
-    }
-
-    let mut slab = NounSlab::<NockJammer>::new();
-    let root = slab.cue_into(checkpoint.jam.0.clone())?;
-    slab.set_root(root);
-    let root_noun = unsafe { *slab.root() };
-    let kernel_state_cell: Cell = root_noun
-        .as_cell()
-        .map_err(|_| "Checkpoint root is not a cell")?;
-    let kernel_state_noun = kernel_state_cell.head();
+    let checkpoint = JammedCheckpoint::decode_from_bytes(&bytes)
+        .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
 
     let mut kernel_slab = NounSlab::<NockJammer>::new();
-    let kernel_root = kernel_slab.copy_into(kernel_state_noun);
+    let kernel_root = kernel_slab.cue_into(checkpoint.state_jam.0.clone())?;
     kernel_slab.set_root(kernel_root);
 
     let load_state = LoadState {
@@ -169,14 +146,4 @@ fn checkpoint_to_exported_state(path: &Path) -> Result<Vec<u8>, Box<dyn std::err
     };
     let exported = ExportedState::from_loadstate(load_state);
     Ok(exported.encode()?)
-}
-
-fn checkpoint_checksum(event_num: u64, jam: &bytes::Bytes) -> Hash {
-    use blake3::Hasher;
-
-    let mut hasher = Hasher::new();
-    hasher.update(&event_num.to_le_bytes());
-    hasher.update(&(jam.len() as u64).to_le_bytes());
-    hasher.update(jam);
-    hasher.finalize()
 }

@@ -149,6 +149,55 @@
 ++  timelock-intent  timelock-intent:v0
 ++  timelock-range  timelock-range:v0
 ++  tx-id  tx-id:v0
+++  first-name
+  =<  form
+  |%
+  +$  form  $+(first-name hash)
+  ++  v0
+    |%
+    ++  simple-sig-hash
+      |=  key=schnorr-pubkey
+      ^-  hash
+      =/  =sig  [m=1 (z-silt ~[key])]
+      (hash:^sig sig)
+    ::
+    ++  simple
+      |=  key=schnorr-pubkey
+      ^-  form
+      =/  sig-hash  (simple-sig-hash key)
+      (first-from-hash:new:nname:v0 sig-hash %.n)
+    ::
+    ++  coinbase
+      |=  key=schnorr-pubkey
+      ^-  form
+      =/  sig-hash  (simple-sig-hash key)
+      (first-from-hash:new:nname:v0 sig-hash %.y)
+    --::v0
+  ++  v1
+    |%
+    ++  simple-pkh-lp
+      |=  key-hash=hash
+      ^-  lock-primitive
+      [%pkh [m=1 (z-silt ~[key-hash])]]
+    ::
+    ++  simple
+      |=  key-hash=hash
+      ^-  form
+      =/  pkh-lock=spend-condition  [(simple-pkh-lp key-hash)]~
+      =/  lock-hash  (hash:lock pkh-lock)
+      (first:nname (hash:lock pkh-lock))
+    ::
+    ++  coinbase
+      |=  key-hash=hash
+      ^-  form
+      =/  coinbase-lock=spend-condition
+        :~  ^-(lock-primitive (simple-pkh-lp key-hash))
+            ^-(lock-primitive tim-lp:^coinbase)
+        ==
+      (first:nname (hash:lock coinbase-lock))
+    --::+v1
+  --::+first-name
+::
 ++  witness
   =<  form
   =+  witness:v1
@@ -217,7 +266,7 @@
       hax  (~(put z-by *(z-map ^hash *)) h pre)
       tim  ~
     ==
-  --
+  --::+witness
 ::
 ::  TODO: remove
 ++  lock-from-sig  from-sig:lock
@@ -258,7 +307,12 @@
     =(src got)
   ::
   ++  emission-calc  emission-calc:coinbase:^v0
-  ++  coinbase-timelock  coinbase-timelock:coinbase:^v0
+  ++  tim-lp
+    ^-  lock-primitive
+    :-  %tim
+    :*  rel=[min=`coinbase-timelock-min max=~]
+        abs=[min=~ max=~]
+    ==
   ::
   ::  +new: make v1 coinbase for page with pkh hashes
   ++  new
@@ -279,6 +333,7 @@
       assets       reward
     ==
   ::
+  ::
   ::  +make-name: build name from pubkey hashes with timelock
   ++  make-name
     |=  [pkh-hashes=(z-set hash) parent=block-id]
@@ -286,11 +341,7 @@
     ::  build %pkh lock from hashes, m=number of hashes
     =/  m=@  ~(wyt z-in pkh-hashes)
     =/  pkh=lock-primitive  [%pkh [m pkh-hashes]]
-    =/  tim-form=tim:lock-primitive
-      :*  rel=[min=`coinbase-timelock-min max=~]
-          abs=[min=~ max=~]
-      ==
-    =/  tim=lock-primitive  [%tim tim-form]
+    =/  tim=lock-primitive  tim-lp
     =/  lk=lock  ~[pkh tim]
     =/  lmp=lock-merkle-proof  (build-lock-merkle-proof:lock lk 1)
     =/  root=hash  root.merk-proof.lmp
@@ -551,7 +602,7 @@
         lmp  parent-lmp
         pkh  pkh-sig
       ==
-    =/  sps=spends:v1
+    =/  sps=spends
       (~(put z-by *(z-map nname spend:v1)) name.note sp)
     (new:raw-tx:v1 sps)
   ::
@@ -608,7 +659,7 @@
       ^-  nname
       ?^  -.form  name.form
       name.form
-    ::
+    ++  first-name  ^-(hash -:name)
     ++  origin-page
       ^-  page-number
       ?^  -.form  origin-page.form
@@ -825,6 +876,25 @@
     =/  root=hash  root.merk-proof.lmp
     [root sc h]
   --
+++  spends
+  =<  form
+  =+  spends:v1
+  |%
+  +$  form  $|(^form |=(* %&))
+  ++  calculate-min-fee
+    |=  sps=form
+    ^-  coins
+    =/  word-count=@
+      %+  roll  ~(tap z-by sps)
+      |=  [[nam=nname sp=spend] acc=@]
+      %+  add  acc
+      %+  add
+        (count-seed-words:spend-v1 sp)
+      (count-witness-words:spend-v1 sp)
+    =/  word-fee=coins  (mul word-count base-fee)
+    (max word-fee min-fee.data)
+  --
+::
 ++  spend-v1
   =<  form
   =+  spend:v1
@@ -857,6 +927,29 @@
         fee      0
       ==
     [%1 sp]
+  ++  count-seed-words
+    |=  sp=form
+    ^-  @
+    =/  seed-list=(list seed-v1)
+      ?-  -.sp
+        %0  ~(tap z-in seeds.+.sp)
+        %1  ~(tap z-in seeds.+.sp)
+      ==
+    %+  roll  seed-list
+    |=  [sed=seed-v1 acc=@]
+    %+  add  acc
+    %-  num-of-leaves:shape
+    %-  ~(rep z-by note-data.sed)
+    |=  [[k=@tas v=*] tree=*]
+    [k v tree]
+  ::
+  ++  count-witness-words
+    |=  sp=form
+    ^-  @
+    ?-  -.sp
+      %0  (num-of-leaves:shape `*`signature.+.sp)
+      %1  (num-of-leaves:shape `*`witness.+.sp)
+    ==
   ::
   ++  sign
     |=  [=form sk=schnorr-seckey]
@@ -1078,11 +1171,13 @@
     =/  tx1=tx:v1  (new:tx:v1 raw1 height.form)
     ?.  (validate:tx:v1 tx1)  [%.n %v1-tx-invalid]
     ::  validate all spends against their parent notes
-    =/  validate-result  (validate-spends spends.raw1 height.form)
+    =/  validate-result
+      %-  validate-with-context:spends
+      [balance.form spends.raw1 height.form max-size.data]
     ?.  ?=(%.y -.validate-result)  validate-result
     ::  check fee covers word count
-    =/  min-fee=coins  (calculate-min-fee spends.raw1)
-    =/  paid-fee=coins  (roll-fees:spends:v1 spends.raw1)
+    =/  min-fee=coins  (calculate-min-fee:spends spends.raw1)
+    =/  paid-fee=coins  (roll-fees:spends spends.raw1)
     ?.  (gte paid-fee min-fee)
       [%.n %v1-insufficient-fee]
     ::  add outputs to balance
@@ -1100,98 +1195,6 @@
       txs   (~(put z-by txs.form) (compute-id:raw-tx raw1) tx1)
     ==
     ::
-    ++  calculate-min-fee
-      |=  sps=spends:v1
-      ^-  coins
-      =/  word-count=@
-        %+  roll  ~(tap z-by sps)
-        |=  [[nam=nname sp=spend:v1] acc=@]
-        %+  add  acc
-        %+  add
-          (count-seed-words sp)
-        (count-witness-words sp)
-      =/  word-fee=coins  (mul word-count base-fee)
-      (max word-fee min-fee.data)
-    ::
-    ++  count-seed-words
-      |=  sp=spend:v1
-      ^-  @
-      =/  seed-list=(list seed:v1)
-        ?-  -.sp
-          %0  ~(tap z-in seeds.+.sp)
-          %1  ~(tap z-in seeds.+.sp)
-        ==
-      %+  roll  seed-list
-      |=  [sed=seed:v1 acc=@]
-      %+  add  acc
-      %-  num-of-leaves:shape
-      %-  ~(rep z-by note-data.sed)
-      |=  [[k=@tas v=*] tree=*]
-      [k v tree]
-    ::
-    ++  count-witness-words
-      |=  sp=spend:v1
-      ^-  @
-      ?-  -.sp
-        %0  (num-of-leaves:shape `*`signature.+.sp)
-        %1  (num-of-leaves:shape `*`witness.+.sp)
-      ==
-    ::
-    ++  validate-spends
-      |=  [sps=spends:v1 page-num=page-number]
-      ^-  (reason ~)
-      %+  roll  ~(tap z-by sps)
-      |=  [[nam=nname sp=spend:v1] acc=(reason ~)]
-      ?.  ?=(%.y -.acc)  acc
-      ::  check note-data size limits
-      =/  seed-list=(list seed:v1)
-        ?-  -.sp
-          %0  ~(tap z-in seeds.+.sp)
-          %1  ~(tap z-in seeds.+.sp)
-        ==
-      =/  exceeds-size=?
-        %+  lien  seed-list
-        |=  sed=seed:v1
-        =/  data-size=@
-          %-  num-of-leaves:shape
-          %-  ~(rep z-by note-data.sed)
-          |=  [[k=@tas v=*] tree=*]
-          [k v tree]
-        (gth data-size max-size.data)
-      ?:  exceeds-size  [%.n %v1-note-data-exceeds-max-size]
-      =/  mnote=(unit nnote)  (~(get z-by balance.form) nam)
-      ?~  mnote  [%.n %v1-input-missing]
-      =/  note=nnote  u.mnote
-      ?-    -.sp
-        ::
-          %0
-        ::  v0 note must back a %0 spend
-        ?:  ?=(@ -.note)  [%.n %v1-spend-version-mismatch]
-        =/  verified=?  (verify:spend-0:v1 +.sp note)
-        ?.  verified
-          [%.n %v1-spend-0-verify-failed]
-        ?.  (check-gifts-and-fee:spend:v1 sp note)
-          [%.n %v1-spend-0-gifts-failed]
-        [%.y ~]
-        ::
-          %1
-        ::  v1 note must back a %1 spend
-        ?:  ?=(^ -.note)  [%.n %v1-spend-version-mismatch]
-        ?:  !=(%1 version.note)  [%.n %v1-note-version-mismatch]
-        =/  ctx=check-context
-          :*  page-num
-              origin-page.note
-              (sig-hash:spend-1:v1 +.sp)
-              witness.+.sp
-          ==
-        ?.  %+  check:check-context  ctx
-            (lock-hash:nnote-1:v1 note)
-          [%.n %v1-spend-1-lock-failed]
-        ?.  (check-gifts-and-fee:spend:v1 sp note)
-          [%.n %v1-spend-1-gifts-failed]
-        [%.y ~]
-      ==
-    ::
     ++  add-outputs
       |=  outs=(z-set output:v1)
       ^-  (reason ^form)
@@ -1207,9 +1210,9 @@
       [%.y f(balance (~(put z-by balance.f) nam note))]
     ::
     ++  consume-inputs
-      |=  sps=spends:v1
+      |=  sps=spends
       ^-  (reason ^form)
-      =/  fees-add=coins  (roll-fees:spends:v1 sps)
+      =/  fees-add=coins  (roll-fees:spends sps)
       =/  remove-result=(reason ^form)
         %+  roll  ~(tap z-in ~(key z-by sps))
         |:  [nam=*nname acc=`(reason ^form)`[%.y form]]

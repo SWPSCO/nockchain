@@ -4,8 +4,9 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use clap::{arg, command, ColorChoice, Parser};
+use nockapp::driver::Operation;
 use nockapp::kernel::boot::{self, default_boot_cli, Cli as BootCli};
-use nockapp::noun::slab::NounSlab;
+use nockapp::noun::slab::{Jammer, NockJammer, NounSlab};
 use nockapp::one_punch::OnePunchWire;
 use nockapp::wire::Wire;
 use nockapp::{system_data_dir, AtomExt, Noun, NounExt};
@@ -14,7 +15,7 @@ use nockvm::noun::{Atom, D, T};
 use nockvm_macros::tas;
 use tempfile::NamedTempFile;
 use tokio::fs::{self, File};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncReadExt;
 use tracing::{debug, info, instrument};
 use walkdir::{DirEntry, WalkDir};
 
@@ -190,6 +191,19 @@ pub async fn initialize_hoonc(cli: HoonCli) -> Result<(nockapp::NockApp, PathBuf
     .await
 }
 
+pub async fn initialize_hoonc_with_cli<J: Jammer + Send + 'static>(
+    cli: HoonCli,
+) -> Result<(nockapp::NockApp<J>, PathBuf), Error> {
+    initialize_hoonc_inner(
+        cli.entry,
+        cli.directory,
+        cli.arbitrary,
+        cli.output,
+        cli.boot.clone(),
+    )
+    .await
+}
+
 pub async fn initialize_with_default_cli(
     entry: std::path::PathBuf,
     deps_dir: std::path::PathBuf,
@@ -201,13 +215,13 @@ pub async fn initialize_with_default_cli(
     initialize_hoonc_(entry, deps_dir, arbitrary, out, cli).await
 }
 
-pub async fn initialize_hoonc_(
+async fn initialize_hoonc_inner<J: Jammer + Send + 'static>(
     entry: std::path::PathBuf,
     deps_dir: std::path::PathBuf,
     arbitrary: bool,
     out: Option<std::path::PathBuf>,
     boot_cli: BootCli,
-) -> Result<(nockapp::NockApp, PathBuf), Error> {
+) -> Result<(nockapp::NockApp<J>, PathBuf), Error> {
     debug!("Dependencies directory: {:?}", deps_dir);
     debug!("Entry file: {:?}", entry);
     let data_dir = system_data_dir();
@@ -237,10 +251,12 @@ pub async fn initialize_hoonc_(
         prewarm_state_file = Some(tmp);
     }
     let mut nockapp =
-        boot::setup(KERNEL_JAM, boot_cli.clone(), &[], "hoonc", Some(data_dir)).await?;
+        boot::setup::<J>(KERNEL_JAM, boot_cli.clone(), &[], "hoonc", Some(data_dir)).await?;
+    nockapp.add_io_driver(nockapp::file_driver()).await;
+    nockapp.add_io_driver(nockapp::exit_driver()).await;
 
-    let mut slab = NounSlab::new();
-    let hoon_cord = Atom::from_value(&mut slab, HOON_TXT)
+    let mut boot_slab = NounSlab::new();
+    let hoon_cord = Atom::from_value(&mut boot_slab, HOON_TXT)
         .unwrap_or_else(|_| {
             panic!(
                 "Panicked at {}:{} (git sha: {:?})",
@@ -250,50 +266,16 @@ pub async fn initialize_hoonc_(
             )
         })
         .as_noun();
-    let bootstrap_poke = T(&mut slab, &[D(tas!(b"boot")), hoon_cord]);
-    slab.set_root(bootstrap_poke);
+    let bootstrap_poke = T(&mut boot_slab, &[D(tas!(b"boot")), hoon_cord]);
+    boot_slab.set_root(bootstrap_poke);
 
     // It's OK to do a raw poke for boot because it doesn't yield any effects that need to be processed.
     // We do a raw poke here to ensure boot is done before we start the build poke.
-    let _boot_result = nockapp.poke(OnePunchWire::Poke.to_wire(), slab).await?;
+    let _boot_result = nockapp
+        .poke(OnePunchWire::Poke.to_wire(), boot_slab)
+        .await?;
+    let mut slab: NounSlab<NockJammer> = NounSlab::new();
 
-    let out_path_string = if let Some(path) = &out {
-        let parent = if path.is_dir() {
-            path
-        } else {
-            &current_dir().expect("Failed to get current directory")
-        };
-        let filename = if path.is_dir() {
-            OsStr::new(OUT_JAM_NAME)
-        } else {
-            path.file_name().unwrap_or_else(|| OsStr::new(OUT_JAM_NAME))
-        };
-        let parent_canonical = canonicalize_and_string(parent);
-        format!("{}/{}", parent_canonical, filename.to_string_lossy())
-    } else {
-        let parent_dir = current_dir().expect("Failed to get current directory");
-        format!("{}/{}", canonicalize_and_string(&parent_dir), OUT_JAM_NAME)
-    };
-    debug!("Output path: {:?}", out_path_string);
-
-    Ok((nockapp, out_path_string.into()))
-}
-
-pub async fn build_hoon(
-    nockapp: nockapp::NockApp,
-    cli: HoonCli,
-) -> Result<(nockapp::NockApp, Vec<NounSlab>, PathBuf), Error> {
-    build_hoon_(nockapp, cli.entry, cli.directory, cli.arbitrary, cli.output).await
-}
-
-pub async fn build_hoon_(
-    mut nockapp: nockapp::NockApp,
-    entry: std::path::PathBuf,
-    deps_dir: std::path::PathBuf,
-    arbitrary: bool,
-    out: Option<std::path::PathBuf>,
-) -> Result<(nockapp::NockApp, Vec<NounSlab>, PathBuf), Error> {
-    let mut slab = NounSlab::new();
     let entry_string = canonicalize_and_string(&entry);
     let entry_path = Atom::from_value(&mut slab, entry_string)?.as_noun();
 
@@ -367,13 +349,32 @@ pub async fn build_hoon_(
         ],
     );
     slab.set_root(poke);
+    // The build poke yields effects (principally the file write effect), so we need to embed the poke
+    // as a one_punch IO driver so that nockapp.run() can process the effects.
+    nockapp
+        .add_io_driver(nockapp::one_punch_driver(slab, Operation::Poke))
+        .await;
+    Ok((nockapp, out_path_string.into()))
+}
 
-    let effects = nockapp
-        .poke(OnePunchWire::Poke.to_wire(), slab)
-        .await
-        .unwrap();
+pub async fn initialize_hoonc_with_jammer<J: Jammer + Send + 'static>(
+    entry: std::path::PathBuf,
+    deps_dir: std::path::PathBuf,
+    arbitrary: bool,
+    out: Option<std::path::PathBuf>,
+    boot_cli: BootCli,
+) -> Result<(nockapp::NockApp<J>, PathBuf), Error> {
+    initialize_hoonc_inner(entry, deps_dir, arbitrary, out, boot_cli).await
+}
 
-    Ok((nockapp, effects, out_path_string.into()))
+pub async fn initialize_hoonc_(
+    entry: std::path::PathBuf,
+    deps_dir: std::path::PathBuf,
+    arbitrary: bool,
+    out: Option<std::path::PathBuf>,
+    boot_cli: BootCli,
+) -> Result<(nockapp::NockApp, PathBuf), Error> {
+    initialize_hoonc_with_jammer::<NockJammer>(entry, deps_dir, arbitrary, out, boot_cli).await
 }
 
 pub fn is_valid_file_or_dir(entry: &DirEntry) -> bool {

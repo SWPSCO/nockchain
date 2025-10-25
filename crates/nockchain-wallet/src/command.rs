@@ -6,31 +6,31 @@ use nockapp::kernel::boot::Cli as BootCli;
 use nockapp::wire::{Wire, WireRepr};
 use nockapp::NockAppError;
 use nockchain_math::belt::Belt;
-use nockchain_types::tx_engine::note::{
-    BlockHeight, BlockHeightDelta, TimelockRangeAbsolute, TimelockRangeRelative,
-};
+use nockchain_types::tx_engine::v0;
 
 use crate::connection::ConnectionCli;
 
 /// CLI helper that captures optional lower and upper bounds for timelocks.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct TimelockRangeCli {
     min: Option<u64>,
     max: Option<u64>,
 }
 
+#[allow(dead_code)]
 impl TimelockRangeCli {
-    pub fn absolute(&self) -> TimelockRangeAbsolute {
-        TimelockRangeAbsolute::new(
-            self.min.map(|value| BlockHeight(Belt(value))),
-            self.max.map(|value| BlockHeight(Belt(value))),
+    pub fn absolute(&self) -> v0::TimelockRangeAbsolute {
+        v0::TimelockRangeAbsolute::new(
+            self.min.map(|value| v0::BlockHeight(Belt(value))),
+            self.max.map(|value| v0::BlockHeight(Belt(value))),
         )
     }
 
-    pub fn relative(&self) -> TimelockRangeRelative {
-        TimelockRangeRelative::new(
-            self.min.map(|value| BlockHeightDelta(Belt(value))),
-            self.max.map(|value| BlockHeightDelta(Belt(value))),
+    pub fn relative(&self) -> v0::TimelockRangeRelative {
+        v0::TimelockRangeRelative::new(
+            self.min.map(|value| v0::BlockHeightDelta(Belt(value))),
+            self.max.map(|value| v0::BlockHeightDelta(Belt(value))),
         )
     }
 
@@ -73,18 +73,20 @@ impl TimelockRangeCli {
 /// intent. So for all "intents" and purposes, the timelock intent is functionally the same
 /// as a timelock.
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 pub struct TimelockIntentCli {
     absolute: Option<TimelockRangeCli>,
     relative: Option<TimelockRangeCli>,
 }
 
+#[allow(dead_code)]
 impl TimelockIntentCli {
-    pub fn absolute_range(&self) -> Option<TimelockRangeAbsolute> {
+    pub fn absolute_range(&self) -> Option<v0::TimelockRangeAbsolute> {
         self.absolute.as_ref().map(|range| range.absolute())
     }
 
-    pub fn relative_range(&self) -> Option<TimelockRangeRelative> {
+    pub fn relative_range(&self) -> Option<v0::TimelockRangeRelative> {
         self.relative.as_ref().map(|range| range.relative())
     }
 
@@ -233,11 +235,8 @@ fn validate_label(s: &str) -> Result<String, String> {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum Commands {
-    /// Generates a new version 0 key pair
+    /// Generates a new version 1 key pair
     Keygen,
-
-    /// Generate a new version 1 key pair for mining pkh so miners can set it in advance of the v1 cutoff
-    GenerateMiningPkh,
 
     /// Derive child key (pub, private or both) from the current master key
     DeriveChild {
@@ -287,15 +286,15 @@ pub enum Commands {
     ListNotes,
 
     /// List notes by public key
-    ListNotesByPubkey {
+    ListNotesByAddress {
         /// Optional public key to filter notes
-        pubkey: Option<String>,
+        address: Option<String>,
     },
 
     /// List notes by public key in CSV format
-    ListNotesByPubkeyCsv {
+    ListNotesByAddressCsv {
         /// Public key to filter notes
-        pubkey: String,
+        address: String,
     },
 
     /// Create a transaction from a transaction file
@@ -309,6 +308,9 @@ pub enum Commands {
         /// Transaction file to display
         transaction: String,
     },
+
+    /// Summarize the wallet balance
+    ShowBalance,
 
     /// Query whether a transaction was accepted by the node
     TxAccepted {
@@ -330,26 +332,27 @@ pub enum Commands {
         hardened: bool,
     },
 
-    /// Create a transaction
+    /// Create a transaction (use --refund-pkh when spending legacy v0 notes)
+    #[command(
+        name = "create-tx",
+        override_usage = "nockchain-wallet create-tx --names <NAMES> --recipient <RECIPIENT> --fee <FEE> [--refund-pkh <REFUND_PKH>]\n\n# NOTE: --refund-pkh is required when spending from v0 notes. For v1 notes, the refund defaults to the note owner.\n\nExamples:\n  # Send to a single recipient\n  nockchain-wallet create-tx \\\n    --names \"[first1 last1],[first2 last2]\" \\\n    --recipient \"<pkh-b58>:<amount>\" \\\n    --fee 10 \\\n    --refund-pkh <pkh-b58>"
+    )]
     CreateTx {
         /// Names of notes to spend (comma-separated)
         #[arg(long)]
         names: String,
-        /// Recipient addresses (comma-separated)
+        /// Transaction output, formatted as "<recipient>:<amount>"
         #[arg(long)]
-        recipients: String,
-        /// Amounts to send (comma-separated)
-        #[arg(long)]
-        gifts: String,
+        recipient: String,
         /// Transaction fee
         #[arg(long)]
         fee: u64,
+        /// Optional refund recipient pubkey hash (base58). Required for legacy v0 notes; v1 notes default to the note owner.
+        #[arg(long = "refund-pkh", value_name = "REFUND_PKH")]
+        refund_pkh: Option<String>,
         /// Optional key index to use for signing [0, 2^31), if not provided, we use the master key
         #[arg(short, long, value_parser = clap::value_parser!(u64).range(0..2 << 31))]
         index: Option<u64>,
-        /// Optional timelock intent, e.g. `--timelock absolute=0..100,relative=10..`
-        #[arg(long = "timelock", value_name = "SPEC")]
-        timelock_intent: Option<TimelockIntentCli>,
         /// Hardened or unhardened child key
         #[arg(long, default_value = "false")]
         hardened: bool,
@@ -380,11 +383,13 @@ pub enum Commands {
     /// Show the seed phrase for the current master key
     ShowSeedphrase,
 
-    /// Show the master public key
-    ShowMasterPubkey,
+    /// Show the master zpub extended public key
+    #[command(name = "show-master-zpub")]
+    ShowMasterZPub,
 
-    /// Show the master extended private key
-    ShowMasterPrivkey,
+    /// Show the master zprv extended private key
+    #[command(name = "show-master-zprv")]
+    ShowMasterZPrv,
 
     /// Fetch confirmation depth for a transaction ID
     // Confirmations {
@@ -487,25 +492,25 @@ impl Commands {
     fn as_wire_tag(&self) -> &'static str {
         match self {
             Commands::Keygen => "keygen",
-            Commands::GenerateMiningPkh => "generate-mining-pkh",
             Commands::DeriveChild { .. } => "derive-child",
             Commands::ImportKeys { .. } => "import-keys",
             Commands::ExportKeys => "export-keys",
             Commands::SignTx { .. } => "sign-tx",
             Commands::ListNotes => "list-notes",
-            Commands::ListNotesByPubkey { .. } => "list-notes-by-pubkey",
-            Commands::ListNotesByPubkeyCsv { .. } => "list-notes-by-pubkey-csv",
+            Commands::ListNotesByAddress { .. } => "list-notes-by-address",
+            Commands::ListNotesByAddressCsv { .. } => "list-notes-by-address-csv",
             Commands::SetActiveMasterAddress { .. } => "set-active-master-address",
             Commands::CreateTx { .. } => "create-tx",
             Commands::SendTx { .. } => "send-tx",
             Commands::ShowTx { .. } => "show-tx",
+            Commands::ShowBalance => "show",
             Commands::ExportMasterPubkey => "export-master-pubkey",
             Commands::ImportMasterPubkey { .. } => "import-master-pubkey",
             Commands::ListActiveAddresses => "list-active-addresses",
             Commands::ListMasterAddresses => "list-master-addresses",
             Commands::ShowSeedphrase => "show-seed-phrase",
-            Commands::ShowMasterPubkey => "show-master-zpub",
-            Commands::ShowMasterPrivkey => "show-master-zprv",
+            Commands::ShowMasterZPub => "show-master-zpub",
+            Commands::ShowMasterZPrv => "show-master-zprv",
             Commands::SignMessage { .. } => "sign-message",
             Commands::VerifyMessage { .. } => "verify-message",
             Commands::SignHash { .. } => "sign-hash",

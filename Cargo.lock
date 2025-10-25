@@ -3893,6 +3893,8 @@ dependencies = [
  "nockapp",
  "nockapp-grpc",
  "nockchain-libp2p-io",
+ "nockchain-math",
+ "nockchain-types",
  "nockvm",
  "nockvm_macros",
  "noun-serde",

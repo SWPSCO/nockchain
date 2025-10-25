@@ -7,7 +7,7 @@ use gnort::instrument::TimingCount;
 use nockapp::driver::{NockAppHandle, PokeResult};
 use nockapp::noun::slab::NounSlab;
 use nockapp::wire::WireRepr;
-use nockchain_types::tx_engine::note::*;
+use nockchain_types::tx_engine::v0;
 use nockvm::noun::SIG;
 use noun_serde::{NounDecode, NounEncode};
 use tokio::sync::RwLock;
@@ -22,11 +22,11 @@ use super::cache::{
 };
 use super::metrics::{init_metrics, NockchainGrpcApiMetrics};
 use crate::error::{NockAppGrpcError, Result};
-use crate::pagination::{decode_cursor, PageCursor, PageKey};
 use crate::pb::common::v1::{Acknowledged, ErrorCode, ErrorStatus};
 use crate::pb::public::v1::nockchain_service_server::{NockchainService, NockchainServiceServer};
 use crate::pb::public::v1::*;
-use crate::public_nockchain::cache::CachedBalanceEntry;
+use crate::public_nockchain::v1::cache::CachedBalanceEntry;
+use crate::v1::pagination::{decode_cursor, PageCursor, PageKey};
 use crate::wire_conversion::{create_grpc_wire, grpc_wire_to_nockapp};
 
 const DEFAULT_HEAVIEST_CHAIN_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
@@ -75,8 +75,8 @@ pub struct PublicNockchainGrpcServer {
 
 #[derive(Clone)]
 struct HeaviestChainSnapshot {
-    height: BlockHeight,
-    block_id: Hash,
+    height: v0::BlockHeight,
+    block_id: v0::Hash,
     fetched_at: Instant,
 }
 
@@ -146,7 +146,7 @@ impl PublicNockchainGrpcServer {
         T::from(error_status)
     }
 
-    async fn peek_heaviest_chain(&self) -> Result<Option<(BlockHeight, Hash)>> {
+    async fn peek_heaviest_chain(&self) -> Result<Option<(v0::BlockHeight, v0::Hash)>> {
         let metrics = &self.metrics;
 
         let mut path_slab = NounSlab::new();
@@ -161,7 +161,7 @@ impl PublicNockchainGrpcServer {
         let result = match peek_result {
             Ok(Some(result_slab)) => {
                 let result_noun = unsafe { result_slab.root() };
-                match <Option<Option<(BlockHeight, Hash)>>>::from_noun(&result_noun) {
+                match <Option<Option<(v0::BlockHeight, v0::Hash)>>>::from_noun(&result_noun) {
                     Ok(opt) => Ok(opt.flatten()),
                     // Peek either returned [~ ~] or ~
                     Err(_) => Err(NockAppGrpcError::PeekReturnedNoData),
@@ -220,7 +220,7 @@ impl PublicNockchainGrpcServer {
         Ok(())
     }
 
-    async fn cached_heaviest_chain(&self) -> Option<(BlockHeight, Hash)> {
+    async fn cached_heaviest_chain(&self) -> Option<(v0::BlockHeight, v0::Hash)> {
         let guard = self.heaviest_chain.read().await;
         if let Some(snapshot) = guard.as_ref() {
             let age = snapshot.fetched_at.elapsed().as_secs_f64();
@@ -264,7 +264,7 @@ impl NockchainService for PublicNockchainGrpcServer {
                     result: Some(wallet_get_balance_response::Result::Error(err)),
                 })),
             );
-        } else if SchnorrPubkey::from_base58(&address).is_err() {
+        } else if v0::SchnorrPubkey::from_base58(&address).is_err() {
             self.metrics
                 .balance_request_error_invalid_request_address_format
                 .increment();
@@ -413,7 +413,7 @@ impl NockchainService for PublicNockchainGrpcServer {
         match peek_result {
             Ok(Some(result_slab)) => {
                 let result_noun = unsafe { result_slab.root() };
-                let result = <Option<Option<BalanceUpdate>>>::from_noun(&result_noun);
+                let result = <Option<Option<v0::BalanceUpdate>>>::from_noun(&result_noun);
 
                 match result {
                     Ok(update) => {
@@ -549,8 +549,7 @@ impl NockchainService for PublicNockchainGrpcServer {
             }
         };
 
-        let tx_id_domain: nockchain_types::tx_engine::note::Hash = match tx_id_pb.clone().try_into()
-        {
+        let tx_id_domain: v0::Hash = match tx_id_pb.clone().try_into() {
             Ok(id) => id,
             Err(_) => {
                 self.metrics
@@ -569,7 +568,7 @@ impl NockchainService for PublicNockchainGrpcServer {
             }
         };
 
-        let raw_tx: nockchain_types::tx_engine::tx::RawTx = match raw_tx_pb.clone().try_into() {
+        let raw_tx: v0::RawTx = match raw_tx_pb.clone().try_into() {
             Ok(tx) => tx,
             Err(e) => {
                 self.metrics
@@ -785,17 +784,17 @@ mod tests {
     use nockchain_math::crypto::cheetah::A_GEN;
 
     use super::*;
-    use crate::pagination::cmp_name;
     use crate::pb::common::v1 as pb_common;
-    use crate::services::public_nockchain::fixtures;
+    use crate::services::public_nockchain::v1::fixtures;
+    use crate::v1::pagination::cmp_name;
 
     struct MockHandle {
-        update: BalanceUpdate,
+        update: v0::BalanceUpdate,
         peek_calls: AtomicUsize,
     }
 
     impl MockHandle {
-        fn new(update: BalanceUpdate) -> Self {
+        fn new(update: v0::BalanceUpdate) -> Self {
             Self {
                 update,
                 peek_calls: AtomicUsize::new(0),
@@ -902,7 +901,7 @@ mod tests {
                 .expect("balance entry missing name on second page")
         }));
 
-        let mut collected_sorted: Vec<Name> = collected_names
+        let mut collected_sorted: Vec<v0::Name> = collected_names
             .into_iter()
             .map(|name| name.try_into().expect("convert name"))
             .collect();
@@ -915,7 +914,7 @@ mod tests {
         assert_eq!(handle.peek_calls(), 1, "cache should prevent second peek");
     }
 
-    fn encode_balance_update(update: &BalanceUpdate) -> NounSlab {
+    fn encode_balance_update(update: &v0::BalanceUpdate) -> NounSlab {
         let mut slab = NounSlab::new();
         let noun = Some(Some(update.clone())).to_noun(&mut slab);
         slab.set_root(noun);

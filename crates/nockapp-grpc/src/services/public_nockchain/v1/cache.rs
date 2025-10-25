@@ -3,13 +3,13 @@ use std::ops::Bound;
 use std::sync::Arc;
 use std::time::Instant;
 
-use nockchain_types::tx_engine::note::{BalanceUpdate, BlockHeight, Hash, Name, Note};
+use nockchain_types::tx_engine::v0;
 
 use super::metrics::NockchainGrpcApiMetrics;
-use crate::pagination::{encode_cursor, name_key, PageCursor, PageKey};
 use crate::pb::common::v1 as pb_common;
 use crate::pb::common::v1::{ErrorCode, ErrorStatus};
 use crate::pb::public::v1::{wallet_get_balance_response, WalletGetBalanceResponse};
+use crate::v1::pagination::{encode_cursor, name_key, PageCursor, PageKey};
 
 pub const MAX_PAGE_BYTES: u64 = 3 * 1024 * 1024;
 pub const MAX_PAGE_SIZE: usize = 1000;
@@ -38,7 +38,7 @@ impl BalanceCache {
         None
     }
 
-    pub fn insert(&self, address: &str, update: BalanceUpdate) -> Arc<CachedBalanceEntry> {
+    pub fn insert(&self, address: &str, update: v0::BalanceUpdate) -> Arc<CachedBalanceEntry> {
         let entry = Arc::new(CachedBalanceEntry::from_update(address.to_string(), update));
         let key = PageKey::new(
             address.to_string(),
@@ -53,17 +53,17 @@ impl BalanceCache {
 #[derive(Debug)]
 pub struct CachedBalanceEntry {
     address: String,
-    block_height: BlockHeight,
+    block_height: v0::BlockHeight,
     block_height_value: u64,
-    block_id: Hash,
-    notes: BTreeMap<NameKey, (Name, Note)>,
+    block_id: v0::Hash,
+    notes: BTreeMap<NameKey, (v0::Name, v0::NoteV0)>,
     // We can leave this field here for future use
     #[allow(dead_code)]
     inserted_at: Instant,
 }
 
 impl CachedBalanceEntry {
-    fn from_update(address: String, update: BalanceUpdate) -> Self {
+    fn from_update(address: String, update: v0::BalanceUpdate) -> Self {
         let block_height_value = update.height.0 .0;
         let mut notes = BTreeMap::new();
         for (name, note) in update.notes.0.into_iter() {
@@ -123,7 +123,7 @@ impl CachedBalanceEntry {
         let mut pb_notes: Vec<pb_common::BalanceEntry> =
             Vec::with_capacity(client_page_items_limit as usize);
         let mut total_bytes = 0usize;
-        let mut last_name: Option<Name> = None;
+        let mut last_name: Option<v0::Name> = None;
         let mut has_more = false;
 
         let mut iter = self.notes.range((range_start, Bound::Unbounded)).peekable();
@@ -188,7 +188,7 @@ struct NameKey {
 }
 
 impl NameKey {
-    fn from_name(name: &Name) -> Self {
+    fn from_name(name: &v0::Name) -> Self {
         let (first, last) = name_key(name);
         Self { first, last }
     }
@@ -204,9 +204,9 @@ impl NameKey {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pagination::{cmp_name, decode_cursor};
-    use crate::services::public_nockchain::fixtures;
-    use crate::services::public_nockchain::metrics::init_metrics;
+    use crate::services::public_nockchain::v1::fixtures;
+    use crate::services::public_nockchain::v1::metrics::init_metrics;
+    use crate::v1::pagination::{cmp_name, decode_cursor};
 
     const PAGE_SIZE: usize = 2;
 

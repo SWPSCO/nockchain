@@ -79,6 +79,10 @@ message Base58Hash {
   string hash = 1;
 }
 
+message Base58Pubkey {
+  string key = 1;
+}
+
 // pub struct SchnorrPubkey(pub CheetahPoint);
 message SchnorrPubkey { CheetahPoint value = 1; }
 

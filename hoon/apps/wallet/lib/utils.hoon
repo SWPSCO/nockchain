@@ -171,12 +171,6 @@
       ^-  meta:wt
       (~(got of keys.state) seed-path)
     ::
-    ++  by-label
-      |=  label=@t
-      %+  murn  keys
-      |=  [t=trek =meta:wt]
-      ?:(&(?=(%label -.meta) =(label +.meta)) `t ~)
-    ::
     ++  watch-keys
       ^-  (list @t)
       =/  subtree  (~(kids of keys.state) watch-path)
@@ -187,21 +181,22 @@
       p.meta
     ::
     ++  keys
-      ^-  (list [trek meta:wt])
+      ^-  (list [trek coil:wt])
       ?~  active-master.state
         ~
       =/  subtree
         %-  ~(kids of keys.state)
         key-path
-      ~(tap by kid.subtree)
+      %+  murn  ~(tap by kid.subtree)
+      |=  [pax=trek =meta:wt]
+      ^-  (unit [trek coil:wt])
+      ?:(?=(%coil -.meta) `[pax p.meta] ~)
     ::
     ++  coils
       ^-  (list coil:wt)
-      %+  murn  keys
-      |=  [t=trek =meta:wt]
-      ^-  (unit coil:wt)
-      ;;  (unit coil:wt)
-      ?:(=(%coil -.meta) `p.meta ~)
+      %+  turn  keys
+      |=  [=trek =coil:wt]
+      coil
     --
   ::
   ++  put
@@ -276,15 +271,6 @@
       ~|("note with hash {<(to-b58:hash:transact has)>} not found in balance" !!)
     (get-note u.name)
   ::
-  ++  generate-pid
-    ^-  @ud
-    =/  used-pids=(list @ud)
-      ~(tap in ~(key by peek-requests.state))
-    =/  max-pid=@ud
-      (roll used-pids max)
-    =/  next-pid=@ud  +(max-pid)
-    ?:  =(next-pid 0)  1  :: handle wraparound
-    next-pid
   ::
   ::  +derive-child: derives the i-th hardened/unhardened child key(s)
   ::
@@ -437,6 +423,8 @@
               '- Name: '
               =+  (to-b58:nname:transact name.note)
               :((cury cat 3) '[' first ' ' last ']')
+              '\0a- Version: '
+              (format-ui:common 0)
               '\0a- Assets: '
               (format-ui:common assets.note)
               '\0a- Block Height: '
@@ -461,26 +449,101 @@
       --  ::+v0
     ++  v1
       |%
+      ++  name
+        |=  name=nname:transact
+        ^-  @t
+        =+  (to-b58:nname:transact name)
+        :((cury cat 3) '[' first ' ' last ']')
+      ::
+      ++  lock-data
+        |=  data=note-data:v1:transact
+        ^-  @t
+        ?~  lock-data=(~(get z-by:zo data) %lock)
+          ~>  %slog.[2 'lock data in note is missing']  'N/A'
+        ?~  soft-lock=((soft lock-data:wt) u.lock-data)
+          ~>  %slog.[2 'lock data in note is malformed']  'N/A'
+        ?:  ?=(@ -.lock.u.soft-lock)
+          ~>  %slog.[2 'expected m-of-n pkh lock']  'N/A'
+        =+  lp=`lock-primitive:transact`(head lock.u.soft-lock)
+        ?.  ?=(%pkh -.lp)
+          ~>  %slog.[2 'expected m-of-n pkh lock']  'N/A'
+        =/  signers=tape
+          %-  zing
+          %+  turn  ~(tap z-in:zo h.lp)
+          |=  =hash:transact
+          """
+              - {(trip (to-b58:hash:transact hash))}
+          """
+        %-  crip
+        """
+
+          - Required Signatures: {(trip (format-ui:common m.lp))}
+          - Signers:
+            {signers}
+
+        """
+      ::
       ++  note
-        |=  note=nnote:transact
+        |=  [note=nnote:transact output=?]
         ^-  @t
         ?>  ?=(@ -.note)
         ;:  (cury cat 3)
            '''
 
-           ---
-
-           ## Details
+           ## Note Information
 
            '''
            '- Name: '
-           =+  (to-b58:nname:transact name.note)
-           :((cury cat 3) '[' first ' ' last ']')
-           '\0a- Assets: '
+           (name name.note)
+           '\0a- Version: '
+           (format-ui:common 1)
+           '\0a- Assets (nicks): '
            (format-ui:common assets.note)
            '\0a- Block Height: '
+           ?:  output
+             'N/A (output note has not been submitted yet)'
            (format-ui:common origin-page.note)
+           '\0a- Lock Information: '
+           (lock-data note-data.note)
+
          ==
+      ++  transaction
+        |=  [name=@t outs=outputs:v1:transact fees=@]
+        ^-  @t
+        ::=/  input-notes=tape
+        ::  =/  notes=(list nnote:transact)
+        ::    %~  tap  z-in:zo
+        ::    %-  ~(gas z-in:zo *(z-set:zo nnote:transact))
+        ::    %+  turn
+        ::      %+  roll  ~(val z-by:zo spends)
+        ::      |=  [=spend:v1:transact seeds=(z-set:zo seed-v1:transact)]
+        ::      (~(uni z-by:zo seeds) seeds.spend)
+        ::    |=(seed=seed-v1:transact note.seed)
+        ::  %-  zing
+        ::  %+  turn  notes
+        ::  |=  =nnote:transact
+        ::  """
+
+        ::  {(trip (note nnote))}
+        ::  """
+        =/  output-notes=tape
+          %-  zing
+          %+  turn
+            ~(tap z-in:zo outs)
+          |=  out=output:v1:transact
+          =/  out-note=nnote:v1:transact  note.out
+          "\0a{(trip (note out-note %.y))}"
+        %-  crip
+        """
+        ## Transaction Information
+        - Name: {(trip name)}
+        - Fee: {(trip (format-ui:common:display fees))}
+
+        ### Output Notes
+        {output-notes}
+        ---
+
+        """
       --  ::+v1
     --  ::+display
   ::
@@ -490,37 +553,63 @@
       |^
       ?+    path  !!
           [%balance ~]
-        :-  ~[(display-balance balance.state)]
+        :-  ~[[%exit 0] (display-balance balance.state)]
         state
       ::
-          [%state ~]
-        :-  display-state
-        state
       ==
       ++  display-balance
         |=  =balance:wt
         ^-  effect:wt
+        =/  notes=(list nnote:transact)
+          ~(val z-by:zo notes.balance)
+        ::  shows the sum of assets included in balance, making sure to exclude watch-only pubkeys
+        =/  owned-names=(set hash:transact)
+          %-  silt
+          %+  roll
+            ~(coils ~(get vault state) %pub)
+          |=  [=coil:wt first-names=(list hash:transact)]
+          ^-  (list hash:transact)
+          :*  (simple-first-name:coil:wt coil)
+              (coinbase-first-name:coil:wt coil)
+              first-names
+          ==
+        =/  [total-notes=@ total-nicks=coins:transact]
+          %+  roll
+            ::  all notes owned by keys in wallet, excluding watch-only pubkeys
+            %+  skim  notes
+            |=  [note=nnote:transact]
+            %-  ~(has in owned-names)
+            ~(first-name get:nnote:transact note)
+          |=  [note=nnote:transact [len=@ acc=coins:transact]]
+          :-  +(len)
+          (add acc assets.note)
         =/  nodes=markdown:m
-        %-  need
-        %-  de:md
-        %-  crip
-        """
-        ## balance
-        {<balance>}
-        """
+          =+  block-b58=(to-b58:hash:transact block-id.balance.state)
+          %-  need
+          %-  de:md
+          %-  crip
+          """
+          ## Wallet Balance
+          Wallet balance from block {(trip block-b58)} at height {<height.balance.state>}
+          - Wallet Version: {<-.state>}
+          - Number of Notes: {(trip (format-ui:common:display total-notes))}
+          - Balance: {(trip (format-ui:common:display total-nicks))} nicks
+          """
         (make-markdown-effect nodes)
       ::
-      ++  display-state
-        ^-  (list effect:wt)
-        =/  nodes=markdown:m
-        %-  need
-        %-  de:md
-        %-  crip
-        """
-        ## state
-        - last block: {<last-block.state>}
-        """
-        ~[(make-markdown-effect nodes)]
+      ::++  display-state
+      ::  ^-  (list effect:wt)
+      ::  =/  nodes=markdown:m
+      ::  %-  need
+      ::  %-  de:md
+      ::  %-  crip
+      ::  """
+      ::  ## Wallet State
+      ::  - Wallet Version: -.state
+      ::  - Last Block: {<block-id.balance.state>}
+      ::  - Height: {<height.balance.state>}
+      ::  """
+      ::  ~[(make-markdown-effect nodes)]
       --
   ::
   ++  ui-to-tape

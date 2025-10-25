@@ -30,11 +30,8 @@ nockchain-wallet import-keys --key "zprv..."
 # importing the seed phrase again with version 1.
 nockchain-wallet import-keys --seedphrase "your seed phrase here" --version <version | 1 or 0>
 
-# Generate master public key from private key and chain code
-nockchain-wallet import-keys --master-privkey <private-key> --chain-code <chain-code>
-
-# Import a watch-only public key
-nockchain-wallet import-keys --watch-only <public-key-base58>
+# Import a watch-only public address
+nockchain-wallet import-keys --watch-only <public-addr-base58>
 
 # Import a master public key from exported file
 nockchain-wallet import-master-pubkey keys.export
@@ -63,7 +60,7 @@ nockchain-wallet \
   --public-grpc-server-addr https://public-node.example.com \
   list-notes
 ```
-- The wallet syncs its balance based on the pubkeys that are stored in it. Make sure your wallet is loaded with your keys before running sync-heavy commands such as `list-notes`, `list-notes-by-pubkey`, `create-tx`, and `send-tx`. If you do not have pubkeys, import them with `import-keys` (see [Importing and Exporting Keys](#importing-and-exporting-keys)).
+- The wallet syncs its balance based on the pubkeys that are stored in it. Make sure your wallet is loaded with your keys before running sync-heavy commands such as `list-notes`, `list-notes-by-address`, `create-tx`, and `send-tx`. If you do not have pubkeys, import them with `import-keys` (see [Importing and Exporting Keys](#importing-and-exporting-keys)).
 - `--public-grpc-server-addr` accepts a bare `host:port` or a full URI (e.g. `http://host:port`).
 - If you omit the port, the wallet assumes **80** for `http://` and **443** for `https://` URLs.
 - By default, we do not sync notes attached to watch-only pubkeys. Pair sync-heavy commands with `--include-watch-only` when you want watch-only pubkeys included in balance updates.
@@ -138,7 +135,7 @@ Displays all notes (UTXOs) currently managed by the wallet, sorted by assets.
 ### List Notes by Public Key
 
 ```bash
-nockchain-wallet list-notes-by-pubkey <public-key>
+nockchain-wallet list-notes-by-address <base58-address>
 ```
 
 Shows only the notes associated with the specified public key. Useful for filtering wallet contents by address or for multisig scenarios.
@@ -146,8 +143,8 @@ Shows only the notes associated with the specified public key. Useful for filter
 ### List Arbitrary Notes by Public Key (Watch-Only)
 
 ```bash
-nockchain-wallet import-keys --watch-only <public-key>
-nockchain-wallet list-notes-by-pubkey <public-key> --include-watch-only
+nockchain-wallet import-keys --watch-only <address>
+nockchain-wallet list-notes-by-address <address> --include-watch-only
 ```
 
 Shows only the notes associated with the specified public key. Useful for filtering wallet contents by address or for multisig scenarios.
@@ -157,10 +154,18 @@ You must add the watch-only pubkey to the wallet before it will be recognized.
 ### List Notes by Public Key (CSV format)
 
 ```bash
-nockchain-wallet list-notes-by-pubkey-csv <public-key>
+nockchain-wallet list-notes-by-address-csv <address>
 ```
 
 Outputs matching notes in CSV format suitable for analysis or reporting. The output csv has the format: `notes-<public-key>.csv`.
+
+### Show Wallet Data
+
+```bash
+nockchain-wallet show-balance
+```
+
+Displays the aggregate wallet balance, including the total number of notes and the total nicks held. Additional `%show` paths are not exposed via the CLI.
 
 ## Transaction Creation
 
@@ -174,64 +179,28 @@ Outputs matching notes in CSV format suitable for analysis or reporting. The out
 
 ### Create a Transaction
 
-The create-tx command supports two modes: single recipient and multiple recipients.
+We currently only support fan-in transactions (multiple inputs, a single recipient).
 
 #### Single Recipient Transaction
 
 ```bash
 # Send to a single recipient
 nockchain-wallet create-tx \
-  --names "[first1 last1]" \
-  --recipients "[1 pk1]" \
-  --gifts 100 \
-  --fee 10
-```
-
-Gifts and fees are denominated in nicks (65536 nicks = 1 nock).
-
-For single recipient transactions:
-- `--recipients` specifies one recipient as `[<num-of-signatures> <public-key-1>,<public-key-2>,...]`
-- `--gifts` specifies the amount to send to that recipient
-- Multiple names can still be provided to use funds from multiple notes
-
-#### Multiple Recipients Transaction
-
-```bash
-# Send to multiple recipients
-nockchain-wallet create-tx \
   --names "[first1 last1],[first2 last2]" \
-  --recipients "[1 pk1],[2 pk2,pk3]" \
-  --gifts "100,200" \
+  --recipient "<pkh-b58>:<amount>" \
   --fee 10
 ```
 
 Gifts and fees are denominated in nicks (65536 nicks = 1 nock).
-
-For multiple recipient transactions:
-- `--recipients` specifies a list of recipients, each as `[<num-of-signatures> <public-key-1>,<public-key-2>,...]`
-- `--gifts` specifies a list of amounts, one for each recipient (must match the number of recipients)
 
 #### Common Parameters
 
-- The number of signatures required is specified as the first number in each recipient specification
 - The `names` argument is a list of `[first-name last-name]` pairs specifying funding notes
 - The `fee` argument is the transaction fee to pay (in nicks, 65536 nicks to 1 nock)
-- For multisig recipients, list multiple public keys after the signature count
-- Optional timelock constraints are specified with a single flag: `--timelock <SPEC>`, where `SPEC` is a comma-separated list of `absolute=<range>` and/or `relative=<range>`.
-  - Ranges use the `min..max` syntax. (`10..`, `..500`, `0..1`).
-  - Providing only a range (without `absolute=`) is shorthand for `absolute=<range>`.
-  - Supplying both components gives a combined intent.
-  - Any finite upper bound prompts for confirmation—type `YES` to acknowledge the note becomes unspendable after the upper bound.
 
 ### Make Transaction from Transaction File
 
 ```bash
-# Sign the transaction
-nockchain-wallet sign-tx txs/transaction.tx
-
-# Optionally specify a key index for signing
-nockchain-wallet sign-tx txs/transaction.tx --index 5
-
 # Display transaction contents
 nockchain-wallet show-tx txs/transaction.tx
 

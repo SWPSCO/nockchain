@@ -24,6 +24,7 @@ use libp2p::{
 use nockapp::driver::{IODriverFn, PokeResult};
 use nockapp::noun::slab::NounSlab;
 use nockapp::noun::FromAtom;
+use nockapp::utils::error::{CrownError, ExternalError};
 use nockapp::utils::make_tas;
 use nockapp::utils::scry::*;
 use nockapp::wire::{Wire, WireRepr};
@@ -431,8 +432,14 @@ pub fn make_libp2p_driver(
                         state_guard.seen_elders.clear();
                     },
                     Some(result) = join_set.join_next() => {
-                        if let Err(e) = result {
-                            error!("Task error: {:?}", e);
+                        match result {
+                            Ok(Ok(())) => {}
+                            Ok(Err(e)) => {
+                                error!("Task returned error: {:?}", e);
+                            }
+                            Err(e) => {
+                                error!("Task error: {:?}", e);
+                            }
                         }
                     },
                 }
@@ -830,6 +837,9 @@ async fn handle_request_response(
                                 Err(NockAppError::MPSCFullError(act))?
                             }
                             Err(err) => {
+                                if let NockAppError::CrownError(ref crown_err) = err {
+                                    record_crown_error_metric(crown_err, metrics.as_ref());
+                                }
                                 match data_request {
                                     NockchainDataRequest::BlockByHeight(height) => {
                                         debug!("Peek error getting block at height: {:?}", height);
@@ -1426,6 +1436,110 @@ fn prepend_tas(slab: &mut NounSlab, tas_str: &str, nouns: Vec<Noun>) -> Result<N
     cell_elements.extend(nouns);
 
     Ok(T(slab, &cell_elements))
+}
+
+fn record_crown_error_metric(error: &CrownError<ExternalError>, metrics: &NockchainP2PMetrics) {
+    match error {
+        CrownError::External(_) => {
+            metrics.requests_crown_error_external.increment();
+        }
+        CrownError::MutexError => {
+            metrics.requests_crown_error_mutex.increment();
+        }
+        CrownError::InvalidKernelInput => {
+            metrics
+                .requests_crown_error_invalid_kernel_input
+                .increment();
+        }
+        CrownError::UnknownEffect => {
+            metrics.requests_crown_error_unknown_effect.increment();
+        }
+        CrownError::IOError(_) => {
+            metrics.requests_crown_error_io_error.increment();
+        }
+        CrownError::Noun(_) => {
+            metrics.requests_crown_error_noun_error.increment();
+        }
+        CrownError::InterpreterError(_) => {
+            metrics.requests_crown_error_interpreter_error.increment();
+        }
+        CrownError::KernelError(_) => {
+            metrics.requests_crown_error_kernel_error.increment();
+        }
+        CrownError::Utf8FromError(_) => {
+            metrics.requests_crown_error_utf8_from_error.increment();
+        }
+        CrownError::Utf8Error(_) => {
+            metrics.requests_crown_error_utf8_error.increment();
+        }
+        CrownError::NewtError | CrownError::Newt(_) => {
+            metrics.requests_crown_error_newt_error.increment();
+        }
+        CrownError::BootError => {
+            metrics.requests_crown_error_boot_error.increment();
+        }
+        CrownError::SerfLoadError => {
+            metrics.requests_crown_error_serf_load_error.increment();
+        }
+        CrownError::WorkBail => {
+            metrics.requests_crown_error_work_bail.increment();
+        }
+        CrownError::PeekBail => {
+            metrics.requests_crown_error_peek_bail.increment();
+        }
+        CrownError::WorkSwap => {
+            metrics.requests_crown_error_work_swap.increment();
+        }
+        CrownError::TankError => {
+            metrics.requests_crown_error_tank_error.increment();
+        }
+        CrownError::PlayBail => {
+            metrics.requests_crown_error_play_bail.increment();
+        }
+        CrownError::QueueRecv(_) => {
+            metrics.requests_crown_error_queue_recv.increment();
+        }
+        CrownError::SaveError(_) => {
+            metrics.requests_crown_error_save_error.increment();
+        }
+        CrownError::IntError(_) => {
+            metrics.requests_crown_error_int_error.increment();
+        }
+        CrownError::JoinError(_) => {
+            metrics.requests_crown_error_join_error.increment();
+        }
+        CrownError::DecodeError(_) => {
+            metrics.requests_crown_error_decode_error.increment();
+        }
+        CrownError::EncodeError(_) => {
+            metrics.requests_crown_error_encode_error.increment();
+        }
+        CrownError::StateJamFormatError => {
+            metrics
+                .requests_crown_error_state_jam_format_error
+                .increment();
+        }
+        CrownError::Unknown(_) => {
+            metrics.requests_crown_error_unknown.increment();
+        }
+        CrownError::ConversionError(_) => {
+            metrics.requests_crown_error_conversion_error.increment();
+        }
+        CrownError::UnknownError(_) => {
+            metrics.requests_crown_error_unknown_error.increment();
+        }
+        CrownError::QueueError(_) => {
+            metrics.requests_crown_error_queue_error.increment();
+        }
+        CrownError::SerfMPSCError() => {
+            metrics.requests_crown_error_serf_mpsc_error.increment();
+        }
+        CrownError::OneshotChannelError(_) => {
+            metrics
+                .requests_crown_error_oneshot_channel_error
+                .increment();
+        }
+    }
 }
 
 #[cfg(test)]

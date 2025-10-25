@@ -1,16 +1,21 @@
-//use futures::{stream, Stream};
-use nockchain_types::tx_engine::tx::RawTx as DomainRawTx;
+use nockapp_grpc_proto::pb::common::v1::{Base58Hash, Base58Pubkey};
+use nockchain_types::tx_engine::v1;
 use tonic::transport::Channel;
 
 use crate::error::{NockAppGrpcError, Result};
-use crate::pb::common::v1 as pb_common;
 use crate::pb::common::v1::PageRequest;
-use crate::pb::public::v1::nockchain_service_client::NockchainServiceClient as PublicNockchainClient;
-use crate::pb::public::v1::*;
+use crate::pb::common::{v1 as pb_common_v1, v2 as pb_common_v2};
+use crate::pb::public::v2::nockchain_service_client::NockchainServiceClient as PublicNockchainClient;
+use crate::pb::public::v2::*;
 
 #[derive(Clone)]
 pub struct PublicNockchainGrpcClient {
     client: PublicNockchainClient<Channel>,
+}
+
+pub enum BalanceRequest {
+    Address(String),
+    FirstName(String),
 }
 
 impl PublicNockchainGrpcClient {
@@ -23,16 +28,28 @@ impl PublicNockchainGrpcClient {
     // Returns the combined WalletBalanceData with an empty next_page_token.
     pub async fn wallet_get_balance(
         &mut self,
-        address: String,
-    ) -> Result<crate::pb::common::v1::WalletBalanceData> {
+        request: &BalanceRequest,
+    ) -> Result<crate::pb::common::v2::Balance> {
         let mut page_token = String::new();
-        let mut all_notes: Vec<pb_common::BalanceEntry> = Vec::new();
-        let mut height: Option<pb_common::BlockHeight> = None;
-        let mut block_id: Option<pb_common::Hash> = None;
+        let mut all_notes: Vec<pb_common_v2::BalanceEntry> = Vec::new();
+        let mut height: Option<pb_common_v1::BlockHeight> = None;
+        let mut block_id: Option<pb_common_v1::Hash> = None;
 
         loop {
+            let sel = match request {
+                BalanceRequest::Address(addr) => {
+                    wallet_get_balance_request::Selector::Address(Base58Pubkey {
+                        key: addr.clone(),
+                    })
+                }
+                BalanceRequest::FirstName(fname) => {
+                    wallet_get_balance_request::Selector::FirstName(Base58Hash {
+                        hash: fname.clone(),
+                    })
+                }
+            };
             let req = WalletGetBalanceRequest {
-                address: address.clone(),
+                selector: Some(sel),
                 page: Some(PageRequest {
                     client_page_items_limit: 0, // let server choose default/cap
                     page_token: page_token.clone(),
@@ -76,11 +93,11 @@ impl PublicNockchainGrpcClient {
             }
         }
 
-        Ok(pb_common::WalletBalanceData {
+        Ok(pb_common_v2::Balance {
             notes: all_notes,
             height,
             block_id,
-            page: Some(pb_common::PageResponse {
+            page: Some(pb_common_v1::PageResponse {
                 next_page_token: String::new(),
             }),
         })
@@ -88,10 +105,10 @@ impl PublicNockchainGrpcClient {
 
     pub async fn wallet_send_transaction(
         &mut self,
-        raw_tx: DomainRawTx,
+        raw_tx: v1::RawTx,
     ) -> Result<WalletSendTransactionResponse> {
-        let pb_tx_id = pb_common::Hash::from(raw_tx.id.clone());
-        let pb_raw_tx = pb_common::RawTransaction::from(raw_tx);
+        let pb_tx_id = pb_common_v1::Hash::from(raw_tx.id.clone());
+        let pb_raw_tx = pb_common_v2::RawTransaction::from(raw_tx);
 
         let request = WalletSendTransactionRequest {
             tx_id: Some(pb_tx_id),
@@ -115,7 +132,7 @@ impl PublicNockchainGrpcClient {
 
     pub async fn transaction_accepted(
         &mut self,
-        tx_id: pb_common::Base58Hash,
+        tx_id: pb_common_v1::Base58Hash,
     ) -> Result<TransactionAcceptedResponse> {
         let request = TransactionAcceptedRequest { tx_id: Some(tx_id) };
         let response = self

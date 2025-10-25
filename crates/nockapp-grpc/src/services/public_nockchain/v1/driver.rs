@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 
 use nockapp::driver::{make_driver, IODriverFn, NockAppHandle};
 use nockapp::NounExt;
-use nockchain_types::tx_engine::tx::RawTx as DomainRawTx;
+use nockchain_types::tx_engine::v0;
 use nockvm_macros::tas;
 use noun_serde::{NounDecode, NounDecodeError};
 use tracing::{error, info, warn};
@@ -12,7 +12,7 @@ use super::server::PublicNockchainGrpcServer;
 use crate::pb::public::v1::wallet_send_transaction_response;
 
 pub enum PublicNockchainEffect {
-    SendTx { raw_tx: DomainRawTx },
+    SendTx { raw_tx: v0::RawTx },
 }
 
 impl NounDecode for PublicNockchainEffect {
@@ -31,7 +31,7 @@ impl NounDecode for PublicNockchainEffect {
 
         match tag {
             t if t == tas!(b"send-tx") => {
-                let raw_tx = DomainRawTx::from_noun(&payload_cell.tail())?;
+                let raw_tx = v0::RawTx::from_noun(&payload_cell.tail())?;
                 Ok(PublicNockchainEffect::SendTx { raw_tx })
             }
             _ => Err(NounDecodeError::InvalidTag),
@@ -66,7 +66,7 @@ pub fn grpc_listener_driver(addr: String) -> IODriverFn {
         let mut client = PublicNockchainGrpcClient::connect(addr.to_string())
             .await
             .map_err(|e| {
-                eprintln!("Public gRPC client failed to connect: {}", e);
+                info!("Public gRPC client failed to connect: {}", e);
                 nockapp::NockAppError::OtherError(format!(
                     "Public gRPC client failed to connect: {}",
                     e

@@ -9,6 +9,9 @@ pub mod pb {
         pub mod v1 {
             tonic::include_proto!("nockchain.common.v1");
         }
+        pub mod v2 {
+            tonic::include_proto!("nockchain.common.v2");
+        }
     }
     pub mod monitoring {
         pub mod v1 {
@@ -24,10 +27,15 @@ pub mod pb {
         pub mod v1 {
             tonic::include_proto!("nockchain.public.v1");
         }
+        pub mod v2 {
+            tonic::include_proto!("nockchain.public.v2");
+        }
     }
 
     pub const FILE_DESCRIPTOR_SET: &[u8] =
         tonic::include_file_descriptor_set!("nockapp_descriptor");
 }
 
-pub mod convert;
+pub mod common;
+pub mod v1;
+pub mod v2;

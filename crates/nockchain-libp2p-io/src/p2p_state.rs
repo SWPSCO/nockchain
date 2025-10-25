@@ -170,7 +170,7 @@ impl P2PState {
                 None
             }
         } else {
-            warn!("Not tracking {ip} but it is connected. Please inform the developers.");
+            trace!("Not tracking {ip} but it is connected. Please inform the developers.");
             None
         }
     }
@@ -184,7 +184,7 @@ impl P2PState {
     pub(crate) fn ping_succeeded(&mut self, connection: ConnectionId) {
         let addr = self.connection_address(connection);
         let Some(addr) = addr else {
-            warn!("No address for connection {connection}. Please inform the developers.");
+            trace!("No address for connection {connection}. Please inform the developers.");
             return;
         };
         let Some(ip) = addr.ip_addr() else {
@@ -199,7 +199,7 @@ impl P2PState {
     pub(crate) fn ping_failed(&mut self, connection: ConnectionId) -> u64 {
         let addr = self.connection_address(connection);
         let Some(addr) = addr else {
-            warn!("No address for connection {connection}. Please inform the developers.");
+            trace!("No address for connection {connection}. Please inform the developers.");
             return 0;
         };
         let Some(ip) = addr.ip_addr() else {

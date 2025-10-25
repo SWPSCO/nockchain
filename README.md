@@ -132,32 +132,6 @@ Run `nockchain-wallet keygen` to generate a new key pair.
 
 If you are using the Makefile workflow, copy the public key to the `.env` file.
 
-### How do I generate v0 spending keys now that v1 exists?
-
-Run `nockchain-wallet keygen`. That command will emit a version 0 master key until the wallet has been upgraded to create v1 transactions.
-
-### I have an older seed phrase. I have some v0 notes I want to spend. How do I import it?
-
-If your seed phrase predates the release of the v1 protocol upgrade (October 15, 2025), it most likely maps to a version 0 master key. Import it with the version flag: `nockchain-wallet import-keys --seedphrase "<your words>" --version 0`. Once imported, activate it with `nockchain-wallet set-active-master-address <IMPORTED_V0_ADDRESS>` before signing.
-
-### I have an older `keys.export` file from `nockchain-wallet export-keys`. How do I recover my v0 key?
-
-Run `nockchain-wallet import-keys --file <PATH_TO_KEYS_EXPORT>`. The import process preserves the key version. When the import completes, set the restored master active with `nockchain-wallet set-active-master-address <IMPORTED_V0_ADDRESS>`.
-
-### The wallet says "Active address corresponds to v1 key" when I try to spend v0 notes. What should I do?
-
-1. If you still need a v0 master key, import it first using either `nockchain-wallet import-keys --file <PATH_TO_KEYS_EXPORT>` or `nockchain-wallet import-keys --seedphrase "<your words>" --version 0`.
-2. Make the v0 master active:
-   - List known masters: `nockchain-wallet list-master-addresses`
-   - Set the active one: `nockchain-wallet set-active-master-address <V0_ADDRESS>`
-   - (Optional) confirm: `nockchain-wallet list-active-addresses`
-
-Once a v0 master is active, retry the spend and it will sign successfully.
-
-### I am a miner. How do I generate a mining PKH for the automatic cutover?
-
-Run `nockchain-wallet generate-mining-pkh` and record the PKH address the command prints (see the “Setup Keys” section above for details on wiring it into `.env`). If you are not using the bash scripts we provide to run the miner, you need to pass the newly generated PKH address to the `--mining-pkh` arg and your current pubkey address to the `--mining-pubkey` arg when starting the miner.
-
 ### How do I run a testnet?
 To run a testnet on your machine, follow the same instructions as above, except use the fakenet
 scripts provided in the `scripts` directory.
@@ -268,7 +242,7 @@ To check your wallet balance:
 
 ```bash
 # List all notes by pubkey
-nockchain-wallet list-notes-by-pubkey <your-pubkey>
+nockchain-wallet list-notes-by-address <your-base58-address>
 ```
 
 ### How do I configure logging levels?

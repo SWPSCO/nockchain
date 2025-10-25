@@ -37,7 +37,7 @@
 ::
 ++  domain-separator  [14 'dees niahckcoN']
 ::
-++  current-protocol  0
+++  current-protocol  1
 ++  protocol-version  ver
 ::
 ::

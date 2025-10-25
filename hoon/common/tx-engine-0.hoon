@@ -325,21 +325,35 @@
     ++  default
       |=  [owners=sig =source =timelock]
       ^-  form
-      =/  first-name
-        %-  hash-hashable:tip5
-        :*  leaf+&                  :: outcome of first pact
-            leaf+!=(~ timelock)     :: does it have a timelock?
-            hash+(hash:sig owners)  :: owners of note
-            leaf+~                  :: first pact
-        ==
-      =/  last-name
-        %-  hash-hashable:tip5
-        :*  leaf+&                          :: outcome of second pact
-            (hashable:^source source)       :: source of note
-            hash+(hash:^timelock timelock)  :: timelock of note
-            leaf+~                          :: second pact
-        ==
-      [first-name last-name ~]
+      :*  (first owners (has-timelock timelock))
+          (last source timelock)
+          ~
+      ==
+    ++  has-timelock  |=(=timelock !=(~ timelock))
+    ++  first
+      |=  [owners=sig has-timelock=?]
+      %-  hash-hashable:tip5
+      :*  leaf+&                  :: outcome of first pact
+          leaf+has-timelock       :: does it have a timelock?
+          hash+(hash:sig owners)  :: owners of note
+          leaf+~                  :: first pact
+      ==
+    ++  first-from-hash
+      |=  [hashed-sig=hash has-timelock=?]
+      %-  hash-hashable:tip5
+      :*  leaf+&                  :: outcome of first pact
+          leaf+has-timelock       :: does it have a timelock?
+          hash+hashed-sig         :: owners of note
+          leaf+~                  :: first pact
+      ==
+    ++  last
+      |=  [=source =timelock]
+      %-  hash-hashable:tip5
+      :*  leaf+&                          :: outcome of second pact
+          (hashable:^source source)       :: source of note
+          hash+(hash:^timelock timelock)  :: timelock of note
+          leaf+~                          :: second pact
+      ==
     ::
     ++  simple
       |=  [owners=sig =source]

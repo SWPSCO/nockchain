@@ -6,6 +6,7 @@ use std::error::Error;
 use std::fs;
 use std::path::Path;
 
+use bitcoincore_rpc::bitcoin::Block;
 pub use config::NockchainCli;
 use libp2p::identity::Keypair;
 use libp2p::multiaddr::Multiaddr;
@@ -24,6 +25,7 @@ use nockvm_macros::tas;
 use tracing::{debug, info, instrument};
 
 use crate::mining::{MiningKeyConfig, MiningPkhConfig};
+use crate::setup::{fakenet_blockchain_constants, BlockchainConstants, Seconds};
 
 /// Module for handling driver initialization signals
 pub mod driver_init {
@@ -380,9 +382,12 @@ pub async fn init_with_kernel<J: Jammer + Send + 'static>(
     };
 
     let born_init_tx = if cli.fakenet {
-        let pow_len = cli.fakenet_pow_len.unwrap_or(2);
-        let target = cli.fakenet_log_difficulty.unwrap_or(1);
-        let mut fakenet_constants = setup::fakenet_blockchain_constants(pow_len, target);
+        // Set the require fakenet constants first, then handle the optional ones
+        let mut fakenet_constants =
+            fakenet_blockchain_constants(cli.fakenet_pow_len, cli.fakenet_log_difficulty);
+        if let Some(coinbase_timelock_min) = cli.fakenet_coinbase_timelock_min {
+            fakenet_constants = fakenet_constants.with_coinbase_timelock_min(coinbase_timelock_min);
+        }
         if let Some(v1_phase) = cli.fakenet_v1_phase {
             fakenet_constants = fakenet_constants.with_v1_phase(v1_phase);
         }

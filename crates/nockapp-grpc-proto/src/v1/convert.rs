@@ -1,8 +1,9 @@
 use anyhow::Result;
 use nockchain_math::belt::Belt as DBelt;
 use nockchain_math::crypto::cheetah::{CheetahPoint as DCheetahPoint, F6lt as DF6lt};
-use nockchain_types as domain;
+use nockchain_types::tx_engine::v0;
 
+use crate::common::{ConversionError, RPCErrorStatus, Required};
 use crate::pb::common::v1::{
     time_lock_intent, BalanceEntry, Belt, BlockHeight, BlockHeightDelta, CheetahPoint, EightBelt,
     ErrorStatus, Hash, Input as PbInput, Lock, Name, NamedInput as PbNamedInput, Nicks, Note,
@@ -13,44 +14,6 @@ use crate::pb::common::v1::{
     TimeLockRangeRelative, WalletBalanceData,
 };
 use crate::pb::public::v1::{wallet_get_balance_response, WalletGetBalanceResponse};
-
-pub trait Required<T> {
-    fn required(self, kind: &'static str, field: &'static str) -> Result<T, ConversionError>;
-}
-
-impl<T> Required<T> for Option<T> {
-    fn required(self, kind: &'static str, field: &'static str) -> Result<T, ConversionError> {
-        self.ok_or_else(|| ConversionError::MissingField(kind, field))
-    }
-}
-
-#[derive(Debug, thiserror::Error)]
-#[error("grpc error code={code}: {message} ({details:?})")]
-pub struct RPCErrorStatus {
-    pub code: i32,
-    pub message: String,
-    pub details: Option<String>,
-}
-
-impl From<ErrorStatus> for RPCErrorStatus {
-    fn from(status: ErrorStatus) -> Self {
-        RPCErrorStatus {
-            code: status.code,
-            message: status.message,
-            details: status.details,
-        }
-    }
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum ConversionError {
-    #[error("cheetah error: {0}")]
-    Cheetah(#[from] nockchain_math::crypto::cheetah::CheetahError),
-    #[error("{0} is missing field: {1}")]
-    MissingField(&'static str, &'static str),
-    #[error("Invalid value: {0}")]
-    Invalid(&'static str),
-}
 // =========================
 // Helper: wrapper conversions (pb <-> domain)
 // =========================
@@ -147,25 +110,25 @@ impl TryFrom<CheetahPoint> for DCheetahPoint {
     }
 }
 
-impl From<domain::SchnorrPubkey> for SchnorrPubkey {
-    fn from(pk: domain::SchnorrPubkey) -> Self {
+impl From<v0::SchnorrPubkey> for SchnorrPubkey {
+    fn from(pk: v0::SchnorrPubkey) -> Self {
         SchnorrPubkey {
             value: Some(CheetahPoint::from(pk.0)),
         }
     }
 }
 
-impl TryFrom<SchnorrPubkey> for domain::SchnorrPubkey {
+impl TryFrom<SchnorrPubkey> for v0::SchnorrPubkey {
     type Error = ConversionError;
     fn try_from(pk: SchnorrPubkey) -> Result<Self, Self::Error> {
-        Ok(domain::SchnorrPubkey(DCheetahPoint::try_from(
+        Ok(v0::SchnorrPubkey(DCheetahPoint::try_from(
             pk.value.required("SchnorrPubkey", "value")?,
         )?))
     }
 }
 
-impl From<domain::SchnorrSignature> for PbSchnorrSignature {
-    fn from(sig: domain::SchnorrSignature) -> Self {
+impl From<v0::SchnorrSignature> for PbSchnorrSignature {
+    fn from(sig: v0::SchnorrSignature) -> Self {
         PbSchnorrSignature {
             chal: Some(EightBelt::from(sig.chal)),
             sig: Some(EightBelt::from(sig.sig)),
@@ -173,18 +136,18 @@ impl From<domain::SchnorrSignature> for PbSchnorrSignature {
     }
 }
 
-impl TryFrom<PbSchnorrSignature> for domain::SchnorrSignature {
+impl TryFrom<PbSchnorrSignature> for v0::SchnorrSignature {
     type Error = ConversionError;
 
     fn try_from(sig: PbSchnorrSignature) -> Result<Self, Self::Error> {
         let chal = sig.chal.required("SchnorrSignature", "chal")?.try_into()?;
         let sig_val = sig.sig.required("SchnorrSignature", "sig")?.try_into()?;
-        Ok(domain::SchnorrSignature { chal, sig: sig_val })
+        Ok(v0::SchnorrSignature { chal, sig: sig_val })
     }
 }
 
-impl From<domain::Signature> for PbSignature {
-    fn from(signature: domain::Signature) -> Self {
+impl From<v0::Signature> for PbSignature {
+    fn from(signature: v0::Signature) -> Self {
         let entries = signature
             .0
             .into_iter()
@@ -197,28 +160,28 @@ impl From<domain::Signature> for PbSignature {
     }
 }
 
-impl TryFrom<PbSignature> for domain::Signature {
+impl TryFrom<PbSignature> for v0::Signature {
     type Error = ConversionError;
 
     fn try_from(signature: PbSignature) -> Result<Self, Self::Error> {
         let mut entries = Vec::with_capacity(signature.entries.len());
         for entry in signature.entries {
-            let pk: domain::SchnorrPubkey = entry
+            let pk: v0::SchnorrPubkey = entry
                 .schnorr_pubkey
                 .required("SignatureEntry", "schnorr_pubkey")?
                 .try_into()?;
-            let sig: domain::SchnorrSignature = entry
+            let sig: v0::SchnorrSignature = entry
                 .signature
                 .required("SignatureEntry", "signature")?
                 .try_into()?;
             entries.push((pk, sig));
         }
-        Ok(domain::Signature(entries))
+        Ok(v0::Signature(entries))
     }
 }
 
-impl From<domain::Spend> for PbSpend {
-    fn from(spend: domain::Spend) -> Self {
+impl From<v0::Spend> for PbSpend {
+    fn from(spend: v0::Spend) -> Self {
         PbSpend {
             signature: spend.signature.map(PbSignature::from),
             seeds: spend.seeds.seeds.into_iter().map(PbSeed::from).collect(),
@@ -227,7 +190,7 @@ impl From<domain::Spend> for PbSpend {
     }
 }
 
-impl TryFrom<PbSpend> for domain::Spend {
+impl TryFrom<PbSpend> for v0::Spend {
     type Error = ConversionError;
 
     fn try_from(spend: PbSpend) -> Result<Self, Self::Error> {
@@ -237,12 +200,12 @@ impl TryFrom<PbSpend> for domain::Spend {
             .into_iter()
             .map(TryInto::try_into)
             .collect::<Result<Vec<_>, _>>()?;
-        let seeds = domain::Seeds { seeds };
-        let fee: domain::Nicks = spend
+        let seeds = v0::Seeds { seeds };
+        let fee: v0::Nicks = spend
             .miner_fee_nicks
             .required("Spend", "miner_fee_nicks")?
             .into();
-        Ok(domain::Spend {
+        Ok(v0::Spend {
             signature,
             seeds,
             fee,
@@ -250,8 +213,8 @@ impl TryFrom<PbSpend> for domain::Spend {
     }
 }
 
-impl From<domain::Hash> for Hash {
-    fn from(h: domain::Hash) -> Self {
+impl From<v0::Hash> for Hash {
+    fn from(h: v0::Hash) -> Self {
         Hash {
             belt_1: Some(Belt::from(h.0[0])),
             belt_2: Some(Belt::from(h.0[1])),
@@ -262,10 +225,10 @@ impl From<domain::Hash> for Hash {
     }
 }
 
-impl TryFrom<Hash> for domain::Hash {
+impl TryFrom<Hash> for v0::Hash {
     type Error = ConversionError;
     fn try_from(h: Hash) -> Result<Self, Self::Error> {
-        Ok(domain::Hash([
+        Ok(v0::Hash([
             h.belt_1.required("Hash", "belt_1")?.into(),
             h.belt_2.required("Hash", "belt_2")?.into(),
             h.belt_3.required("Hash", "belt_3")?.into(),
@@ -275,8 +238,8 @@ impl TryFrom<Hash> for domain::Hash {
     }
 }
 
-impl From<domain::Name> for Name {
-    fn from(name: domain::Name) -> Self {
+impl From<v0::Name> for Name {
+    fn from(name: v0::Name) -> Self {
         Name {
             first: Some(Hash::from(name.first)),
             last: Some(Hash::from(name.last)),
@@ -284,17 +247,17 @@ impl From<domain::Name> for Name {
     }
 }
 
-impl TryFrom<Name> for domain::Name {
+impl TryFrom<Name> for v0::Name {
     type Error = ConversionError;
     fn try_from(name: Name) -> Result<Self, Self::Error> {
-        let first: domain::Hash = name.first.required("Name", "first")?.try_into()?;
-        let last: domain::Hash = name.last.required("Name", "last")?.try_into()?;
-        Ok(domain::Name::new(first, last))
+        let first: v0::Hash = name.first.required("Name", "first")?.try_into()?;
+        let last: v0::Hash = name.last.required("Name", "last")?.try_into()?;
+        Ok(v0::Name::new(first, last))
     }
 }
 
-impl From<domain::Lock> for Lock {
-    fn from(lock: domain::Lock) -> Self {
+impl From<v0::Lock> for Lock {
+    fn from(lock: v0::Lock) -> Self {
         Lock {
             keys_required: lock.keys_required as u32,
             schnorr_pubkeys: lock.pubkeys.into_iter().map(Into::into).collect(),
@@ -302,10 +265,10 @@ impl From<domain::Lock> for Lock {
     }
 }
 
-impl TryFrom<Lock> for domain::Lock {
+impl TryFrom<Lock> for v0::Lock {
     type Error = ConversionError;
     fn try_from(lock: Lock) -> Result<Self, Self::Error> {
-        Ok(domain::Lock {
+        Ok(v0::Lock {
             keys_required: lock.keys_required as u64,
             pubkeys: lock
                 .schnorr_pubkeys
@@ -316,8 +279,8 @@ impl TryFrom<Lock> for domain::Lock {
     }
 }
 
-impl From<domain::Source> for Source {
-    fn from(source: domain::Source) -> Self {
+impl From<v0::Source> for Source {
+    fn from(source: v0::Source) -> Self {
         Source {
             hash: Some(Hash::from(source.hash)),
             coinbase: source.is_coinbase,
@@ -325,18 +288,18 @@ impl From<domain::Source> for Source {
     }
 }
 
-impl TryFrom<Source> for domain::Source {
+impl TryFrom<Source> for v0::Source {
     type Error = ConversionError;
     fn try_from(source: Source) -> Result<Self, Self::Error> {
-        Ok(domain::Source {
+        Ok(v0::Source {
             hash: source.hash.required("Source", "hash")?.try_into()?,
             is_coinbase: source.coinbase,
         })
     }
 }
 
-impl From<domain::Seed> for PbSeed {
-    fn from(seed: domain::Seed) -> Self {
+impl From<v0::Seed> for PbSeed {
+    fn from(seed: v0::Seed) -> Self {
         PbSeed {
             output_source: seed.output_source.map(|source| OutputSource {
                 source: Some(Source::from(source)),
@@ -344,14 +307,14 @@ impl From<domain::Seed> for PbSeed {
             recipient: Some(Lock::from(seed.recipient)),
             timelock_intent: seed
                 .timelock_intent
-                .map(|intent| TimeLockIntent::from(domain::Timelock(Some(intent)))),
+                .map(|intent| TimeLockIntent::from(v0::Timelock(Some(intent)))),
             gift: Some(Nicks::from(seed.gift)),
             parent_hash: Some(Hash::from(seed.parent_hash)),
         }
     }
 }
 
-impl TryFrom<PbSeed> for domain::Seed {
+impl TryFrom<PbSeed> for v0::Seed {
     type Error = ConversionError;
 
     fn try_from(seed: PbSeed) -> Result<Self, Self::Error> {
@@ -366,27 +329,27 @@ impl TryFrom<PbSeed> for domain::Seed {
             None => None,
         };
 
-        let recipient: domain::Lock = seed.recipient.required("Seed", "recipient")?.try_into()?;
+        let recipient: v0::Lock = seed.recipient.required("Seed", "recipient")?.try_into()?;
 
         let timelock_intent = seed
             .timelock_intent
             .map(
-                |intent| -> Result<Option<domain::TimelockIntent>, ConversionError> {
-                    let timelock: domain::Timelock = intent.try_into()?;
+                |intent| -> Result<Option<v0::TimelockIntent>, ConversionError> {
+                    let timelock: v0::Timelock = intent.try_into()?;
                     Ok(timelock.0)
                 },
             )
             .transpose()?
             .flatten();
 
-        let gift: domain::Nicks = seed.gift.required("Seed", "gift")?.into();
+        let gift: v0::Nicks = seed.gift.required("Seed", "gift")?.into();
 
-        let parent_hash: domain::Hash = seed
+        let parent_hash: v0::Hash = seed
             .parent_hash
             .required("Seed", "parent_hash")?
             .try_into()?;
 
-        Ok(domain::Seed {
+        Ok(v0::Seed {
             output_source,
             recipient,
             timelock_intent,
@@ -396,8 +359,8 @@ impl TryFrom<PbSeed> for domain::Seed {
     }
 }
 
-impl From<domain::Input> for PbInput {
-    fn from(input: domain::Input) -> Self {
+impl From<v0::Input> for PbInput {
+    fn from(input: v0::Input) -> Self {
         PbInput {
             note: Some(Note::from(input.note)),
             spend: Some(PbSpend::from(input.spend)),
@@ -405,19 +368,19 @@ impl From<domain::Input> for PbInput {
     }
 }
 
-impl TryFrom<PbInput> for domain::Input {
+impl TryFrom<PbInput> for v0::Input {
     type Error = ConversionError;
 
     fn try_from(input: PbInput) -> Result<Self, Self::Error> {
-        Ok(domain::Input {
+        Ok(v0::Input {
             note: input.note.required("Input", "note")?.try_into()?,
             spend: input.spend.required("Input", "spend")?.try_into()?,
         })
     }
 }
 
-impl From<(domain::Name, domain::Input)> for PbNamedInput {
-    fn from((name, input): (domain::Name, domain::Input)) -> Self {
+impl From<(v0::Name, v0::Input)> for PbNamedInput {
+    fn from((name, input): (v0::Name, v0::Input)) -> Self {
         PbNamedInput {
             name: Some(Name::from(name)),
             input: Some(PbInput::from(input)),
@@ -425,7 +388,7 @@ impl From<(domain::Name, domain::Input)> for PbNamedInput {
     }
 }
 
-impl TryFrom<PbNamedInput> for (domain::Name, domain::Input) {
+impl TryFrom<PbNamedInput> for (v0::Name, v0::Input) {
     type Error = ConversionError;
 
     fn try_from(named: PbNamedInput) -> Result<Self, Self::Error> {
@@ -435,8 +398,8 @@ impl TryFrom<PbNamedInput> for (domain::Name, domain::Input) {
     }
 }
 
-impl From<domain::RawTx> for PbRawTransaction {
-    fn from(tx: domain::RawTx) -> Self {
+impl From<v0::RawTx> for PbRawTransaction {
+    fn from(tx: v0::RawTx) -> Self {
         PbRawTransaction {
             named_inputs: tx.inputs.0.into_iter().map(PbNamedInput::from).collect(),
             timelock_range: Some(TimeLockRangeAbsolute::from(tx.timelock_range)),
@@ -446,7 +409,7 @@ impl From<domain::RawTx> for PbRawTransaction {
     }
 }
 
-impl TryFrom<PbRawTransaction> for domain::RawTx {
+impl TryFrom<PbRawTransaction> for v0::RawTx {
     type Error = ConversionError;
 
     fn try_from(tx: PbRawTransaction) -> Result<Self, Self::Error> {
@@ -455,18 +418,18 @@ impl TryFrom<PbRawTransaction> for domain::RawTx {
             .into_iter()
             .map(TryInto::try_into)
             .collect::<Result<Vec<_>, _>>()?;
-        let inputs = domain::Inputs(inputs_vec);
-        let timelock_range: domain::TimelockRangeAbsolute = tx
+        let inputs = v0::Inputs(inputs_vec);
+        let timelock_range: v0::TimelockRangeAbsolute = tx
             .timelock_range
             .required("RawTransaction", "timelock_range")?
             .into();
-        let total_fees: domain::Nicks = tx
+        let total_fees: v0::Nicks = tx
             .total_fees
             .required("RawTransaction", "total_fees")?
             .into();
-        let id: domain::Hash = tx.id.required("RawTransaction", "id")?.try_into()?;
+        let id: v0::Hash = tx.id.required("RawTransaction", "id")?.try_into()?;
 
-        Ok(domain::RawTx {
+        Ok(v0::RawTx {
             id,
             inputs,
             timelock_range,
@@ -475,56 +438,56 @@ impl TryFrom<PbRawTransaction> for domain::RawTx {
     }
 }
 
-impl From<domain::BlockHeight> for BlockHeight {
-    fn from(h: domain::BlockHeight) -> Self {
+impl From<v0::BlockHeight> for BlockHeight {
+    fn from(h: v0::BlockHeight) -> Self {
         BlockHeight { value: (h.0).0 }
     }
 }
 
-impl From<BlockHeight> for domain::BlockHeight {
+impl From<BlockHeight> for v0::BlockHeight {
     fn from(h: BlockHeight) -> Self {
-        domain::BlockHeight(DBelt(h.value))
+        v0::BlockHeight(DBelt(h.value))
     }
 }
 
-impl From<BlockHeightDelta> for domain::BlockHeightDelta {
+impl From<BlockHeightDelta> for v0::BlockHeightDelta {
     fn from(h: BlockHeightDelta) -> Self {
-        domain::BlockHeightDelta(DBelt(h.value))
+        v0::BlockHeightDelta(DBelt(h.value))
     }
 }
 
-impl From<domain::Nicks> for Nicks {
-    fn from(n: domain::Nicks) -> Self {
+impl From<v0::Nicks> for Nicks {
+    fn from(n: v0::Nicks) -> Self {
         Nicks { value: n.0 as u64 }
     }
 }
 
-impl From<domain::BlockHeightDelta> for BlockHeightDelta {
-    fn from(d: domain::BlockHeightDelta) -> Self {
+impl From<v0::BlockHeightDelta> for BlockHeightDelta {
+    fn from(d: v0::BlockHeightDelta) -> Self {
         BlockHeightDelta { value: d.0 .0 }
     }
 }
 
-impl From<Nicks> for domain::Nicks {
+impl From<Nicks> for v0::Nicks {
     fn from(n: Nicks) -> Self {
-        domain::Nicks(n.value as usize)
+        v0::Nicks(n.value as usize)
     }
 }
 
-impl From<domain::Version> for NoteVersion {
-    fn from(v: domain::Version) -> Self {
+impl From<v0::Version> for NoteVersion {
+    fn from(v: v0::Version) -> Self {
         NoteVersion { value: v.into() }
     }
 }
 
-impl From<NoteVersion> for domain::Version {
+impl From<NoteVersion> for v0::Version {
     fn from(v: NoteVersion) -> Self {
-        domain::Version::from(v.value)
+        v0::Version::from(v.value)
     }
 }
 
-impl From<domain::TimelockRangeAbsolute> for TimeLockRangeAbsolute {
-    fn from(range: domain::TimelockRangeAbsolute) -> Self {
+impl From<v0::TimelockRangeAbsolute> for TimeLockRangeAbsolute {
+    fn from(range: v0::TimelockRangeAbsolute) -> Self {
         TimeLockRangeAbsolute {
             min: range.min.map(Into::into),
             max: range.max.map(Into::into),
@@ -532,17 +495,17 @@ impl From<domain::TimelockRangeAbsolute> for TimeLockRangeAbsolute {
     }
 }
 
-impl From<TimeLockRangeAbsolute> for domain::TimelockRangeAbsolute {
+impl From<TimeLockRangeAbsolute> for v0::TimelockRangeAbsolute {
     fn from(range: TimeLockRangeAbsolute) -> Self {
-        domain::TimelockRangeAbsolute::new(
+        v0::TimelockRangeAbsolute::new(
             range.min.map(|v| v.try_into().unwrap()),
             range.max.map(|v| v.try_into().unwrap()),
         )
     }
 }
 
-impl From<domain::TimelockRangeRelative> for TimeLockRangeRelative {
-    fn from(range: domain::TimelockRangeRelative) -> Self {
+impl From<v0::TimelockRangeRelative> for TimeLockRangeRelative {
+    fn from(range: v0::TimelockRangeRelative) -> Self {
         TimeLockRangeRelative {
             min: range.min.map(Into::into),
             max: range.max.map(Into::into),
@@ -550,9 +513,9 @@ impl From<domain::TimelockRangeRelative> for TimeLockRangeRelative {
     }
 }
 
-impl From<TimeLockRangeRelative> for domain::TimelockRangeRelative {
+impl From<TimeLockRangeRelative> for v0::TimelockRangeRelative {
     fn from(range: TimeLockRangeRelative) -> Self {
-        domain::TimelockRangeRelative::new(
+        v0::TimelockRangeRelative::new(
             range.min.map(|v| v.try_into().unwrap()),
             range.max.map(|v| v.try_into().unwrap()),
         )
@@ -560,7 +523,7 @@ impl From<TimeLockRangeRelative> for domain::TimelockRangeRelative {
 }
 
 // Local helpers: None if both ends are None, otherwise Some(mapped range)
-fn abs_range_to_opt(range: domain::TimelockRangeAbsolute) -> Option<TimeLockRangeAbsolute> {
+fn abs_range_to_opt(range: v0::TimelockRangeAbsolute) -> Option<TimeLockRangeAbsolute> {
     if range.min.is_none() && range.max.is_none() {
         None
     } else {
@@ -568,7 +531,7 @@ fn abs_range_to_opt(range: domain::TimelockRangeAbsolute) -> Option<TimeLockRang
     }
 }
 
-fn rel_range_to_opt(range: domain::TimelockRangeRelative) -> Option<TimeLockRangeRelative> {
+fn rel_range_to_opt(range: v0::TimelockRangeRelative) -> Option<TimeLockRangeRelative> {
     if range.min.is_none() && range.max.is_none() {
         None
     } else {
@@ -576,8 +539,8 @@ fn rel_range_to_opt(range: domain::TimelockRangeRelative) -> Option<TimeLockRang
     }
 }
 
-impl From<domain::Timelock> for TimeLockIntent {
-    fn from(tl: domain::Timelock) -> Self {
+impl From<v0::Timelock> for TimeLockIntent {
+    fn from(tl: v0::Timelock) -> Self {
         let value = match tl.0 {
             None => None,
             Some(intent) => {
@@ -600,19 +563,19 @@ impl From<domain::Timelock> for TimeLockIntent {
     }
 }
 
-impl TryFrom<TimeLockIntent> for domain::Timelock {
+impl TryFrom<TimeLockIntent> for v0::Timelock {
     type Error = ConversionError;
     fn try_from(intent: TimeLockIntent) -> Result<Self, Self::Error> {
         let tl = match intent.value {
             Some(time_lock_intent::Value::Absolute(abs)) => {
-                domain::Timelock(Some(domain::TimelockIntent {
+                v0::Timelock(Some(v0::TimelockIntent {
                     absolute: abs.into(),
-                    relative: domain::TimelockRangeRelative::none(),
+                    relative: v0::TimelockRangeRelative::none(),
                 }))
             }
             Some(time_lock_intent::Value::Relative(rel)) => {
-                domain::Timelock(Some(domain::TimelockIntent {
-                    absolute: domain::TimelockRangeAbsolute::none(),
+                v0::Timelock(Some(v0::TimelockIntent {
+                    absolute: v0::TimelockRangeAbsolute::none(),
                     relative: rel.into(),
                 }))
             }
@@ -623,22 +586,22 @@ impl TryFrom<TimeLockIntent> for domain::Timelock {
                 let rel = both.relative.ok_or(ConversionError::Invalid(
                     "relative not present in AbsoluteAndRelative",
                 ))?;
-                domain::Timelock(Some(domain::TimelockIntent {
+                v0::Timelock(Some(v0::TimelockIntent {
                     absolute: abs.into(),
                     relative: rel.into(),
                 }))
             }
             Some(time_lock_intent::Value::Neither(..)) => {
-                domain::Timelock(Some(domain::TimelockIntent::none()))
+                v0::Timelock(Some(v0::TimelockIntent::none()))
             }
-            None => domain::Timelock(None),
+            None => v0::Timelock(None),
         };
         Ok(tl)
     }
 }
 
-impl From<domain::Note> for Note {
-    fn from(n: domain::Note) -> Self {
+impl From<v0::NoteV0> for Note {
+    fn from(n: v0::NoteV0) -> Self {
         Note {
             origin_page: Some(BlockHeight::from(n.head.origin_page)),
             timelock: match &n.head.timelock.0 {
@@ -654,20 +617,20 @@ impl From<domain::Note> for Note {
     }
 }
 
-impl TryFrom<Note> for domain::Note {
+impl TryFrom<Note> for v0::NoteV0 {
     type Error = ConversionError;
     fn try_from(n: Note) -> Result<Self, Self::Error> {
-        Ok(domain::Note {
-            head: domain::NoteHead {
+        Ok(v0::NoteV0 {
+            head: v0::NoteHead {
                 version: n.version.required("Note", "version")?.into(),
                 origin_page: n.origin_page.required("Note", "origin_page")?.into(),
                 timelock: n
                     .timelock
                     .map(TryInto::try_into)
                     .transpose()?
-                    .unwrap_or(domain::Timelock(None)),
+                    .unwrap_or(v0::Timelock(None)),
             },
-            tail: domain::NoteTail {
+            tail: v0::NoteTail {
                 name: n.name.required("Note", "name")?.try_into()?,
                 lock: n.lock.required("Note", "lock")?.try_into()?,
                 source: n.source.required("Note", "source")?.try_into()?,
@@ -677,7 +640,7 @@ impl TryFrom<Note> for domain::Note {
     }
 }
 
-impl TryFrom<WalletBalanceData> for domain::BalanceUpdate {
+impl TryFrom<WalletBalanceData> for v0::BalanceUpdate {
     type Error = anyhow::Error;
 
     fn try_from(update: WalletBalanceData) -> Result<Self> {
@@ -685,19 +648,19 @@ impl TryFrom<WalletBalanceData> for domain::BalanceUpdate {
             .notes
             .into_iter()
             .map(|entry| {
-                let name: domain::Name = entry
+                let name: v0::Name = entry
                     .name
                     .required("WalletBalanceData", "name")?
                     .try_into()?;
-                let note: domain::Note = entry
+                let note: v0::NoteV0 = entry
                     .note
                     .required("WalletBalanceData", "note")?
                     .try_into()?;
                 Ok((name, note))
             })
-            .collect::<Result<Vec<(domain::Name, domain::Note)>, Self::Error>>()?;
-        Ok(domain::BalanceUpdate {
-            notes: domain::Balance(notes),
+            .collect::<Result<Vec<(v0::Name, v0::NoteV0)>, Self::Error>>()?;
+        Ok(v0::BalanceUpdate {
+            notes: v0::Balance(notes),
             height: update
                 .height
                 .required("WalletBalanceData", "height")?
@@ -710,10 +673,10 @@ impl TryFrom<WalletBalanceData> for domain::BalanceUpdate {
     }
 }
 
-impl TryFrom<domain::BalanceUpdate> for WalletBalanceData {
+impl TryFrom<v0::BalanceUpdate> for WalletBalanceData {
     type Error = ErrorStatus;
 
-    fn try_from(update: domain::BalanceUpdate) -> Result<Self, Self::Error> {
+    fn try_from(update: v0::BalanceUpdate) -> Result<Self, Self::Error> {
         let notes = update
             .notes
             .0
@@ -737,10 +700,10 @@ impl TryFrom<domain::BalanceUpdate> for WalletBalanceData {
     }
 }
 
-impl TryFrom<domain::BalanceUpdate> for WalletGetBalanceResponse {
+impl TryFrom<v0::BalanceUpdate> for WalletGetBalanceResponse {
     type Error = ErrorStatus;
 
-    fn try_from(update: domain::BalanceUpdate) -> Result<Self, Self::Error> {
+    fn try_from(update: v0::BalanceUpdate) -> Result<Self, Self::Error> {
         let balance_data = WalletBalanceData::try_from(update)?;
         Ok(WalletGetBalanceResponse {
             result: Some(wallet_get_balance_response::Result::Balance(balance_data)),
@@ -748,7 +711,7 @@ impl TryFrom<domain::BalanceUpdate> for WalletGetBalanceResponse {
     }
 }
 
-impl TryFrom<WalletGetBalanceResponse> for domain::BalanceUpdate {
+impl TryFrom<WalletGetBalanceResponse> for v0::BalanceUpdate {
     type Error = anyhow::Error;
     fn try_from(update: WalletGetBalanceResponse) -> Result<Self> {
         let update = update
@@ -756,7 +719,7 @@ impl TryFrom<WalletGetBalanceResponse> for domain::BalanceUpdate {
             .required("WalletGetBalanceResponse", "result")?;
         match update {
             wallet_get_balance_response::Result::Balance(update) => {
-                Ok(domain::BalanceUpdate::try_from(update)?)
+                Ok(v0::BalanceUpdate::try_from(update)?)
             }
             wallet_get_balance_response::Result::Error(err) => Err(RPCErrorStatus::from(err))?,
         }

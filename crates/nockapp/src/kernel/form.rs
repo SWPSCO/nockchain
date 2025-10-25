@@ -769,12 +769,8 @@ impl Serf {
         let (maybe_state, cold, event_num_raw) = if let Some(c) = checkpoint {
             let saveable = c.load();
 
-            let checkpoint_noun = saveable.noun.copy_to_stack(&mut stack);
-            let checkpoint_cell = checkpoint_noun
-                .as_cell()
-                .expect("snapshot noun should be a cell");
-            let ker_state = checkpoint_cell.head();
-            let cold_noun = checkpoint_cell.tail();
+            let ker_state = saveable.state.copy_to_stack(&mut stack);
+            let cold_noun = saveable.cold.copy_to_stack(&mut stack);
             let cold_vecs = Cold::from_noun(&mut stack, &cold_noun)
                 .expect("Could not load cold state from snapshot");
             let cold = Cold::from_vecs(&mut stack, cold_vecs.0, cold_vecs.1, cold_vecs.2);
@@ -1315,21 +1311,20 @@ impl SerfCheckpoint for SaveableCheckpoint {
         cold_state: Cold,
         metrics: &Option<Arc<NockAppMetrics>>,
     ) -> Self {
-        let mut slab = NounSlab::new();
-
         let cold_noun_start = Instant::now();
         // Cold state has nouns in it which are *not* copied in into_noun
         // TODO: FIX THIS FOOTGUN
         let cold_stack_noun = cold_state.into_noun(stack);
-        let cold_noun = slab.copy_into(cold_stack_noun);
+        let mut cold_slab: NounSlab = NounSlab::new();
+        let cold_copy = cold_slab.copy_into(cold_stack_noun);
+        cold_slab.set_root(cold_copy);
         let cold_noun_elapsed = cold_noun_start.elapsed();
 
         let state_copy_start = Instant::now();
-        let kernel_state_slab = slab.copy_into(kernel_state);
+        let mut state_slab: NounSlab = NounSlab::new();
+        let state_copy = state_slab.copy_into(kernel_state);
+        state_slab.set_root(state_copy);
         let state_copy_elapsed = state_copy_start.elapsed();
-
-        let cell = T(&mut slab, &[kernel_state_slab, cold_noun]);
-        slab.set_root(cell);
 
         if let Some(metrics) = metrics {
             metrics
@@ -1342,7 +1337,8 @@ impl SerfCheckpoint for SaveableCheckpoint {
         Self {
             ker_hash,
             event_num,
-            noun: slab,
+            state: state_slab,
+            cold: cold_slab,
         }
     }
 
