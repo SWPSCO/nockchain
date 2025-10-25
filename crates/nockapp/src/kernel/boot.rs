@@ -24,7 +24,8 @@ use crate::save::SaveableCheckpoint;
 use crate::utils::error::{CrownError, ExternalError};
 use crate::{default_data_dir, AtomExt, NockApp};
 
-const DEFAULT_SAVE_INTERVAL: u64 = 120000;
+pub const DEFAULT_SAVE_INTERVAL: u64 = 120000;
+const DEFAULT_SAVE_INTERVAL_STR: &str = "120000";
 const DEFAULT_LOG_FILTER: &str = "info";
 
 #[derive(Debug, Clone, ValueEnum)]
@@ -109,7 +110,12 @@ pub struct Cli {
     #[command(flatten)]
     pub trace_opts: TraceOpts,
 
-    #[arg(long, help = "Set the save interval for checkpoints (in ms)")]
+    #[arg(
+        long,
+        help = "Set the save interval for checkpoints (in ms). Use 'none' or '0' to disable periodic saves.",
+        default_value = DEFAULT_SAVE_INTERVAL_STR,
+        value_parser = parse_save_interval
+    )]
     pub save_interval: Option<u64>,
 
     #[arg(long, help = "Control colored output", value_enum, default_value_t = ColorChoice::Auto)]
@@ -134,6 +140,60 @@ pub struct Cli {
         default_value_t = NockStackSize::Normal
     )]
     pub stack_size: NockStackSize,
+}
+
+impl Cli {
+    fn normalized_save_interval(&self) -> Option<u64> {
+        self.save_interval
+            .and_then(|value| if value == 0 { None } else { Some(value) })
+    }
+}
+
+fn parse_save_interval(input: &str) -> Result<u64, String> {
+    let trimmed = input.trim();
+
+    if trimmed.eq_ignore_ascii_case("none") {
+        Ok(0)
+    } else {
+        let value = trimmed
+            .parse::<u64>()
+            .map_err(|e| format!("Invalid save interval '{trimmed}': {e}"))?;
+        Ok(value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_save_interval;
+
+    #[test]
+    fn parse_save_interval_none_variants() {
+        assert_eq!(parse_save_interval("none").unwrap(), 0);
+        assert_eq!(parse_save_interval("NoNe").unwrap(), 0);
+        assert_eq!(parse_save_interval("0").unwrap(), 0);
+        assert_eq!(parse_save_interval(" 0 ").unwrap(), 0);
+    }
+
+    #[test]
+    fn parse_save_interval_positive_values() {
+        assert_eq!(parse_save_interval("1").unwrap(), 1);
+        assert_eq!(parse_save_interval(" 120000 ").unwrap(), 120000);
+    }
+
+    #[test]
+    fn parse_save_interval_rejects_invalid() {
+        assert!(parse_save_interval("abc").is_err());
+    }
+
+    #[test]
+    fn normalized_save_interval_filters_zero() {
+        let mut cli = super::default_boot_cli(false);
+        cli.save_interval = Some(0);
+        assert_eq!(cli.normalized_save_interval(), None);
+
+        cli.save_interval = Some(5000);
+        assert_eq!(cli.normalized_save_interval(), Some(5000));
+    }
 }
 
 /// Result of setting up a NockApp
@@ -355,6 +415,10 @@ pub async fn setup_<J: Jammer + Send + 'static>(
     info!("kernel: starting");
     debug!("kernel: pma directory: {:?}", pma_dir);
     debug!("kernel: snapshots directory: {:?}", jams_dir);
+    info!("NockApp boot cli: {:?}", cli);
+    let save_interval = cli
+        .normalized_save_interval()
+        .map(std::time::Duration::from_millis);
 
     let kernel_f = async |checkpoint| {
         let kernel: Kernel<SaveableCheckpoint> = match cli.stack_size {
@@ -396,8 +460,6 @@ pub async fn setup_<J: Jammer + Send + 'static>(
         let res: Result<Kernel<SaveableCheckpoint>, CrownError<ExternalError>> = Ok(kernel);
         res
     };
-
-    let save_interval = cli.save_interval.map(std::time::Duration::from_millis);
 
     let app: NockApp<J> = NockApp::new(kernel_f, &jams_dir, save_interval).await?;
 

@@ -25,7 +25,7 @@ use tokio::select;
 use tokio::sync::{broadcast, mpsc, Mutex, OwnedMutexGuard};
 use tokio::time::{interval_at, Duration, Instant, Interval};
 use tokio_util::task::TaskTracker;
-use tracing::{debug, error, instrument, trace, warn};
+use tracing::{debug, error, info, instrument, trace, warn};
 use wire::WireRepr;
 
 use crate::kernel::form::Kernel;
@@ -171,14 +171,14 @@ impl<J: Jammer + Send + 'static> NockApp<J> {
         // let tasks = Arc::new(TaskJoinSet::new());
         let tasks = TaskTracker::new();
         let save_interval = save_interval_duration.map(|duration| {
-            debug!("save_interval_duration: {:?}", duration);
+            info!("Nockapp save interval duration: {:?}", duration);
             let first_tick_at = Instant::now() + duration;
             let mut interval = interval_at(first_tick_at, duration);
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip); // important so we don't stack ticks when lagging
             interval
         });
         if save_interval.is_none() {
-            debug!("save interval disabled; periodic saves off");
+            info!("Nockapp save interval disabled; periodic saves off");
         }
         let exit_status = AtomicBool::new(false);
         let abort_immediately = AtomicBool::new(false);

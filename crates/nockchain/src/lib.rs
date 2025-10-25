@@ -6,7 +6,6 @@ use std::error::Error;
 use std::fs;
 use std::path::Path;
 
-use bitcoincore_rpc::bitcoin::Block;
 pub use config::NockchainCli;
 use libp2p::identity::Keypair;
 use libp2p::multiaddr::Multiaddr;
@@ -25,7 +24,7 @@ use nockvm_macros::tas;
 use tracing::{debug, info, instrument};
 
 use crate::mining::{MiningKeyConfig, MiningPkhConfig};
-use crate::setup::{fakenet_blockchain_constants, BlockchainConstants, Seconds};
+use crate::setup::fakenet_blockchain_constants;
 
 /// Module for handling driver initialization signals
 pub mod driver_init {
@@ -213,7 +212,7 @@ pub async fn init_with_kernel<J: Jammer + Send + 'static>(
         let keypair_path = Path::new(config::IDENTITY_PATH);
         load_keypair(keypair_path, cli.no_new_peer_id)?
     };
-    eprintln!("allowed_peers_path: {:?}", cli.allowed_peers_path);
+    info!("allowed_peers_path: {:?}", cli.allowed_peers_path);
     let allowed = cli.allowed_peers_path.as_ref().map(|path| {
         let contents = fs::read_to_string(path).expect("failed to read allowed peers file: {}");
         let peer_ids: Vec<PeerId> = contents

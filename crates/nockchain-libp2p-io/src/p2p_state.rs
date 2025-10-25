@@ -9,7 +9,7 @@ use nockapp::noun::slab::NounSlab;
 use nockapp::NockAppError;
 use nockvm::noun::Noun;
 use rand::prelude::SliceRandom;
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, info, trace};
 
 use crate::messages::NockchainDataRequest;
 use crate::metrics::NockchainP2PMetrics;
