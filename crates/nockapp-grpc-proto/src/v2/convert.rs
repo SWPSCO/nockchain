@@ -1,10 +1,10 @@
 use nockchain_math::belt::Belt;
 use nockchain_types::tx_engine::common::Name;
 use nockchain_types::tx_engine::v1::{
-    BalanceUpdate, Hax, HaxPreimage as V1HaxPreimage, LockMerkleProof, LockPrimitive,
-    LockTim, MerkleProof, Note, NoteData, NoteDataEntry, NoteV1, Pkh, PkhSignature,
-    PkhSignatureEntry, RawTx as V1RawTx, Seed as V1Seed, Spend as V1Spend, Spend0, Spend1,
-    SpendCondition, Witness as V1Witness,
+    BalanceUpdate, Hax, HaxPreimage as V1HaxPreimage, LockMerkleProof, LockPrimitive, LockTim,
+    MerkleProof, Note, NoteData, NoteDataEntry, NoteV1, Pkh, PkhSignature, PkhSignatureEntry,
+    RawTx as V1RawTx, Seed as V1Seed, Spend as V1Spend, Spend0, Spend1, SpendCondition,
+    Witness as V1Witness,
 };
 use nockchain_types::{v0, v1};
 
@@ -61,7 +61,8 @@ impl From<NoteData> for PbNoteData {
 impl TryFrom<PbNoteData> for NoteData {
     type Error = ConversionError;
     fn try_from(data: PbNoteData) -> Result<Self, Self::Error> {
-        let entries = data.entries
+        let entries = data
+            .entries
             .into_iter()
             .map(NoteDataEntry::try_from)
             .collect::<Result<Vec<_>, _>>()?;
@@ -99,7 +100,10 @@ impl From<Note> for PbNote {
 impl TryFrom<PbNote> for Note {
     type Error = ConversionError;
     fn try_from(note: PbNote) -> Result<Self, Self::Error> {
-        match note.note_version.ok_or(ConversionError::Invalid("missing note_version"))? {
+        match note
+            .note_version
+            .ok_or(ConversionError::Invalid("missing note_version"))?
+        {
             note::NoteVersion::Legacy(legacy) => Ok(Note::V0(legacy.try_into()?)),
             note::NoteVersion::V1(v1) => Ok(Note::V1(NoteV1 {
                 version: v1::Version::V1,
@@ -109,8 +113,14 @@ impl TryFrom<PbNote> for Note {
                         .value,
                 )),
                 name: v0::Name::try_from(v1.name.ok_or(ConversionError::Invalid("missing name"))?)?,
-                note_data: NoteData::try_from(v1.note_data.ok_or(ConversionError::Invalid("missing note_data"))?)?,
-                assets: v1.assets.ok_or(ConversionError::Invalid("missing assets"))?.into(),
+                note_data: NoteData::try_from(
+                    v1.note_data
+                        .ok_or(ConversionError::Invalid("missing note_data"))?,
+                )?,
+                assets: v1
+                    .assets
+                    .ok_or(ConversionError::Invalid("missing assets"))?
+                    .into(),
             })),
         }
     }
@@ -125,19 +135,21 @@ impl TryFrom<PbBalance> for BalanceUpdate {
             .map(|be| -> Result<(v1::Name, v1::Note), ConversionError> {
                 Ok((
                     v0::Name::try_from(be.name.ok_or(ConversionError::Invalid("missing name"))?)?,
-                    v1::Note::try_from(be.note.ok_or(ConversionError::Invalid("missing note"))?)?
+                    v1::Note::try_from(be.note.ok_or(ConversionError::Invalid("missing note"))?)?,
                 ))
             })
             .collect::<Result<Vec<_>, _>>()?;
         Ok(BalanceUpdate {
             height: v1::BlockHeight(Belt(
-                update.height
+                update
+                    .height
                     .ok_or(ConversionError::Invalid("missing height"))?
-                    .value
+                    .value,
             )),
             block_id: v0::Hash::try_from(
-                update.block_id
-                    .ok_or(ConversionError::Invalid("missing block_id"))?
+                update
+                    .block_id
+                    .ok_or(ConversionError::Invalid("missing block_id"))?,
             )?,
             notes: v1::Balance(notes),
         })
@@ -358,10 +370,22 @@ impl TryFrom<PbSeed> for V1Seed {
     fn try_from(seed: PbSeed) -> Result<Self, Self::Error> {
         Ok(V1Seed {
             output_source: seed.output_source.map(|s| s.try_into()).transpose()?,
-            lock_root: v1::Hash::try_from(seed.lock_root.ok_or(ConversionError::Invalid("missing lock_root"))?)?,
-            note_data: NoteData::try_from(seed.note_data.ok_or(ConversionError::Invalid("missing note_data"))?)?,
-            gift: seed.gift.ok_or(ConversionError::Invalid("missing gift"))?.into(),
-            parent_hash: v1::Hash::try_from(seed.parent_hash.ok_or(ConversionError::Invalid("missing parent_hash"))?)?,
+            lock_root: v1::Hash::try_from(
+                seed.lock_root
+                    .ok_or(ConversionError::Invalid("missing lock_root"))?,
+            )?,
+            note_data: NoteData::try_from(
+                seed.note_data
+                    .ok_or(ConversionError::Invalid("missing note_data"))?,
+            )?,
+            gift: seed
+                .gift
+                .ok_or(ConversionError::Invalid("missing gift"))?
+                .into(),
+            parent_hash: v1::Hash::try_from(
+                seed.parent_hash
+                    .ok_or(ConversionError::Invalid("missing parent_hash"))?,
+            )?,
         })
     }
 }
@@ -371,8 +395,14 @@ impl TryFrom<PbPkhSignatureEntry> for PkhSignatureEntry {
     fn try_from(entry: PbPkhSignatureEntry) -> Result<Self, Self::Error> {
         Ok(PkhSignatureEntry {
             hash: v1::Hash::try_from(entry.hash.ok_or(ConversionError::Invalid("missing hash"))?)?,
-            pubkey: entry.pubkey.ok_or(ConversionError::Invalid("missing pubkey"))?.try_into()?,
-            signature: entry.signature.ok_or(ConversionError::Invalid("missing signature"))?.try_into()?,
+            pubkey: entry
+                .pubkey
+                .ok_or(ConversionError::Invalid("missing pubkey"))?
+                .try_into()?,
+            signature: entry
+                .signature
+                .ok_or(ConversionError::Invalid("missing signature"))?
+                .try_into()?,
         })
     }
 }
@@ -380,7 +410,8 @@ impl TryFrom<PbPkhSignatureEntry> for PkhSignatureEntry {
 impl TryFrom<PbPkhSignature> for PkhSignature {
     type Error = ConversionError;
     fn try_from(signature: PbPkhSignature) -> Result<Self, Self::Error> {
-        let entries = signature.entries
+        let entries = signature
+            .entries
             .into_iter()
             .map(PkhSignatureEntry::try_from)
             .collect::<Result<Vec<_>, _>>()?;
@@ -392,7 +423,11 @@ impl TryFrom<PbHaxPreimage> for V1HaxPreimage {
     type Error = ConversionError;
     fn try_from(preimage: PbHaxPreimage) -> Result<Self, Self::Error> {
         Ok(V1HaxPreimage {
-            hash: v1::Hash::try_from(preimage.hash.ok_or(ConversionError::Invalid("missing hash"))?)?,
+            hash: v1::Hash::try_from(
+                preimage
+                    .hash
+                    .ok_or(ConversionError::Invalid("missing hash"))?,
+            )?,
             value: preimage.value.into(),
         })
     }
@@ -403,7 +438,8 @@ impl TryFrom<PbMerkleProof> for MerkleProof {
     fn try_from(proof: PbMerkleProof) -> Result<Self, Self::Error> {
         Ok(MerkleProof {
             root: v1::Hash::try_from(proof.root.ok_or(ConversionError::Invalid("missing root"))?)?,
-            path: proof.path
+            path: proof
+                .path
                 .into_iter()
                 .map(v1::Hash::try_from)
                 .collect::<Result<Vec<_>, _>>()?,
@@ -414,22 +450,31 @@ impl TryFrom<PbMerkleProof> for MerkleProof {
 impl TryFrom<PbLockPrimitive> for LockPrimitive {
     type Error = ConversionError;
     fn try_from(primitive: PbLockPrimitive) -> Result<Self, Self::Error> {
-        match primitive.primitive.ok_or(ConversionError::Invalid("missing primitive"))? {
+        match primitive
+            .primitive
+            .ok_or(ConversionError::Invalid("missing primitive"))?
+        {
             lock_primitive::Primitive::Pkh(pkh) => {
-                let hashes = pkh.hashes
+                let hashes = pkh
+                    .hashes
                     .into_iter()
                     .map(v1::Hash::try_from)
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(LockPrimitive::Pkh(Pkh { m: pkh.m, hashes }))
             }
-            lock_primitive::Primitive::Tim(tim) => {
-                Ok(LockPrimitive::Tim(LockTim {
-                    rel: tim.rel.ok_or(ConversionError::Invalid("missing rel"))?.into(),
-                    abs: tim.abs.ok_or(ConversionError::Invalid("missing abs"))?.into(),
-                }))
-            }
+            lock_primitive::Primitive::Tim(tim) => Ok(LockPrimitive::Tim(LockTim {
+                rel: tim
+                    .rel
+                    .ok_or(ConversionError::Invalid("missing rel"))?
+                    .into(),
+                abs: tim
+                    .abs
+                    .ok_or(ConversionError::Invalid("missing abs"))?
+                    .into(),
+            })),
             lock_primitive::Primitive::Hax(hax) => {
-                let hashes = hax.hashes
+                let hashes = hax
+                    .hashes
                     .into_iter()
                     .map(v1::Hash::try_from)
                     .collect::<Result<Vec<_>, _>>()?;
@@ -443,7 +488,8 @@ impl TryFrom<PbLockPrimitive> for LockPrimitive {
 impl TryFrom<PbSpendCondition> for SpendCondition {
     type Error = ConversionError;
     fn try_from(condition: PbSpendCondition) -> Result<Self, Self::Error> {
-        let primitives = condition.primitives
+        let primitives = condition
+            .primitives
             .into_iter()
             .map(LockPrimitive::try_from)
             .collect::<Result<Vec<_>, _>>()?;
@@ -455,9 +501,17 @@ impl TryFrom<PbLockMerkleProof> for LockMerkleProof {
     type Error = ConversionError;
     fn try_from(proof: PbLockMerkleProof) -> Result<Self, Self::Error> {
         Ok(LockMerkleProof {
-            spend_condition: SpendCondition::try_from(proof.spend_condition.ok_or(ConversionError::Invalid("missing spend_condition"))?)?,
+            spend_condition: SpendCondition::try_from(
+                proof
+                    .spend_condition
+                    .ok_or(ConversionError::Invalid("missing spend_condition"))?,
+            )?,
             axis: proof.axis,
-            proof: MerkleProof::try_from(proof.proof.ok_or(ConversionError::Invalid("missing proof"))?)?,
+            proof: MerkleProof::try_from(
+                proof
+                    .proof
+                    .ok_or(ConversionError::Invalid("missing proof"))?,
+            )?,
         })
     }
 }
@@ -466,9 +520,18 @@ impl TryFrom<PbWitness> for V1Witness {
     type Error = ConversionError;
     fn try_from(witness: PbWitness) -> Result<Self, Self::Error> {
         Ok(V1Witness {
-            lock_merkle_proof: LockMerkleProof::try_from(witness.lock_merkle_proof.ok_or(ConversionError::Invalid("missing lock_merkle_proof"))?)?,
-            pkh_signature: PkhSignature::try_from(witness.pkh_signature.ok_or(ConversionError::Invalid("missing pkh_signature"))?)?,
-            hax: witness.hax
+            lock_merkle_proof: LockMerkleProof::try_from(
+                witness
+                    .lock_merkle_proof
+                    .ok_or(ConversionError::Invalid("missing lock_merkle_proof"))?,
+            )?,
+            pkh_signature: PkhSignature::try_from(
+                witness
+                    .pkh_signature
+                    .ok_or(ConversionError::Invalid("missing pkh_signature"))?,
+            )?,
+            hax: witness
+                .hax
                 .into_iter()
                 .map(V1HaxPreimage::try_from)
                 .collect::<Result<Vec<_>, _>>()?,
@@ -480,14 +543,21 @@ impl TryFrom<PbWitness> for V1Witness {
 impl TryFrom<PbLegacySpend> for Spend0 {
     type Error = ConversionError;
     fn try_from(spend: PbLegacySpend) -> Result<Self, Self::Error> {
-        let seeds = spend.seeds
+        let seeds = spend
+            .seeds
             .into_iter()
             .map(V1Seed::try_from)
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Spend0 {
-            signature: spend.signature.ok_or(ConversionError::Invalid("missing signature"))?.try_into()?,
+            signature: spend
+                .signature
+                .ok_or(ConversionError::Invalid("missing signature"))?
+                .try_into()?,
             seeds: nockchain_types::tx_engine::v1::Seeds(seeds),
-            fee: spend.fee.ok_or(ConversionError::Invalid("missing fee"))?.into(),
+            fee: spend
+                .fee
+                .ok_or(ConversionError::Invalid("missing fee"))?
+                .into(),
         })
     }
 }
@@ -495,14 +565,22 @@ impl TryFrom<PbLegacySpend> for Spend0 {
 impl TryFrom<PbWitnessSpend> for Spend1 {
     type Error = ConversionError;
     fn try_from(spend: PbWitnessSpend) -> Result<Self, Self::Error> {
-        let seeds = spend.seeds
+        let seeds = spend
+            .seeds
             .into_iter()
             .map(V1Seed::try_from)
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Spend1 {
-            witness: V1Witness::try_from(spend.witness.ok_or(ConversionError::Invalid("missing witness"))?)?,
+            witness: V1Witness::try_from(
+                spend
+                    .witness
+                    .ok_or(ConversionError::Invalid("missing witness"))?,
+            )?,
             seeds: nockchain_types::tx_engine::v1::Seeds(seeds),
-            fee: spend.fee.ok_or(ConversionError::Invalid("missing fee"))?.into(),
+            fee: spend
+                .fee
+                .ok_or(ConversionError::Invalid("missing fee"))?
+                .into(),
         })
     }
 }
@@ -510,7 +588,10 @@ impl TryFrom<PbWitnessSpend> for Spend1 {
 impl TryFrom<PbSpend> for V1Spend {
     type Error = ConversionError;
     fn try_from(spend: PbSpend) -> Result<Self, Self::Error> {
-        match spend.spend_kind.ok_or(ConversionError::Invalid("missing spend_kind"))? {
+        match spend
+            .spend_kind
+            .ok_or(ConversionError::Invalid("missing spend_kind"))?
+        {
             spend::SpendKind::Legacy(legacy) => Ok(V1Spend::Legacy(Spend0::try_from(legacy)?)),
             spend::SpendKind::Witness(witness) => Ok(V1Spend::Witness(Spend1::try_from(witness)?)),
         }
@@ -522,7 +603,11 @@ impl TryFrom<PbSpendEntry> for (Name, V1Spend) {
     fn try_from(entry: PbSpendEntry) -> Result<Self, Self::Error> {
         Ok((
             v0::Name::try_from(entry.name.ok_or(ConversionError::Invalid("missing name"))?)?,
-            V1Spend::try_from(entry.spend.ok_or(ConversionError::Invalid("missing spend"))?)?,
+            V1Spend::try_from(
+                entry
+                    .spend
+                    .ok_or(ConversionError::Invalid("missing spend"))?,
+            )?,
         ))
     }
 }
@@ -530,7 +615,8 @@ impl TryFrom<PbSpendEntry> for (Name, V1Spend) {
 impl TryFrom<PbRawTransaction> for V1RawTx {
     type Error = ConversionError;
     fn try_from(tx: PbRawTransaction) -> Result<Self, Self::Error> {
-        let version_value = tx.version
+        let version_value = tx
+            .version
             .ok_or(ConversionError::Invalid("missing version"))?
             .value;
 
@@ -539,7 +625,8 @@ impl TryFrom<PbRawTransaction> for V1RawTx {
             _ => return Err(ConversionError::Invalid("invalid version")),
         };
 
-        let spends = tx.spends
+        let spends = tx
+            .spends
             .into_iter()
             .map(<(Name, V1Spend)>::try_from)
             .collect::<Result<Vec<_>, _>>()?;

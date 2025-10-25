@@ -432,7 +432,6 @@
     --
   ::
   ++  txs-size-by-id
-    ~/  %txs-size-by-id
     |=  [=form got-raw-tx=$-(tx-id raw-tx)]
     %+  roll
       ~(tap z-in ~(tx-ids get form))
@@ -492,7 +491,6 @@
     (check-digest:page:v1 pag)
   ::
   ++  compute-size-without-txs
-    ~/  %compute-size-without-txs
     |=  pag=form
     ^-  size
     ?^  -.pag  (compute-size-without-txs:page:v0 pag)
@@ -1050,7 +1048,6 @@
     ==
   ::
   ++  txs-size-by-set
-    ~/  %txs-size-by-set
     |=  form
     %-  ~(rep z-by txs)
     |=  [[=tx-id =tx] sum-sizes=^size]
@@ -1059,7 +1056,6 @@
   ::
   ::  fully validate a transaction and update the balance
   ++  process
-    ~/  %process
     |=  [=form raw=raw-tx]
     ^-  (reason ^form)
     =+  mres=(mule |.((dispatch form raw)))

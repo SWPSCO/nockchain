@@ -32,12 +32,12 @@ impl NockchainFact {
 
         if head.eq_bytes(b"heard-block") {
             let page = noun.as_cell()?.tail();
-            let block_id = page.as_cell()?.head();
+            let block_id = block_id_from_page(page)?;
             let block_id_str = tip5_hash_to_base58_stack(slab, block_id)?;
             Ok(NockchainFact::HeardBlock(block_id_str, poke_slab))
         } else if head.eq_bytes(b"heard-tx") {
             let raw_tx = noun.as_cell()?.tail();
-            let tx_id = raw_tx.as_cell()?.head();
+            let tx_id = tx_id_from_raw_tx(raw_tx)?;
             let tx_id_str = tip5_hash_to_base58_stack(slab, tx_id)?;
             Ok(NockchainFact::HeardTx(tx_id_str, poke_slab))
         } else if head.eq_bytes(b"heard-elders") {
@@ -64,6 +64,44 @@ impl NockchainFact {
             Self::HeardTx(_, slab) => &slab,
             Self::HeardElders(_, _, slab) => &slab,
         }
+    }
+}
+
+fn block_id_from_page(page: Noun) -> Result<Noun, NockAppError> {
+    let page_cell = page.as_cell()?;
+    // page v0: [block-id ...]
+    // page v1: [%1 block-id ...]
+    match page_cell.head().as_atom() {
+        Ok(version_atom) => {
+            let version = version_atom.as_u64()?;
+            if version == 1 {
+                return Ok(page_cell.tail().as_cell()?.head());
+            }
+            return Err(NockAppError::OtherError(format!(
+                "Unsupported page version {}",
+                version
+            )));
+        }
+        Err(_) => Ok(page_cell.head()),
+    }
+}
+
+fn tx_id_from_raw_tx(raw_tx: Noun) -> Result<Noun, NockAppError> {
+    let raw_tx_cell = raw_tx.as_cell()?;
+    // raw-tx v0: [tx-id ...]
+    // raw-tx v1: [%1 tx-id ...]
+    match raw_tx_cell.head().as_atom() {
+        Ok(version_atom) => {
+            let version = version_atom.as_u64()?;
+            if version == 1 {
+                return Ok(raw_tx_cell.tail().as_cell()?.head());
+            }
+            return Err(NockAppError::OtherError(format!(
+                "Unsupported raw-tx version {}",
+                version
+            )));
+        }
+        Err(_) => Ok(raw_tx_cell.head()),
     }
 }
 
