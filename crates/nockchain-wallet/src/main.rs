@@ -600,6 +600,92 @@ impl Wallet {
             None => D(0),
         };
 
+        // Generate random entropy
+        let mut entropy_bytes = [0u8; 32];
+        getrandom::fill(&mut entropy_bytes).map_err(|e| CrownError::Unknown(e.to_string()))?;
+        let entropy = from_bytes(&mut slab, &entropy_bytes).as_noun();
+
+        Self::wallet(
+            "verify-hash",
+            &[hash_noun, sig_atom, pk_noun],
+            Operation::Poke,
+            &mut slab,
+        )
+    }
+
+    fn sign_message(
+        message_bytes: &[u8],
+        index: Option<u64>,
+        hardened: bool,
+    ) -> CommandNoun<NounSlab> {
+        let mut slab = NounSlab::new();
+
+        if let Some(idx) = index {
+            if idx >= 2 << 31 {
+                return Err(
+                    CrownError::Unknown("Key index must not exceed 2^31 - 1".into()).into(),
+                );
+            }
+        }
+
+        let msg_atom = from_bytes(&mut slab, message_bytes).as_noun();
+
+        let sign_key_noun = match index {
+            Some(i) => {
+                let inner = D(i);
+                let hardened_noun = if hardened { YES } else { NO };
+                T(&mut slab, &[D(0), inner, hardened_noun])
+            }
+            None => D(0),
+        };
+
+        Self::wallet(
+            "sign-message",
+            &[msg_atom, sign_key_noun],
+            Operation::Poke,
+            &mut slab,
+        )
+    }
+
+    fn verify_message(
+        message_bytes: &[u8],
+        signature_jam: &[u8],
+        pubkey_b58: &str,
+    ) -> CommandNoun<NounSlab> {
+        let mut slab = NounSlab::new();
+        let msg_atom = from_bytes(&mut slab, message_bytes).as_noun();
+        let sig_atom = from_bytes(&mut slab, signature_jam).as_noun();
+        let pk_noun = make_tas(&mut slab, pubkey_b58).as_noun();
+
+        Self::wallet(
+            "verify-message",
+            &[msg_atom, sig_atom, pk_noun],
+            Operation::Poke,
+            &mut slab,
+        )
+    }
+
+    fn sign_hash(hash_b58: &str, index: Option<u64>, hardened: bool) -> CommandNoun<NounSlab> {
+        let mut slab = NounSlab::new();
+
+        if let Some(idx) = index {
+            if idx >= 2 << 31 {
+                return Err(
+                    CrownError::Unknown("Key index must not exceed 2^31 - 1".into()).into(),
+                );
+            }
+        }
+
+        let hash_noun = make_tas(&mut slab, hash_b58).as_noun();
+        let sign_key_noun = match index {
+            Some(i) => {
+                let inner = D(i);
+                let hardened_noun = if hardened { YES } else { NO };
+                T(&mut slab, &[D(0), inner, hardened_noun])
+            }
+            None => D(0),
+        };
+
         Self::wallet(
             "sign-hash",
             &[hash_noun, sign_key_noun],

@@ -1,26 +1,40 @@
 /=  mine  /common/pow
 /=  sp  /common/stark/prover
+/=  t  /common/tx-engine
 /=  *  /common/zoon
 /=  *  /common/zeke
 /=  *  /common/wrapper
 =<  ((moat |) inner)  :: wrapped kernel
 =>
   |%
-  +$  mine-success
-    $:  %command
-        %pow
-        =proof
-        dig=tip5-hash-atom
-        header=noun-digest:tip5
-        nonce=noun-digest:tip5
-    ==
-  +$  effect  [%mine-result (each [hash=noun-digest:tip5 mine-success] dig=noun-digest:tip5)]
   +$  kernel-state  [%state version=%1]
+  ::
   +$  cause
-    $%  [%0 header=noun-digest:tip5 nonce=noun-digest:tip5 target=bignum:bignum pow-len=@]
-        [%1 header=noun-digest:tip5 nonce=noun-digest:tip5 target=bignum:bignum pow-len=@]
-        [%2 header=noun-digest:tip5 nonce=noun-digest:tip5 target=bignum:bignum pow-len=@]
+    $%
+      $:
+        %template
+        version=?(%0 %1 %2)
+        commit=block-commitment:t
+        nonce=noun-digest:tip5
+        network-target=bignum:bignum
+        pool-target=bignum:bignum
+        pow-len=@        
+      ==
     ==
+  ::
+  +$  success
+    $:  
+      commit=block-commitment:t
+      dig=tip5-hash-atom
+      prf=proof:sp
+    ==
+  +$  effect  
+    $%
+      [%miss hash=noun-digest:tip5]
+      [%pool success]
+      [%network success]
+    ==
+  ::
   --
 |%
 ++  moat  (keep kernel-state) :: no state
@@ -39,23 +53,29 @@
   ++  poke
     |=  [wir=wire eny=@ our=@ux now=@da dat=*]
     ^-  [(list effect) k=kernel-state]
+    ::
     =/  cause  ((soft cause) dat)
     ?~  cause
       ~>  %slog.[1 'poke: Bad cause']
       `k
-    =/  cause  u.cause
+    ::
+    =/  c  u.cause
+    ::
     =/  input=prover-input:sp
-      ?-  -.cause
-        %0  [%0 header.cause nonce.cause pow-len.cause]
-        %1  [%1 header.cause nonce.cause pow-len.cause]
-        %2  [%2 header.cause nonce.cause pow-len.cause]
+      ?-  version.c
+        %0  [%0 commit.c nonce.c pow-len.c]
+        %1  [%1 commit.c nonce.c pow-len.c]
+        %2  [%2 commit.c nonce.c pow-len.c]
       ==
-    :: XX TODO set up stark config, construct effect
-    =/  [prf=proof:sp dig=tip5-hash-atom]
+    ::
+    =/  [prf=proof:sp dig=tip5-hash-atom] 
       (prove-block-inner:mine input)
-    :_  k
-    ?:  (check-target:mine dig target.cause)
-      [%mine-result %& (atom-to-digest:tip5 dig) %command %pow prf dig header.cause nonce.cause]~
-    [%mine-result %| (atom-to-digest:tip5 dig)]~
+    =;  eff  
+      :_  k  ~[eff]
+    ?.  (check-target:mine dig network-target.c)
+      ?.  (check-target:mine dig pool-target.c)
+        [%miss (atom-to-digest:tip5 dig)]
+      [%pool commit.c dig prf]
+    [%network commit.c dig prf]
   --
 --
