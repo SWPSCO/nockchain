@@ -599,7 +599,13 @@ async fn handle_effect(
         }
         EffectType::LiarPeer => {
             let effect_cell = unsafe { noun_slab.root().as_cell()? };
-            let peer_id_atom = effect_cell.tail().as_atom().map_err(|_| {
+            let liar_peer_cell = effect_cell.tail().as_cell().map_err(|_| {
+                NockAppError::IoError(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "Expected peer ID cell in liar-peer effect",
+                ))
+            })?;
+            let peer_id_atom = liar_peer_cell.head().as_atom().map_err(|_| {
                 NockAppError::IoError(std::io::Error::new(
                     std::io::ErrorKind::Other,
                     "Expected peer ID atom in liar-peer effect",
@@ -633,7 +639,14 @@ async fn handle_effect(
         }
         EffectType::LiarBlockId => {
             let effect_cell = unsafe { noun_slab.root().as_cell()? };
-            let block_id = effect_cell.tail();
+            let liar_block_cell = effect_cell.tail().as_cell().map_err(|_| {
+                NockAppError::IoError(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "Expected block ID cell in liar-block-id effect",
+                ))
+            })?;
+
+            let block_id = liar_block_cell.head();
 
             // Add the bad block ID
             let mut state_guard = driver_state.lock().await;
@@ -1885,9 +1898,10 @@ mod tests {
             .expect("Failed to create liar-peer atom");
         let peer_id_atom = Atom::from_value(&mut effect_slab, peer_id_base58)
             .expect("Failed to create peer ID atom");
+        let reason_atom = make_tas(&mut effect_slab, "bad peer");
         let effect = T(
             &mut effect_slab,
-            &[liar_peer_atom.as_noun(), peer_id_atom.as_noun()],
+            &[liar_peer_atom.as_noun(), peer_id_atom.as_noun(), reason_atom.as_noun()],
         );
         effect_slab.set_root(effect);
         let metrics = Arc::new(
@@ -2203,10 +2217,11 @@ mod tests {
         // Copy the bad block ID tuple to the effect slab
         let bad_block_id_in_effect = T(&mut effect_slab, &[D(1), D(2), D(3), D(4), D(5)]);
 
+        let reason_atom = make_tas(&mut effect_slab, "bad block");
         // Build the noun structure: [%liar-block-id bad-block-id]
         let effect = T(
             &mut effect_slab,
-            &[liar_block_id_atom.as_noun(), bad_block_id_in_effect],
+            &[liar_block_id_atom.as_noun(), bad_block_id_in_effect, reason_atom.as_noun()],
         );
         effect_slab.set_root(effect);
         println!("Created liar-block-id effect");
