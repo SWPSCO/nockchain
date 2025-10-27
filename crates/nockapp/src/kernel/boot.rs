@@ -330,10 +330,10 @@ fn init_with_default_filter<T: Subscriber + Send + Sync + for<'a> LookupSpan<'a>
         } else {
             reg.with(tracy).init();
         }
-        info!("Tracy tracing is enabled");
+        debug!("Tracy tracing is enabled");
         return;
     } else {
-        info!("Tracy tracing is disabled");
+        debug!("Tracy tracing is disabled");
     }
     reg.init();
 }

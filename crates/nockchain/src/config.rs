@@ -140,6 +140,8 @@ pub struct NockchainCli {
     pub bind_public_grpc_addr: std::net::SocketAddr,
     #[arg(long, default_value = "5555")]
     pub bind_private_grpc_port: u16,
+    #[arg(long, default_value = "false")]
+    pub fast_sync: bool,
 }
 
 impl NockchainCli {
@@ -249,6 +251,7 @@ mod tests {
             fakenet_coinbase_timelock_min: None,
             bind_public_grpc_addr: "127.0.0.1:5555".parse().unwrap(),
             bind_private_grpc_port: 5555,
+            fast_sync: false,
         }
     }
 

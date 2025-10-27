@@ -31,6 +31,7 @@ use nockapp::wire::{Wire, WireRepr};
 use nockapp::{AtomExt, NockAppError, NounExt};
 use nockvm::noun::{Atom, Noun, D, T};
 use nockvm_macros::tas;
+use rand::rng;
 use rand::seq::SliceRandom;
 use tokio::sync::{mpsc, Mutex, MutexGuard};
 use tokio::time::{Duration, MissedTickBehavior};
@@ -153,6 +154,7 @@ pub fn make_libp2p_driver(
     initial_peers: &[Multiaddr],
     force_peers: &[Multiaddr],
     prune_inbound_size: Option<usize>,
+    fast_sync: bool,
     equix_builder: equix::EquiXBuilder,
     chain_interval: Duration,
     init_complete_tx: Option<tokio::sync::oneshot::Sender<()>>,
@@ -248,7 +250,7 @@ pub fn make_libp2p_driver(
                         let state_guard = Arc::clone(&driver_state); // Clone the Arc, not the P2P state
                         let metrics_clone = metrics.clone();
                         join_set.spawn("handle_effect".to_string(), async move {
-                            handle_effect(noun_slab, swarm_tx_clone, equix_builder_clone, local_peer_id, connected_peers, state_guard, metrics_clone).await
+                            handle_effect(noun_slab, swarm_tx_clone, equix_builder_clone, local_peer_id, connected_peers, fast_sync, state_guard, metrics_clone).await
                         });
                     },
                     Some(event) = swarm.next() => {
@@ -486,6 +488,7 @@ async fn handle_effect(
     equix_builder: equix::EquiXBuilder,
     local_peer_id: PeerId,
     connected_peers: Vec<PeerId>,
+    fast_sync: bool,
     driver_state: Arc<Mutex<P2PState>>,
     metrics: Arc<NockchainP2PMetrics>,
 ) -> Result<(), NockAppError> {
@@ -533,6 +536,8 @@ async fn handle_effect(
             let request_body = request_cell.tail().as_cell()?;
             let request_type = request_body.head().as_direct()?;
 
+            let mut is_limited_request = false;
+
             let target_peers = if request_type.data() == tas!(b"block") {
                 let block_cell = request_body.tail().as_cell()?;
                 if block_cell.head().eq_bytes(b"elders") {
@@ -543,9 +548,11 @@ async fn handle_effect(
                         if let Ok(peer_id) = PeerId::from_bytes(&bytes) {
                             vec![peer_id]
                         } else {
+                            is_limited_request = fast_sync;
                             connected_peers.clone()
                         }
                     } else {
+                        is_limited_request = fast_sync;
                         connected_peers.clone()
                     }
                 } else {
@@ -558,6 +565,7 @@ async fn handle_effect(
             if request_type.data() == tas!(b"raw-tx") {
                 if let Ok(raw_tx_cell) = request_body.tail().as_cell() {
                     if raw_tx_cell.head().eq_bytes(b"by-id") {
+                        is_limited_request = fast_sync;
                         trace!("Requesting raw transaction by ID, removing ID from seen set");
                         let tx_id = tip5_hash_to_base58_stack(&mut noun_slab, raw_tx_cell.tail())?;
                         let mut state_guard = driver_state.clone().lock_owned().await;
@@ -566,9 +574,16 @@ async fn handle_effect(
                 }
             }
 
-            debug!("Sending request to {} peers", target_peers.len());
-
-            for peer_id in target_peers {
+            let request_peers: Vec<_> = if is_limited_request {
+                let mut rng = rng();
+                let mut request_peers = target_peers.clone();
+                request_peers.shuffle(&mut rng);
+                request_peers.into_iter().take(2).collect()
+            } else {
+                target_peers.clone()
+            };
+            debug!("Sending request to {} peers", request_peers.len());
+            for peer_id in request_peers {
                 let local_peer_id_clone = local_peer_id;
                 let mut equix_builder_clone = equix_builder.clone();
                 let request = NockchainRequest::new_request(
@@ -1890,6 +1905,7 @@ mod tests {
             EquiXBuilder::new(),
             PeerId::random(), // local peer ID (not relevant for this test)
             vec![],           // connected peers (not relevant for this test)
+            false,
             Arc::new(Mutex::new(P2PState::new(
                 metrics.clone(),
                 LIBP2P_CONFIG.seen_tx_clear_interval,
@@ -1960,6 +1976,7 @@ mod tests {
             EquiXBuilder::new(),
             PeerId::random(), // local peer ID (not relevant for this test)
             vec![],           // connected peers (not relevant for this test)
+            false,
             state_arc.clone(),
             metrics,
         )
@@ -2068,6 +2085,7 @@ mod tests {
             EquiXBuilder::new(),
             PeerId::random(), // local peer ID (not relevant for this test)
             vec![],           // connected peers (not relevant for this test)
+            false,
             state_arc.clone(),
             metrics,
         )
@@ -2210,6 +2228,7 @@ mod tests {
             EquiXBuilder::new(),
             PeerId::random(), // local peer ID (not relevant for this test)
             vec![],           // connected peers (not relevant for this test)
+            false,
             state_arc.clone(),
             metrics,
         )
@@ -2333,6 +2352,7 @@ mod tests {
             EquiXBuilder::new(),
             PeerId::random(), // local peer ID (not relevant for this test)
             vec![],           // connected peers (not relevant for this test)
+            false,
             state_arc_clone,
             metrics,
         )
@@ -2383,6 +2403,7 @@ mod tests {
             EquiXBuilder::new(),
             PeerId::random(), // local peer ID (not relevant for this test)
             vec![],           // connected peers (not relevant for this test)
+            false,
             state_arc_clone,
             metrics,
         )

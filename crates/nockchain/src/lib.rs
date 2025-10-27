@@ -486,6 +486,7 @@ pub async fn init_with_kernel<J: Jammer + Send + 'static>(
         &initial_peer_multiaddrs,
         &force_peers,
         prune_inbound,
+        cli.fast_sync,
         equix_builder,
         config::CHAIN_INTERVAL,
         Some(libp2p_init_tx),
