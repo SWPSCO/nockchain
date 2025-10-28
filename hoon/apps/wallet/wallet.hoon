@@ -207,6 +207,7 @@
         %list-notes-by-address  (do-list-notes-by-address cause)
         %list-notes-by-address-csv  (do-list-notes-by-address-csv cause)
         %create-tx             (do-create-tx cause)
+        %sign-tx              (do-sign-tx cause)
         %update-balance-grpc   (do-update-balance-grpc cause)
         %sign-message          (do-sign-message cause)
         %verify-message        (do-verify-message cause)
@@ -916,6 +917,67 @@
         [%markdown (crip markdown)]
         [%exit 0]
     ==
+    ::
+  ++  do-sign-tx
+    |=  =cause:wt
+    ?>  ?=(%sign-tx -.cause)
+    |^
+    %-  (debug "sign-tx: signing raw transaction {<raw-tx.cause>}")
+    ?~  active-master.state
+      :_  state
+      :~  :-  %markdown
+          %-  crip
+          """
+          Cannot sign a transaction without active master address set. Please import a master key / seed phrase or generate a new one.
+          """
+          [%exit 0]
+      ==
+    ::  Get the signing key
+    =/  sign-key  (sign-key:get:v sign-key.cause)
+    ::  Get the spends from the raw-tx
+    =/  unsigned-spends=spends:transact  spends.raw-tx.cause
+    ::  Sign each spend
+    =/  signed-spends=spends:transact
+      %-  ~(run z-by:zo unsigned-spends)
+      |=  =spend:v1:transact
+        (sign:spend-v1:transact spend sign-key)
+    ::  Create the signed raw-tx
+    =/  signed-raw-tx=raw-tx:v1:transact  (new:raw-tx:v1:transact signed-spends)
+    ::  Save and display the signed transaction
+    (save-signed-transaction signed-raw-tx)
+    ::
+    ++  save-signed-transaction
+      |=  =raw-tx:v1:transact
+      ^-  [(list effect:wt) state:wt]
+      %-  (debug "Saving signed transaction")
+      =/  transaction-name=@t  (to-b58:hash:transact id.raw-tx)
+      =/  =spends:transact  spends.raw-tx
+      =/  fees=@  (roll-fees:spends:v1:transact spends)
+      =/  =tx:v1:transact  (new:tx:v1:transact raw-tx height.balance.state)
+      =/  markdown-text=@t
+        (transaction:v1:display:utils transaction-name outputs.tx fees)
+      ::  Save to transaction tree
+      ::=/  =transaction:wt  [transaction-name spends]
+      ::=.  transaction-tree.state
+      ::  (~(put by transaction-tree.state) transaction-name transaction)
+      ::  Create jam file
+      =/  tx-jam=@  (jam spends)
+      =/  file-path=@t  (crip "{(trip transaction-name)}.jam")
+      :_  state
+      :~  [%file %write file-path tx-jam]
+          :-  %markdown
+          %-  crip
+          """
+          ## Transaction Signed Successfully
+
+          {(trip markdown-text)}
+
+          Transaction saved as: {(trip transaction-name)}
+          Jam file saved to: {(trip file-path)}
+          """
+          [%exit 0]
+      ==
+    --
   ::
   ++  do-create-tx
     |=  =cause:wt

@@ -372,6 +372,7 @@
         [%send-tx dat=transaction]
         [%show-tx dat=transaction]
         [%sign-message msg=@ sign-key=(unit [child-index=@ud hardened=?])]
+        [%sign-tx =raw-tx:v1:transact sign-key=(unit [child-index=@ud hardened=?]) entropy=@]
         [%verify-message msg=@ sig=@ pk-b58=@t]
         [%sign-hash hash-b58=@t sign-key=(unit [child-index=@ud hardened=?])]
         [%verify-hash hash-b58=@t sig=@ pk-b58=@t]
