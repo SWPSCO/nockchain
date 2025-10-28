@@ -10,6 +10,7 @@ use nockapp::{AtomExt, Bytes, NockApp, NockAppError, ToBytes};
 use nockvm::noun::{Atom, Noun, NounAllocator, D, T};
 use nockvm_macros::tas;
 use noun_serde::NounEncode;
+use tracing::info;
 
 use crate::NounSlab;
 
@@ -232,7 +233,7 @@ impl BlockchainConstants {
     pub fn with_genesis_target_atom_bex(mut self, bex: u128) -> Self {
         let difficulty = UBig::from((1 << bex) as u128);
         self.genesis_target_atom = self.max_target_atom.clone() / difficulty;
-        eprintln!("Genesis target atom set to {}", self.genesis_target_atom);
+        info!("Genesis target atom set to {}", self.genesis_target_atom);
         self
     }
 
