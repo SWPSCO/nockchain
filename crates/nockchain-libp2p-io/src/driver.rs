@@ -654,12 +654,13 @@ async fn handle_effect(
 
             // Ban each peer that sent this block
             for peer_id in peers_to_ban {
-                swarm_tx
-                    .send(SwarmAction::BlockPeer { peer_id })
-                    .await
-                    .map_err(|_| {
-                        NockAppError::OtherError(String::from("Failed to send SwarmAction request"))
-                    })?;
+                // swarm_tx
+                //     .send(SwarmAction::BlockPeer { peer_id })
+                //     .await
+                //     .map_err(|_| {
+                //         NockAppError::OtherError(String::from("Failed to send SwarmAction request"))
+                //     })?;
+                warn!("Ignoring request to ban peer {} -- HOTFIX, FIX ME [OCT 28 25]", peer_id);
             }
         }
         EffectType::Track => {
