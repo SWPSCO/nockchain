@@ -942,9 +942,9 @@
       |=  =spend:v1:transact
         (sign:spend-v1:transact spend sign-key)
     ::  Create the signed raw-tx
-    =/  signed-raw-tx=raw-tx:v1:transact  (new:raw-tx:v1:transact signed-spends)
+    ::=/  signed-raw-tx=raw-tx:v1:transact  (new:raw-tx:v1:transact signed-spends)
     ::  Save and display the signed transaction
-    (save-signed-transaction signed-raw-tx)
+    (save-signed-transaction raw-tx.cause(spends signed-spends))
     ::
     ++  save-signed-transaction
       |=  =raw-tx:v1:transact
@@ -961,7 +961,7 @@
       ::=.  transaction-tree.state
       ::  (~(put by transaction-tree.state) transaction-name transaction)
       ::  Create jam file
-      =/  tx-jam=@  (jam spends)
+      =/  tx-jam=@  (jam raw-tx)
       =/  file-path=@t  (crip "{(trip transaction-name)}.jam")
       :_  state
       :~  [%file %write file-path tx-jam]
