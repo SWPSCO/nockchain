@@ -379,7 +379,7 @@ pub fn make_libp2p_driver(
                             SwarmAction::BlockPeer { peer_id } => {
                                 warn!("Ignoring request to ban peer {} -- HOTFIX, FIX ME [OCT 28 25]", peer_id);
                                 // Block the peer in the allow_block_list
-                                swarm.behaviour_mut().allow_block_list.block_peer(peer_id);
+                                // swarm.behaviour_mut().allow_block_list.block_peer(peer_id);
                                 // {
                                 //     // get peer IP address from the swarm
                                 //     let peer_addresses = swarm.behaviour_mut().peer_store.store().addresses_of_peer(&peer_id);
