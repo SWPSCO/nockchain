@@ -950,7 +950,9 @@
       |=  =raw-tx:v1:transact
       ^-  [(list effect:wt) state:wt]
       %-  (debug "Saving signed transaction")
-      =/  transaction-name=@t  (to-b58:hash:transact id.raw-tx)
+      =/  transaction-name=@t
+        %-  to-b58:hash:transact
+        id:(new:raw-tx:v1:transact spends)
       =/  =spends:transact  spends.raw-tx
       =/  fees=@  (roll-fees:spends:v1:transact spends)
       =/  =tx:v1:transact  (new:tx:v1:transact raw-tx height.balance.state)
