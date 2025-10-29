@@ -83,24 +83,15 @@ nockchain-wallet keygen
 
 This will print a new public/private key pair + chain code to the console, as well as the seed phrase for the private key.
 
-Use `.env_example` as a template and copy the public key to the `.env` file:
+Use `.env_example` as a template and copy your pkh to the `.env` file.
 
-```
-MINING_PUBKEY=<public-key>
-```
-When the v1 protocol cut-off block-height is reached, the miner will automatically generate v1 coinbases for blocks that it mines.
-You will need to supply a pkh for the coinbase ahead of time by generating a v1 key using the latest wallet. pkhs cannot be generated
-from v0 keys.
-
-Generate the v1 pkh by running `nockchain-wallet generate-mining-pkh` on the latest version of the wallet. The pkh should be listed as the `Address`.
 Then, in your `.env` file, set the `MINING_PKH` variable to the address of the v1 key you generated.
 
 ```
 MINING_PKH=<address>
 ```
 
-To reiterate, before the upgrade cutoff, the miner will generate v0 coinbases spendable by the `MINING_PUBKEY`. After the cutoff, it will generate
-v1 coinbases spendable by the `MINING_PKH`.
+The miner will generate v1 coinbases spendable by the `MINING_PKH`.
 
 ## Backup Keys
 
@@ -128,7 +119,7 @@ To run a Nockchain node without mining.
 bash ./scripts/run_nockchain_node.sh
 ```
 
-To run a Nockchain node and mine to a pubkey:
+To run a Nockchain node and mine to a pkh:
 
 ```
 bash ./scripts/run_nockchain_miner.sh
@@ -138,19 +129,23 @@ For launch, make sure you run in a fresh working directory that does not include
 
 ## FAQ
 
-### Can I use same pubkey if running multiple miners?
+### What is a pkh?
 
-Yes, you can use the same pubkey if running multiple miners.
+A pkh is a "pubkey hash", which is a shorter representation of a public key.  v1 pkhs are base58-encoded.
 
-### How do I change the mining pubkey?
+### Can I use same pkh if running multiple miners?
+
+Yes, you can use the same pkh if running multiple miners.
+
+### How do I change the mining pkh?
 
 Run `nockchain-wallet keygen` to generate a new key pair.
 
-If you are using the Makefile workflow, copy the public key to the `.env` file.
+If you are using the Makefile workflow, copy the pkh to the `.env` file.
 
 ### How do I run a testnet?
-To run a testnet on your machine, follow the same instructions as above, except use the fakenet
-scripts provided in the `scripts` directory.
+
+To run a testnet on your machine, follow the same instructions as above, except use the fakenet scripts provided in the `scripts` directory.
 
 Here's how to set it up:
 
@@ -257,7 +252,7 @@ Common errors and their solutions:
 To check your wallet balance:
 
 ```bash
-# List all notes by pubkey
+# List all notes by pkh
 nockchain-wallet list-notes-by-address <your-base58-address>
 ```
 
@@ -365,7 +360,7 @@ ssh -L 8087:backbone-us-south-mig:8086 backbone-us-south-mig
    - Check firewall settings
 
 3. **Mining Not Working**:
-   - Verify mining pubkey
+   - Verify mining pkh
    - Check --mine flag
    - Ensure peers are connected
    - Check system resources
