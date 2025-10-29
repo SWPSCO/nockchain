@@ -377,34 +377,34 @@ pub fn make_libp2p_driver(
                                 let _ = swarm.behaviour_mut().request_response.send_response(channel, response);
                             },
                             SwarmAction::BlockPeer { peer_id } => {
-                                warn!("SAction: Blocking peer {peer_id}");
+                                warn!("Ignoring request to ban peer {} -- HOTFIX, FIX ME [OCT 28 25]", peer_id);
                                 // Block the peer in the allow_block_list
                                 swarm.behaviour_mut().allow_block_list.block_peer(peer_id);
-                                {
-                                    // get peer IP address from the swarm
-                                    let peer_addresses = swarm.behaviour_mut().peer_store.store().addresses_of_peer(&peer_id);
-                                    if let Some(peer_multi_addrs) = peer_addresses {
-                                        for multi_addr in peer_multi_addrs {
-                                            for protocol in multi_addr.iter() {
+                                // {
+                                //     // get peer IP address from the swarm
+                                //     let peer_addresses = swarm.behaviour_mut().peer_store.store().addresses_of_peer(&peer_id);
+                                //     if let Some(peer_multi_addrs) = peer_addresses {
+                                //         for multi_addr in peer_multi_addrs {
+                                //             for protocol in multi_addr.iter() {
 
-                                                match protocol {
-                                                    libp2p::core::multiaddr::Protocol::Ip4(ip) => {
-                                                        log_fail2ban_ipv4(&peer_id, &ip);
-                                                    },
-                                                    libp2p::core::multiaddr::Protocol::Ip6(ip) => {
-                                                        log_fail2ban_ipv6(&peer_id, &ip);
-                                                    },
-                                                    // TODO: Dns?
-                                                    _ => {}
-                                                }
-                                            }
-                                        }
-                                    } else {
-                                        error!("Failed to get peer IP address for peer id: {peer_id}");
-                                    };
-                                }
+                                //                 match protocol {
+                                //                     libp2p::core::multiaddr::Protocol::Ip4(ip) => {
+                                //                         log_fail2ban_ipv4(&peer_id, &ip);
+                                //                     },
+                                //                     libp2p::core::multiaddr::Protocol::Ip6(ip) => {
+                                //                         log_fail2ban_ipv6(&peer_id, &ip);
+                                //                     },
+                                //                     // TODO: Dns?
+                                //                     _ => {}
+                                //                 }
+                                //             }
+                                //         }
+                                //     } else {
+                                //         error!("Failed to get peer IP address for peer id: {peer_id}");
+                                //     };
+                                // }
                                 // Disconnect the peer if they're currently connected
-                                let _ = swarm.disconnect_peer_id(peer_id);
+                                // let _ = swarm.disconnect_peer_id(peer_id);
                             },
                         }
                     },
