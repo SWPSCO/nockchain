@@ -33,17 +33,17 @@
       |=  [a=nnote:v0:transact b=nnote:v0:transact]
       (gth assets.a assets.b)
     (create-spends-0 notes)
-    ::  If all notes are v1
+  ::  If all notes are v1
   ?:  (levy notes |=(=nnote:transact ?=(@ -.nnote)))
     =/  notes=(list nnote-1:v1:transact)
       %+  turn  notes
       |=  =nnote:transact
       ?>  ?=(@ -.nnote)
-      =.  notes
-        %+  sort  notes
-        |=  [a=nnote:v1:transact b=nnote:v1:transact]
-        (gth assets.a assets.b)
       nnote
+    =.  notes
+      %+  sort  notes
+      |=  [a=nnote-1:v1:transact b=nnote-1:v1:transact]
+      (gth assets.a assets.b)
     (create-spends-1 notes)
   ::
   ::  I don't want to do this, but the fact that we're constrained to a single master seckey
@@ -85,16 +85,15 @@ spends
   =/  fee-portion=@
     ?:  =(0 fee.remaining)  0
     (min fee.remaining available-for-fee)
-  ?:  &(=(0 gift-portion) =(0 fee-portion))
+  =/  refund=@  (sub assets.note (add gift-portion fee-portion))
+  ::  skip if no seeds would be created (protocol requires >=1 seed)
+  ?:  &(=(0 gift-portion) =(0 refund))
     [spends remaining]
   =/  [new-gift-remaining=@ new-fee-remaining=@]
     :-  (sub gift.remaining gift-portion)
     (sub fee.remaining fee-portion)
-  =/  refund=@  (sub assets.note (add gift-portion fee-portion))
-  ?:  ?&  =(0 gift-portion)
-          =(0 refund)
-      ==
-    [spends remaining]
+  ~|  "assets in must equal gift + fee + refund"
+  ?>  =(assets.note (add gift-portion (add fee-portion refund)))
   =/  =seeds:v1:transact
     %-  z-silt:zo
     =|  seeds=(list seed:v1:transact)
@@ -176,16 +175,15 @@ spends
   =/  fee-portion=@
     ?:  =(0 fee.remaining)  0
     (min fee.remaining available-for-fee)
-  ?:  &(=(0 gift-portion) =(0 fee-portion))
+  =/  refund=@  (sub assets.note (add gift-portion fee-portion))
+  ::  skip if no seeds would be created (protocol requires >=1 seed)
+  ?:  &(=(0 gift-portion) =(0 refund))
     [spends remaining]
   =/  [new-gift-remaining=@ new-fee-remaining=@]
     :-  (sub gift.remaining gift-portion)
     (sub fee.remaining fee-portion)
-  =/  refund=@  (sub assets.note (add gift-portion fee-portion))
-  ?:  ?&  =(0 gift-portion)
-          =(0 refund)
-      ==
-    [spends remaining]
+  ~|  "assets in must equal gift + fee + refund"
+  ?>  =(assets.note (add gift-portion (add fee-portion refund)))
   =/  =seeds:v1:transact
     %-  z-silt:zo
     =|  seeds=(list seed:v1:transact)

@@ -135,7 +135,7 @@ pub struct Source {
 
 #[derive(Debug, thiserror::Error)]
 pub enum HashDecodeError {
-    #[error("Provided base58 corresponds to a value too large to be a tip5 hash")]
+    #[error("Provided base58 corresponds to a value too large to be a tip5 hash (likely a v0 pubkey instead of a v1 pkh)")]
     ProvidedValueTooLarge,
     #[error("base58 decode error: {0}")]
     Base58(#[from] bs58::decode::Error),

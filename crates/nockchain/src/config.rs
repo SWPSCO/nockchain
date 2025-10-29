@@ -45,21 +45,9 @@ pub struct NockchainCli {
     pub mine: bool,
     #[arg(
         long,
-        help = "Pubkey to mine to (mutually exclusive with --mining-key-adv)"
-    )]
-    pub mining_pubkey: Option<String>,
-    #[arg(
-        long,
         help = "Pubkey hash to mine to (mutually exclusive with --mining-pkh-adv)"
     )]
     pub mining_pkh: Option<String>,
-    #[arg(
-        long,
-        help = "Advanced mining key configuration (mutually exclusive with --mining-pubkey). Format: share,m:key1,key2,key3",
-        value_parser = value_parser!(MiningKeyConfig),
-        num_args = 1..,
-    )]
-    pub mining_key_adv: Option<Vec<MiningKeyConfig>>,
     #[arg(
         long,
         help = "Advanced mining pubkey hash configuration (mutually exclusive with --mining-pkh). Format: share,pkh",
@@ -146,15 +134,9 @@ pub struct NockchainCli {
 
 impl NockchainCli {
     pub fn validate(&self) -> Result<(), String> {
-        if self.mine && !(self.mining_pubkey.is_some() || self.mining_key_adv.is_some()) {
+        if self.mine && !(self.mining_pkh.is_some() || self.mining_pkh_adv.is_some()) {
             return Err(
-                "Cannot specify mine without either mining_pubkey or mining_key_adv".to_string(),
-            );
-        }
-
-        if self.mining_pubkey.is_some() && self.mining_key_adv.is_some() {
-            return Err(
-                "Cannot specify both mining_pubkey and mining_key_adv at the same time".to_string(),
+                "Cannot specify mine without either mining_pkh or mining_pkh_adv".to_string(),
             );
         }
 
@@ -162,20 +144,6 @@ impl NockchainCli {
             return Err(
                 "Cannot specify both mining_pkh and mining_pkh_adv at the same time".to_string(),
             );
-        }
-
-        if let Some(pubkey) = &self.mining_pubkey {
-            SchnorrPubkey::from_base58(pubkey)
-                .map_err(|err| format!("Invalid mining_pubkey: {err}"))?;
-        }
-
-        if let Some(key_configs) = &self.mining_key_adv {
-            for config in key_configs {
-                for key in &config.keys {
-                    SchnorrPubkey::from_base58(key)
-                        .map_err(|err| format!("Invalid mining_key_adv pubkey '{key}': {err}"))?;
-                }
-            }
         }
 
         if let Some(pkh) = &self.mining_pkh {
@@ -190,22 +158,6 @@ impl NockchainCli {
             }
         }
 
-        if self.mining_pubkey.is_some() {
-            if !self.mining_pkh.is_some() {
-                return Err(
-                    "Have mining_pubkey, but no mining_pkh. Must specify neither or both of mining_pubkey and mining_pkh. To get a pkh, you must generate a v1 key by running `generate-mining-pkh` on the latest version of the wallet. The pkh will be listed as the 'Address' ".to_string(),
-                );
-            }
-        }
-
-        if self.mining_key_adv.is_some() {
-            if !self.mining_pkh_adv.is_some() {
-                return Err(
-                    "Must specify neither or both of mining_key_adv and mining_pkh_adv".to_string(),
-                );
-            }
-        }
-
         Ok(())
     }
 }
@@ -216,16 +168,14 @@ mod tests {
 
     use super::*;
 
-    const VALID_MINING_PUBKEY: &str = "2cPnE4Z9RevhTv9is9Hmc1amFubEFbUxzCV2Fxb9GxevJstV5VG92oYt6Sai3d3NjLFcsuVXSLx9hikMbD1agv9M267TVw3hV9MCpMfEnGo5LYtjJ7jPyHg8SERPjJRCWTgZ";
+    const VALID_V0_PUBKEY: &str = "2cPnE4Z9RevhTv9is9Hmc1amFubEFbUxzCV2Fxb9GxevJstV5VG92oYt6Sai3d3NjLFcsuVXSLx9hikMbD1agv9M267TVw3hV9MCpMfEnGo5LYtjJ7jPyHg8SERPjJRCWTgZ";
     const VALID_MINING_PKH: &str = "9yPePjfWAdUnzaQKyxcRXKRa5PpUzKKEwtpECBZsUYt9Jd7egSDEWoV";
 
     fn base_cli() -> NockchainCli {
         NockchainCli {
             nockapp_cli: default_boot_cli(false),
             mine: false,
-            mining_pubkey: None,
             mining_pkh: None,
-            mining_key_adv: None,
             mining_pkh_adv: None,
             fakenet: false,
             peer: Vec::new(),
@@ -258,11 +208,6 @@ mod tests {
     #[test]
     fn validate_accepts_valid_advanced_configs() {
         let mut cli = base_cli();
-        cli.mining_key_adv = Some(vec![MiningKeyConfig {
-            share: 1,
-            m: 1,
-            keys: vec![VALID_MINING_PUBKEY.to_string()],
-        }]);
         cli.mining_pkh_adv = Some(vec![MiningPkhConfig {
             share: 1,
             pkh: VALID_MINING_PKH.to_string(),
@@ -272,39 +217,13 @@ mod tests {
     }
 
     #[test]
-    fn validate_rejects_invalid_mining_key_adv_pubkey() {
-        let mut cli = base_cli();
-        // We specifically want to catch if users mix up v0 and v1 addresses, because they are both base58-encoded.
-        // Using a base58-encoded pkh ensures the input is base58 but not a valid pubkey.
-        let invalid_pubkey = VALID_MINING_PKH;
-        cli.mining_key_adv = Some(vec![MiningKeyConfig {
-            share: 1,
-            m: 1,
-            keys: vec![invalid_pubkey.to_string()],
-        }]);
-        cli.mining_pkh_adv = Some(vec![MiningPkhConfig {
-            share: 1,
-            pkh: VALID_MINING_PKH.to_string(),
-        }]);
-
-        let err = cli.validate().expect_err("expected invalid pubkey");
-        assert!(err.contains("Invalid mining_key_adv pubkey"));
-    }
-
-    #[test]
     fn validate_rejects_invalid_mining_pkh_adv_entry() {
         // We specifically want to catch if users mix up v0 and v1 addresses, because they are both base58-encoded.
         // Using a base58-encoded pubkey ensures the input is base58 but not a valid hash.
-        let invalid_mining_pkh = VALID_MINING_PUBKEY.to_string();
         let mut cli = base_cli();
-        cli.mining_key_adv = Some(vec![MiningKeyConfig {
-            share: 1,
-            m: 1,
-            keys: vec![VALID_MINING_PUBKEY.to_string()],
-        }]);
         cli.mining_pkh_adv = Some(vec![MiningPkhConfig {
             share: 1,
-            pkh: invalid_mining_pkh,
+            pkh: VALID_V0_PUBKEY.to_string(),
         }]);
 
         let err = cli.validate().expect_err("expected invalid pkh adv");

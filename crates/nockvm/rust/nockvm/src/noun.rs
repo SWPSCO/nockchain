@@ -6,10 +6,16 @@ use either::{Either, Left, Right};
 use ibig::{Stack, UBig};
 use intmap::IntMap;
 use nockvm_macros::tas;
+use static_assertions::assert_cfg;
 
 use crate::mem::{word_size_of, NockStack};
 
 crate::gdb!();
+
+assert_cfg!(
+    target_endian = "little",
+    "nockvm will not execute correctly on non-little-endian systems"
+);
 
 /** Tag for a direct atom. */
 pub(crate) const DIRECT_TAG: u64 = 0x0;
