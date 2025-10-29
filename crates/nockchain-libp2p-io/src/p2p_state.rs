@@ -9,7 +9,7 @@ use nockapp::noun::slab::NounSlab;
 use nockapp::NockAppError;
 use nockvm::noun::Noun;
 use rand::prelude::SliceRandom;
-use tracing::{debug, info, trace};
+use tracing::{debug, info, trace, warn};
 
 use crate::messages::NockchainDataRequest;
 use crate::metrics::NockchainP2PMetrics;
@@ -357,7 +357,8 @@ impl P2PState {
 
         // Remove each peer that sent us this bad block
         for peer in &peers_to_ban {
-            self.remove_peer(peer);
+            // self.remove_peer(peer);
+            warn!("Ignoring request to ban peer {} -- HOTFIX, FIX ME [OCT 28 25]", peer);
         }
 
         self.remove_block_id(block_id)?;
