@@ -53,10 +53,11 @@ jobs:
           sudo apt-get update && sudo apt-get install -y build-essential
           mkdir -p hoon
           mkdir -p assets
-          rustup default stable
+          rustup default nightly
           cp .env_example .env
       - name: build
         run: |
+          mkdir -p target/x86_64-unknown-linux-gnu/release
           cargo install --target x86_64-unknown-linux-gnu --locked --force --path crates/hoonc --bin hoonc
           cp $(which hoonc) target/x86_64-unknown-linux-gnu/release/
           make build-assets
@@ -66,8 +67,8 @@ jobs:
           name: linux-artifacts-x64
           path: |
             assets/*.jam
-            target/x86_64-unknown-linux-gnu/release/nockchain
-            target/release/hoonc
+            target/x86_64-unknown-linux-gnu/release/hoonc
+            target/release/nockchain
             target/release/nockchain-wallet
 
   build-macos:
