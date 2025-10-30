@@ -55,20 +55,20 @@ jobs:
           mkdir -p assets
           rustup default stable
           cp .env_example .env
-      - name: install choo
+      - name: build
         run: |
           cargo install --target x86_64-unknown-linux-gnu --locked --force --path crates/hoonc --bin hoonc
           cp $(which hoonc) target/x86_64-unknown-linux-gnu/release/
-      - name: build assets
-        run: make build
+          make build-assets
+          make build
       - uses: actions/upload-artifact@v4
         with:
           name: linux-artifacts-x64
           path: |
             assets/*.jam
             target/x86_64-unknown-linux-gnu/release/nockchain
-            target/x86_64-unknown-linux-gnu/release/hoonc
-            target/x86_64-unknown-linux-gnu/release/nockchain-wallet
+            target/release/hoonc
+            target/release/nockchain-wallet
 
   build-macos:
     needs: vars
@@ -83,6 +83,7 @@ jobs:
       - name: build
         run: |
           make install-hoonc
+          make build-assets
           make build
           make install-nockchain
           make install-nockchain-wallet
