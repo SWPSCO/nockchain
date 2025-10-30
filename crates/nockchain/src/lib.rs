@@ -436,9 +436,7 @@ pub async fn init_with_kernel<J: Jammer + Send + 'static>(
     setup::poke(&mut nockapp, setup::SetupCommand::PokeSetBtcData).await?;
 
     // Set up empty mining config by default (TODO remove when taking out pubkey infra)
-    let mining_config: Option<Vec<MiningKeyConfig>> = {
-        None
-    };
+    let mining_config: Option<Vec<MiningKeyConfig>> = { None };
 
     let mining_pkh_config = if let Some(pkh) = &cli.mining_pkh {
         Some(vec![MiningPkhConfig {
