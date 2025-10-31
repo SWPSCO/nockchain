@@ -174,6 +174,7 @@
   ++  row-constraints         row-constraints:*verifier-funcs
   ++  transition-constraints  transition-constraints:*verifier-funcs
   ++  terminal-constraints    terminal-constraints:*verifier-funcs
+  ++  extra-constraints       extra-constraints:*verifier-funcs
   --
 ::
 ++  verifier-funcs
@@ -196,6 +197,10 @@
   ::
   ::  apply to the final row only
   ++  terminal-constraints
+    *(map term mp-ultra)
+  ::
+  ::  apply to extra composition poly only
+  ++  extra-constraints
     *(map term mp-ultra)
   --
 ::
@@ -514,6 +519,37 @@
     |=  [i=@ chal=belt]
     [i chal]
   ::
+  ::  Compute derived challenges
+  ++  augment-challenges
+    ~/  %augment-challenges
+    |=  [raw-chals=(list belt) [s=* f=*]]
+    ^-  bpoly
+    ~+
+    ~|  "make sure that you are passing in the right number of raw challenges, especially in your test arm"
+    ?>  (gte (lent raw-chals) num-chals)  ::  ensure we have enough random values
+    =/  raw-chals  (scag num-chals raw-chals)
+    =/  named-chals
+      %-  ~(gas by *(map term belt))
+      (zip-up chal-names-basic raw-chals)
+    =/  a    (got-pelt named-chals %a)
+    =/  b    (got-pelt named-chals %b)
+    =/  c    (got-pelt named-chals %c)
+    =/  alf  (got-pelt named-chals %alf)
+    =/  inv-alf
+      (pinv (got-pelt named-chals %alf))
+    =/  input-ifp
+      =-  (compress-pelt ~[a b c] ~[size dyck leaf]:-)
+      (build-tree-data:constraint-util s alf)
+    %-  init-bpoly
+    %+  weld  raw-chals
+    :~  (~(snag bop [3 inv-alf]) 0)
+        (~(snag bop [3 inv-alf]) 1)
+        (~(snag bop [3 inv-alf]) 2)
+        (~(snag bop [3 input-ifp]) 0)
+        (~(snag bop [3 input-ifp]) 1)
+        (~(snag bop [3 input-ifp]) 2)
+    ==
+  ::
   ++  zip-chals
     ~/  %zip-chals
     |=  [names=(set term) raw-chals=(list felt)]
@@ -614,6 +650,7 @@
     ++  row-constraints         row-constraints:fs
     ++  transition-constraints  transition-constraints:fs
     ++  terminal-constraints    terminal-constraints:fs
+    ++  extra-constraints       extra-constraints:fs
     --
   ::
   ::  (representing the state of the computation at each step), but rather
@@ -807,8 +844,9 @@
         ==
     ::  TODO maybe add a should-fail flag that silences failed constraints or modifies printf
     ::       or change signature to surface error unit?
-    =/  challenge-map=(map term belt)
-      (make-challenge-map:chal challenges s f)
+    ::  augment challenges with derived challenges
+    =/  augmented-chals=bpoly
+      (augment-challenges:chal challenges s f)
     |^  ^-  ?
     =/  bound-fail  (run-bounds boundary-constraints:funcs dynamics)
     ?.  ?=(~ bound-fail)
@@ -833,7 +871,7 @@
       %+  mevy  ~(tap by boundary-constraints-labeled)
       |=  [name=@tas constraint=mp-ultra]
       =/  point  (~(snag-as-bpoly ave p.table) 0)
-      =/  eval  (mpeval-ultra %base constraint point challenge-map dynamics)
+      =/  eval  (mpeval-ultra %base constraint point augmented-chals dynamics)
       ?:  (levy eval |=(b=belt =(b 0)))  ~
       %-  some
       :*  %constraint-failed-bounds
@@ -849,7 +887,7 @@
       |=  [name=@tas constraint=mp-ultra]
       =/  last  (dec len.array.p.table)
       =/  point  (~(snag-as-bpoly ave p.table) last)
-      =/  eval  (mpeval-ultra %base constraint point challenge-map dynamics)
+      =/  eval  (mpeval-ultra %base constraint point augmented-chals dynamics)
       ?:  (levy eval |=(b=belt =(b 0)))  ~
       %-  some
       :*  %constraint-failed-terms
@@ -870,7 +908,7 @@
       %+  mevy  (range len.array.p.table)
       |=  i=@
       =/  point       (~(snag-as-bpoly ave p.table) i)
-      =/  eval  (mpeval-ultra %base constraint point challenge-map dynamics)
+      =/  eval  (mpeval-ultra %base constraint point augmented-chals dynamics)
       ?:  (levy eval |=(b=belt =(b 0)))  ~
       %-  some
       :*  %constraint-failed-row
@@ -894,7 +932,7 @@
       =/  point       (~(snag-as-bpoly ave p.table) i)
       =/  next-point   (~(snag-as-bpoly ave p.table) +(i))
       =/  combo-point  (~(weld bop point) next-point)
-      =/  eval  (mpeval-ultra %base constraint combo-point challenge-map dynamics)
+      =/  eval  (mpeval-ultra %base constraint combo-point augmented-chals dynamics)
       ?:  (levy eval |=(b=belt =(b 0)))  ~
       %-  some
       :*  %constraint-failed-trans

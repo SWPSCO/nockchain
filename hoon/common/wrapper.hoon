@@ -1,3 +1,4 @@
+~%  %wrapper  ..ut  ~
 |%
 +$  goof    [mote=term =tang]
 +$  wire    path
@@ -53,6 +54,7 @@
   +*  inner-fort  ~(. inner internal.outer)
   ++  load
     |=  old=outer-state
+    ~&  build-hash+hash
     ?+    -.old  ~&("wrapper +load: invalid old state" !!)
         %0
       =/  new-internal  (load:inner-fort internal.old)
@@ -62,7 +64,11 @@
   ++  peek
     |=  arg=path
     ^-  (unit (unit *))
-    (peek:inner-fort arg)
+    =/  pax  ((soft path) arg)
+    ?~  pax
+      ~>  %slog.[0 leaf+"wrapper +poke: arg is not a path"]
+      ~
+    (peek:inner-fort u.pax)
   ::
   ++  wish
     |=  txt=@
@@ -77,6 +83,8 @@
         [[%$ %arvo ~] *]
       =/  g  ((soft crud) +.ovum)
       ?~  g  ~&(%invalid-goof effects^..poke)
+      ?:  ?=(%intr mote.goof.u.g)
+        [effects ..poke]
       =-  [effects ..poke]
       (slog tang.goof.u.g)
     ::

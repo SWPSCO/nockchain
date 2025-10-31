@@ -1,7 +1,6 @@
-pub mod belt;
-pub mod crypto;
-pub mod mary;
 pub mod math;
-pub mod poly;
+pub mod mega;
 
-pub use poly::*;
+pub use math::*;
+pub use mega::*;
+pub use nockchain_math::{convert, crypto, handle, noun_ext, structs};

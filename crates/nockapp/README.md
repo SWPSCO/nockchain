@@ -8,19 +8,19 @@ NockApps are pure-functional state machines with automatic persistence and modul
 
 The NockApp framework provides two modules, Crown and Sword:
 1. Crown provides a minimal Rust interface to a Nock kernel.
-2. [Sword](https://github.com/zorp-corp/sword) is a modern Nock runtime that achieves durable execution.
+2. [Sword](https://github.com/zorp-corp/nockvm) is a modern Nock runtime that achieves durable execution.
 
 <br>
 
 ## Get Started
 
-To test compiling a Nock kernel using the `choo` command-line Hoon compiler, run the following commands:
+To test compiling a Nock kernel using the `hoonc` command-line Hoon compiler, run the following commands:
 
 ```
 cargo build
-cd apps/choo
+cd apps/hoonc
 cargo run --release bootstrap/kernel.hoon ../hoon-deps
-yes | mv out.jam bootstrap/choo.jam
+yes | mv out.jam bootstrap/hoonc.jam
 cargo run --release bootstrap/kernel.hoon ../hoon-deps
 ```
 
@@ -28,9 +28,9 @@ For large builds, the rust stack might overflow. To get around this, increase th
 
 ## Building NockApps
 
-The `crown` library is the primary framework for building NockApps. It provides a simple interface to a `Kernel`: a Nock core which can make state transitions with effects (via the `poke()` method) and allow inspection of its state via the `peek()` method.
+The `nockapp` library is the primary framework for building NockApps. It provides a simple interface to a `Kernel`: a Nock core which can make state transitions with effects (via the `poke()` method) and allow inspection of its state via the `peek()` method.
 
-For compiling Hoon to Nock, we're also including a pre-release of `choo`: a NockApp for the Hoon compiler. `choo` can compile Hoon to Nock as a batch-mode command-line process, without the need to spin up an interactive Urbit ship. It is intended both for developer workflows and for CI. `choo` is also our first example NockApp. More are coming!
+For compiling Hoon to Nock, we're also including a pre-release of `hoonc`: a NockApp for the Hoon compiler. `hoonc` can compile Hoon to Nock as a batch-mode command-line process, without the need to spin up an interactive Urbit ship. It is intended both for developer workflows and for CI. `hoonc` is also our first example NockApp. More are coming!
 
 ## Logging Configuration
 
@@ -53,7 +53,7 @@ Use `MINIMAL_LOG_FORMAT=true` for compact logging format
 The minimal log format (`MINIMAL_LOG_FORMAT=true`) provides:
 - Single-letter colored log levels (T, D, I, W, E)
 - Simplified timestamps in HH:MM:SS format
-- Abbreviated module paths (e.g., 'crown::kernel::boot' becomes '[cr] kernel::boot')
+- Abbreviated module paths (e.g., 'nockapp::kernel::boot' becomes '[cr] kernel::boot')
 - Special handling for slogger messages (colored by log level)
 
 ### Environment Variables
@@ -62,11 +62,11 @@ The following environment variables can be used to configure logging:
 
 ```bash
 # Set log level
-RUST_LOG="crown::kernel=trace" cargo run
+RUST_LOG="nockapp::kernel=trace" cargo run
 
 # Enable minimal log format
 MINIMAL_LOG_FORMAT=true cargo run
 
 # Combine environment variables
-RUST_LOG="crown::kernel=trace" MINIMAL_LOG_FORMAT=true cargo run
+RUST_LOG="nockapp::kernel=trace" MINIMAL_LOG_FORMAT=true cargo run
 ```

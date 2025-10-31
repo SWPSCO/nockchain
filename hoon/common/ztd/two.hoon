@@ -1421,7 +1421,7 @@
     |=  $:  field=?(%ext %base)
             mp=mp-mega
             args=bpoly  :: can be bpoly or fpoly
-            chal-map=(map @ belt)
+            chals=bpoly
             dyns=bpoly
             com-map=(map @ elt)
         ==
@@ -1457,7 +1457,7 @@
     ::
         %rnd
       %+  pow-op
-        (lift-op (~(got by chal-map) idx))
+        (lift-op (~(snag bop chals) idx))
       exp
     ::
         %dyn
@@ -1572,7 +1572,7 @@
   |=  $:  field=?(%ext %base)
           p=mp-mega
           args=bpoly  :: can be bpoly or fpoly
-          chal-map=(map @ belt)
+          chals=bpoly
           dyns=bpoly
           com-map=(map @ elt)
       ==
@@ -1584,13 +1584,13 @@
   |=  $:  field=?(%ext %base)
           p=mp-ultra
           args=bpoly  :: can be bpoly or fpoly
-          chal-map=(map @ belt)
+          chals=bpoly
           dyns=bpoly
       ==
   ^-  (list elt)
   ?-    -.p
       %mega
-    :~  (mpeval-mega field +.p args chal-map dyns ~)
+    :~  (mpeval-mega field +.p args chals dyns ~)
     ==
   ::
       %comp
@@ -1598,14 +1598,14 @@
       %+  turn
         com.p
       |=  mp=mp-mega
-      (mpeval-mega field mp args chal-map dyns com-map)
+      (mpeval-mega field mp args chals dyns com-map)
     %+  roll
       (range (lent dep.p))
     |=  [i=@ acc=(map @ elt)]
     =/  mp  (snag i dep.p)
     %-  ~(put by acc)
     :-  i
-    (mpeval-mega field mp args chal-map dyns ~)
+    (mpeval-mega field mp args chals dyns ~)
   ==
 ::
 ::
@@ -1619,11 +1619,11 @@
 ::
 ++  mp-substitute-ultra
   ~/  %mp-substitute-ultra
-  |=  [p=mp-ultra trace-evals=bpoly height=@ chal-map=(map @ belt) dyns=bpoly]
+  |=  [p=mp-ultra trace-evals=bpoly height=@ chals=bpoly dyns=bpoly]
   ^-  (list bpoly)
   ?-    -.p
       %mega
-    :~  (mp-substitute-mega +.p trace-evals height chal-map dyns ~)
+    :~  (mp-substitute-mega +.p trace-evals height chals dyns ~)
     ==
   ::
       %comp
@@ -1631,7 +1631,7 @@
       %+  turn
         com.p
       |=  mp=mp-mega
-      (mp-substitute-mega mp trace-evals height chal-map dyns com-map)
+      (mp-substitute-mega mp trace-evals height chals dyns com-map)
     ::
     :: Materialize the dependencies and label them based on order
     %+  roll
@@ -1640,7 +1640,7 @@
     =/  mp=mp-mega  (snag i dep.p)
     %-  ~(put by acc)
     :-  i
-    (mp-substitute-mega mp trace-evals height chal-map dyns ~)
+    (mp-substitute-mega mp trace-evals height chals dyns ~)
   ==
 ::
 ::  +mp-substitute-mega: Given a multipoly: sub in the chals, dyns, vars, and composition dependencies:
@@ -1660,7 +1660,7 @@
 ::
 ++  mp-substitute-mega
   ~/  %mp-substitute-mega
-  |=  [p=mp-mega trace-evals=bpoly height=@ chal-map=(map @ belt) dyns=bpoly com-map=(map @ bpoly)]
+  |=  [p=mp-mega trace-evals=bpoly height=@ chals=bpoly dyns=bpoly com-map=(map @ bpoly)]
   ^-  bpoly
   %+  roll  ~(tap by p)
   |=  [[k=bpoly v=belt] acc=_zero-bpoly]
@@ -1683,7 +1683,7 @@
     (bp-hadamard power var)
   ::
       %rnd
-    =/  rnd  (~(got by chal-map) idx)
+    =/  rnd  (~(snag bop chals) idx)
     (bpscal (bpow rnd exp) acc)
   ::
       %dyn

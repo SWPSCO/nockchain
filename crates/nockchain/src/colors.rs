@@ -119,6 +119,7 @@ pub(crate) fn print_banner(stdout: &mut StandardStream, banner: &str) {
     });
 }
 
+#[allow(dead_code)]
 pub(crate) fn print_version_info(stdout: &mut StandardStream, info: &[(&str, &str)]) {
     let mut color_spec = ColorSpec::new();
     color_spec

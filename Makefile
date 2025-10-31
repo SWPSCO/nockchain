@@ -1,84 +1,145 @@
-# Set env variables
-export RUST_BACKTRACE := full
-export RUST_LOG := info,nockchain=debug,nockchain_libp2p_io=info,libp2p=info,libp2p_quic=info
-export MINIMAL_LOG_FORMAT := true
-export MINING_PUBKEY := EHmKL2U3vXfS5GYAY5aVnGdukfDWwvkQPCZXnjvZVShsSQi3UAuA4tQQpVwGJMzc9FfpTY8pLDkqhBGfWutiF4prrCktUH9oAWJxkXQBzAavKDc95NR3DjmYwnnw8GuugnK
+# Create .env file if it doesn't exist
+$(shell [ ! -f .env ] && touch .env)
 
+# Load environment variables from .env file
+include .env
 
-## Build everything
+# Set default env variables if not set in .env
+export RUST_BACKTRACE ?= full
+export RUST_LOG ?= info,nockchain=info,nockchain_libp2p_io=info,libp2p=info,libp2p_quic=info
+export MINIMAL_LOG_FORMAT ?= true
+export MINING_PKH ?= 9yPePjfWAdUnzaQKyxcRXKRa5PpUzKKEwtpECBZsUYt9Jd7egSDEWoV
+export
+
 .PHONY: build
-build:
+build: build-hoon-all build-rust
+	$(call show_env_vars)
+
+## Build all rust
+.PHONY: build-rust
+build-rust:
 	cargo build --release
+
+.PHONY: build-nockchain-jemalloc
+build-nockchain-jemalloc:
+	cargo build --release --features jemalloc --bin nockchain
 
 ## Run all tests
 .PHONY: test
 test:
 	cargo test --release
 
-.PHONY: install-choo
-install-choo: nuke-choo-data ## Install choo from this repo
-	$(call show_env_vars)
-	cargo install --locked --force --path crates/nockapp/apps/choo --bin choo
+.PHONY: fmt
+fmt:
+	cargo fmt
 
-update-choo:
+.PHONY: build-hoonc
+build-hoonc: nuke-hoonc-data ## Build hoonc from this repo
 	$(call show_env_vars)
-	cargo install --locked --path crates/nockapp/apps/choo --bin choo
+	cargo build --release --locked --bin hoonc
+
+.PHONY: build-hoonc-tracing
+build-hoonc-tracing: nuke-hoonc-data ## Build hoonc with tracing
+	$(call show_env_vars)
+	cargo build --release --bin hoonc --features tracing-tracy
+
+.PHONY: install-hoonc
+install-hoonc: nuke-hoonc-data ## Install hoonc from this repo
+	$(call show_env_vars)
+	cargo install --locked --force --path crates/hoonc --bin hoonc
+
+.PHONY: update-hoonc
+update-hoonc:
+	$(call show_env_vars)
+	cargo install --locked --path crates/hoonc --bin hoonc
+
+.PHONY: build-nockchain
+build-nockchain: assets/dumb.jam assets/miner.jam
+	$(call show_env_vars)
+	cargo build --release --bin nockchain --features tracing-tracy
+
+.PHONY: install-nockchain
+install-nockchain: assets/dumb.jam assets/miner.jam
+	$(call show_env_vars)
+	cargo install --locked --force --path crates/nockchain --bin nockchain
 
 .PHONY: ensure-dirs
 ensure-dirs:
 	mkdir -p hoon
 	mkdir -p assets
 
-.PHONY: build-trivial-new
-build-trivial-new: ensure-dirs
+.PHONY: build-trivial
+build-trivial: ensure-dirs
 	$(call show_env_vars)
 	echo '%trivial' > hoon/trivial.hoon
-	choo --new --arbitrary hoon/trivial.hoon
+	hoonc --arbitrary hoon/trivial.hoon
 
-HOON_TARGETS=assets/dumb.jam assets/wal.jam
+HOON_TARGETS=assets/dumb.jam assets/wal.jam assets/miner.jam assets/verifier.jam
 
-.PHONY: nuke-choo-data
-nuke-choo-data:
-	rm -rf .data.choo
-	rm -rf ~/.nockapp/choo
+.PHONY: nuke-hoonc-data
+nuke-hoonc-data:
+	rm -rf .data.hoonc
+	rm -rf ~/.nockapp/hoonc
 
 .PHONY: nuke-assets
 nuke-assets:
 	rm -f assets/*.jam
 
-.PHONY: build-hoon-fresh
-build-hoon-fresh: nuke-assets nuke-choo-data install-choo ensure-dirs build-trivial-new $(HOON_TARGETS)
+.PHONY: nuke-dumb
+nuke-dumb:
+	rm -f assets/dumb.jam
+
+.PHONY: nuke-miner
+nuke-miner:
+	rm -f assets/miner.jam
+
+.PHONY: nuke-verifier
+nuke-verifier:
+	rm -f assets/verifier.jam
+
+.PHONY: build-hoon-all
+build-hoon-all: nuke-assets update-hoonc ensure-dirs build-trivial $(HOON_TARGETS)
 	$(call show_env_vars)
 
-.PHONY: build-hoon-new
-build-hoon-all: ensure-dirs update-choo build-trivial-new $(HOON_TARGETS)
+.PHONY: build-dumb
+build-dumb: nuke-dumb update-hoonc ensure-dirs build-trivial assets/dumb.jam
+	$(call show_env_vars)
+
+.PHONY: build-miner
+build-miner: nuke-miner update-hoonc ensure-dirs build-trivial assets/miner.jam
+	$(call show_env_vars)
+
+.PHONY: build-verifier
+build-verifier: nuke-verifier update-hoonc ensure-dirs build-trivial assets/verifier.jam
 	$(call show_env_vars)
 
 .PHONY: build-hoon
-build-hoon: ensure-dirs update-choo $(HOON_TARGETS)
+build-hoon: ensure-dirs update-hoonc $(HOON_TARGETS)
 	$(call show_env_vars)
 
-.PHONY: run-nockchain-leader
-run-nockchain-leader:  # Run nockchain mode in leader mode
+.PHONY: build-assets
+build-assets: ensure-dirs $(HOON_TARGETS)
 	$(call show_env_vars)
-	mkdir -p test-leader && cd test-leader && rm -f nockchain.sock && RUST_BACKTRACE=1 cargo run --release --bin nockchain -- --fakenet --genesis-leader --npc-socket nockchain.sock --mining-pubkey $(MINING_PUBKEY) --bind /ip4/0.0.0.0/udp/3005/quic-v1 --peer /ip4/127.0.0.1/udp/3006/quic-v1 --new-peer-id --no-default-peers
-
-.PHONY: run-nockchain-follower
-run-nockchain-follower:  # Run nockchain mode in follower mode
-	$(call show_env_vars)
-	mkdir -p test-follower && cd test-follower && rm -f nockchain.sock && RUST_BACKTRACE=1 cargo run --release --bin nockchain -- --fakenet --genesis-watcher --npc-socket nockchain.sock --mining-pubkey $(MINING_PUBKEY) --bind /ip4/0.0.0.0/udp/3006/quic-v1 --peer /ip4/127.0.0.1/udp/3005/quic-v1 --new-peer-id --no-default-peers
-
 
 HOON_SRCS := $(find hoon -type file -name '*.hoon')
 
-## Build dumb.jam with choo
-assets/dumb.jam: update-choo hoon/apps/dumbnet/outer.hoon $(HOON_SRCS)
+## Build dumb.jam with hoonc
+assets/dumb.jam: ensure-dirs hoon/apps/dumbnet/outer.hoon $(HOON_SRCS)
 	$(call show_env_vars)
-	RUST_LOG=trace choo hoon/apps/dumbnet/outer.hoon hoon
+	rm -f assets/dumb.jam
+	hoonc hoon/apps/dumbnet/outer.hoon hoon
 	mv out.jam assets/dumb.jam
 
-## Build wal.jam with choo
-assets/wal.jam: update-choo hoon/apps/wallet/wallet.hoon $(HOON_SRCS)
+## Build mining.jam with hoonc
+assets/miner.jam: ensure-dirs hoon/apps/dumbnet/miner.hoon $(HOON_SRCS)
 	$(call show_env_vars)
-	RUST_LOG=trace choo hoon/apps/wallet/wallet.hoon hoon
-	mv out.jam assets/wal.jam
+	rm -f assets/miner.jam
+	hoonc hoon/apps/dumbnet/miner.hoon hoon
+	mv out.jam assets/miner.jam
+
+## Build verifier.jam with hoonc
+assets/verifier.jam: update-hoonc ensure-dirs hoon/apps/verifier/verifier.hoon $(HOON_SRCS)
+	$(call show_env_vars)
+	rm -f assets/verifier.jam
+	RUST_LOG=trace hoonc hoon/apps/verifier/verifier.hoon hoon
+	mv out.jam assets/verifier.jam

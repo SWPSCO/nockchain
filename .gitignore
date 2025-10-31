@@ -1,6 +1,10 @@
+.env
 .data.*
-test-*
-.nockchain-identity
-.nockchain-identity.peerid
+/hoonc
+test-leader
+test-follower
+.nockchain_identity
+.nockchain_identity.peerid
 target
-assets/*.jam
+!crates/nockapp/test-jams
+keys.export

@@ -25,13 +25,35 @@
             (~(dunk ut p.expected) %expected)
     ==  ==
   result
-::  +expect: compares :actual to %.y and pretty-prints anything else
+::
 ::
 ++  expect
   |=  actual=vase
   (expect-eq !>(%.y) actual)
-::  +expect-fail: kicks a trap, expecting crash. pretty-prints if succeeds
 ::
+::  +expect-null: checks if actual is null
+++  expect-null
+  |=  actual=vase
+  (expect-eq !>(%.y) !>(?=(~ q.actual)))
+::
+::  +expect-some: checks if actual is not null, used to check units
+++  expect-some
+  |=  actual=vase
+  (expect-eq !>(%.n) !>(?=(~ q.actual)))
+::
+::  +expect-all: checks that all vases in list are %.y
+++  expect-all
+  |=  vs=(list vase)
+  ^-  tang
+  ?~  vs  ~
+  ?~  t.vs  ~
+  =/  h=vase  i.vs
+  =/  tl=(list vase)  t.vs
+  |-  ^-  tang
+  ?~  tl  ~
+  (weld (expect-eq !>(%.y) i.tl) $(tl t.tl))
+::
+::  +expect-fail: kicks a trap, expecting crash. pretty-prints if succeeds
 ++  expect-fail
   |=  [a=(trap) err=(unit tape)]
   ^-  tang
@@ -140,7 +162,9 @@
   |=  =test-arm
   ^-  [ok=? =tang]
   =+  name=(trip name.test-arm)
-  ~&  test-name+name
+  ~&  >>  "-------------- RUNNING TEST --------------  ".
+          "{name}   ".
+          "-----------------------------------------"
   =+  run=(mule func.test-arm)
   ?-  -.run
     %|  [| `tang`(welp p.run leaf+"CRASHED {name}" ~)]

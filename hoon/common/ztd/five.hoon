@@ -10,7 +10,8 @@
     ~/  %push
     |=  dat=proof-data
     ^-  proof
-    :+  (snoc objects dat)
+    :^    %0
+        (snoc objects dat)
       (snoc hashes (hash-hashable:tip5 (hashable-proof-data dat)))
     read-index
   ::
@@ -19,7 +20,8 @@
     ?>  (lth read-index (lent objects))
     =/  dat  (snag read-index objects)
     :-  dat
-    :+  objects
+    :^     %0
+         objects
       (snoc hashes (hash-hashable:tip5 (hashable-proof-data dat)))
     +(read-index)
   ::

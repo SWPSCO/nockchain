@@ -5,7 +5,7 @@
 |%
 +|  %types
 ::  $zerofier-cache: cache from table height -> zerofier
-+$  constraint-degrees  [boundary=@ row=@ transition=@ terminal=@]
++$  constraint-degrees  [boundary=@ row=@ transition=@ terminal=@ extra=@]
 ::  $table-to-constraint-degree: a map from table number to maximum constraint degree for that table
 +$  table-to-constraint-degree  (map @ constraint-degrees)
 ::  mp-ultra constraint along with corresponding degrees of the constraints inside
@@ -16,6 +16,7 @@
       row=(list constraint-data)
       transition=(list constraint-data)
       terminal=(list constraint-data)
+      extra=(list constraint-data)
   ==
 ::  constraint types
 +$  constraint-type    ?(%boundary %row %transition %terminal)
@@ -25,29 +26,32 @@
       row=@
       transition=@
       terminal=@
+      extra=@
   ==
 ::
-::  $preprocess-0: preprocess with a version tag attached
-+$  preprocess-0
-  $:  %0
-      cd=table-to-constraint-degree       :: maximum degree of constraints for each table
+:: preprocessed constraint data
++$  preprocess-data
+  $:  cd=table-to-constraint-degree       :: maximum degree of constraints for each table
       constraint-map=(map @ constraints)  :: map from table number -> constraints
       count-map=(map @ constraint-counts) :: map from table number -> constraint-counts
   ==
 ::
+::  versioned constraints
+::  version %0 and %1 use the same constraints
++$  preprocess-0-1  [%0 p=preprocess-data]
++$  preprocess-2    [%2 p=preprocess-data]
++$  preprocess
+  $:  pre-0-1=preprocess-0-1    :: version %0 and %1 constraints
+      pre-2=preprocess-2        :: version %2 constraints
+  ==
+::
 ::  $stark-config: prover+verifier parameters unrelated to a particular computation
 +$  stark-config
-  $:  conf=[log-expand-factor=_6 security-level=_100]
-      prep=preprocess-0
+  $:  conf=[log-expand-factor=_6 security-level=_50]
+      prep=preprocess
   ==
-::TODO this type could potentially be improved
-+$  stark-input
-  $:  table-names=(list term)
-      all-verifier-funcs=(list verifier-funcs)  ::  all verifier-funcs, whether theyre used or not
-      table-base-widths=(list @)
-      table-full-widths=(list @)
-      =stark-config
-  ==
+::
++$  stark-input  =stark-config
 ::
 +|  %cores
 ++  quot
@@ -99,6 +103,7 @@
    ==
 ::
 ++  compute-codeword-commitments
+  ~/  %compute-codeword-commitments
   |=  $:  table-marys=(list mary)
           fri-domain-len=@
           total-cols=@
@@ -167,82 +172,111 @@
       row=(list [(list @) mp-ultra])
       transition=(list [(list @) mp-ultra])
       terminal=(list [(list @) mp-ultra])
+      extra=(list [(list @) mp-ultra])
   ==
 ::
 ::  fri-deg-bound is D-1, where D is the next power of 2 greater than
 ::  the degree bounds of all composition codewords
 ++  degree-processing
-  |=  [heights=(list @) constraint-map=(map @ constraints)]
+  |=  [heights=(list @) constraint-map=(map @ constraints) is-extra=?]
   ^-  [fri-deg-bound=@ constraint-w-deg-map=(map @ constraints-w-deg)]
   =-  [(dec (bex (xeb (dec d)))) m]
   %+  roll  (range (lent heights))
   |=  [i=@ d=@ m=(map @ constraints-w-deg)]
   =/  height=@  (snag i heights)
   =/  constraints  (~(got by constraint-map) i)
-  =-  :-  :(max d d.bnd d.row d.trn d.trm)
-      (~(put by m) i [c.bnd c.row c.trn c.trm])
+  =-  :-  :(max d d.bnd d.row d.trn d.trm d.xta)
+      (~(put by m) i [c.bnd c.row c.trn c.trm c.xta])
   ::  attach composition degree to each mp & keep a running max of degrees
   ::  divided by boundary, row, transition, terminal
   :*
     ^=  bnd=[c d]
-    %^  spin  boundary.constraints  0
-    |=  [cd=constraint-data d=@]
-    =;  degrees=(list @)
-      :-  [degrees cs.cd]
-      (roll `(list @)`[d degrees] max)
-    %+  turn  degs.cd
-    |=  deg=@
-    ?:  =(height 1)  0
-    (dec (mul deg (dec height)))
+      %^  spin  boundary.constraints  0
+      |=  [cd=constraint-data d=@]
+      =;  degrees=(list @)
+        :-  [degrees cs.cd]
+        (roll `(list @)`[d degrees] max)
+      %+  turn  degs.cd
+      |=  deg=@
+      ?:  =(height 1)  0
+      (dec (mul deg (dec height)))
   ::
     ^=  row=[c d]
-    %^  spin  row.constraints  0
-    |=  [cd=constraint-data d=@]
-    =;  degrees=(list @)
-      :-  [degrees cs.cd]
-      (roll `(list @)`[d degrees] max)
-    %+  turn  degs.cd
-    |=  deg=@
-    ?:  ?|(=(height 1) =(deg 1))  0
-    (sub (mul deg (dec height)) height)
+      %^  spin  row.constraints  0
+      |=  [cd=constraint-data d=@]
+      =;  degrees=(list @)
+        :-  [degrees cs.cd]
+        (roll `(list @)`[d degrees] max)
+      %+  turn  degs.cd
+      |=  deg=@
+      ?:  ?|(=(height 1) =(deg 1))  0
+      (sub (mul deg (dec height)) height)
   ::
     ^=  trn=[c d]
-    %^  spin  transition.constraints  0
-    |=  [cd=constraint-data d=@]
-    =;  degrees=(list @)
-      :-  [degrees cs.cd]
-      (roll `(list @)`[d degrees] max)
-    %+  turn  degs.cd
-    |=(@ (mul (dec +<) (dec height)))
+      %^  spin  transition.constraints  0
+      |=  [cd=constraint-data d=@]
+      =;  degrees=(list @)
+        :-  [degrees cs.cd]
+        (roll `(list @)`[d degrees] max)
+      %+  turn  degs.cd
+      |=(@ (mul (dec +<) (dec height)))
   ::
     ^=  trm=[c d]
-    %^  spin  terminal.constraints  0
-    |=  [cd=constraint-data d=@]
-    =;  degrees=(list @)
-      :-  [degrees cs.cd]
-      (roll `(list @)`[d degrees] max)
-    %+  turn  degs.cd
-    |=  deg=@
-    ?:  =(height 1)  0
-    (dec (mul deg (dec height)))
+      %^  spin  terminal.constraints  0
+      |=  [cd=constraint-data d=@]
+      =;  degrees=(list @)
+        :-  [degrees cs.cd]
+        (roll `(list @)`[d degrees] max)
+      %+  turn  degs.cd
+      |=  deg=@
+      ?:  =(height 1)  0
+      (dec (mul deg (dec height)))
+  ::
+    ^=  xta=[c d]
+      ?.  is-extra  [~ 0]
+      %^  spin  extra.constraints  0
+      |=  [cd=constraint-data d=@]
+      =;  degrees=(list @)
+        :-  [degrees cs.cd]
+        (roll `(list @)`[d degrees] max)
+      %+  turn  degs.cd
+      |=  deg=@
+      ?:  ?|(=(height 1) =(deg 1))  0
+      (sub (mul deg (dec height)) height)
   ==
 ::
 ++  compute-composition-poly
+  ~/  %compute-composition-poly-hoon
+  |=  $:  omicrons=bpoly
+          heights=(list @)
+          tworow-trace-polys=(list bpoly)
+          constraint-map=(map @ constraints)
+          constraint-counts=(map @ constraint-counts)
+          weights-map=(map @ bpoly)
+          challenges=bpoly
+          dyn-list=(list bpoly)
+          is-extra=?
+      ==
+  ^-  bpoly
+  (do-compute-composition-poly +<)
+::
+++  do-compute-composition-poly
   ~/  %compute-composition-poly
   |=  $:  omicrons=bpoly
           heights=(list @)
           tworow-trace-polys=(list bpoly)
           constraint-map=(map @ constraints)
           constraint-counts=(map @ constraint-counts)
-          composition-chals=(map @ bpoly)
-          chal-map=(map @ belt)
-          dyn-map=(map @ bpoly)
+          weights-map=(map @ bpoly)
+          challenges=bpoly
+          dyn-list=(list bpoly)
+          is-extra=?
       ==
   ^-  bpoly
   =/  max-height=@
     %-  bex  %-  xeb  %-  dec
     (roll heights max)
-  =/  dp  (degree-processing heights constraint-map)
+  =/  dp  (degree-processing heights constraint-map is-extra)
   |^
   =/  boundary-zerofier  (init-bpoly ~[(bneg 1) 1])          ::  f(X)=X-1
   ::
@@ -251,11 +285,11 @@
   =/  height=@  (snag i heights)
   =/  omicron  (~(snag bop omicrons) i)
   =/  last-row  (init-bpoly ~[(bneg (binv omicron)) 1])      ::  f(X)=X-g^{-1}
-  =/  chals  (~(got by composition-chals) i)
+  =/  weights  (~(got by weights-map) i)
   =/  trace  (snag i tworow-trace-polys)
   =/  constraints  (~(got by constraint-w-deg-map.dp) i)
   =/  counts  (~(got by constraint-counts) i)
-  =/  dyns  (~(got by dyn-map) i)
+  =/  dyns  (snag i dyn-list)
   ::
   =/  row-zerofier                                           ::  f(X) = (X^N-1)
     (bpsub (bppow id-bpoly height) one-bpoly)
@@ -268,7 +302,7 @@
     %-  process-composition-constraints
     :*  boundary.constraints
         trace
-        (~(scag bop chals) (mul 2 boundary.counts))
+        (~(scag bop weights) (mul 2 boundary.counts))
         dyns
     ==
   ::
@@ -278,7 +312,7 @@
     :*  row.constraints
         trace
       ::
-        %+  ~(swag bop chals)
+        %+  ~(swag bop weights)
           (mul 2 boundary.counts)
         (mul 2 row.counts)
       ::
@@ -294,7 +328,7 @@
     :*  transition.constraints
         trace
       ::
-        %+  ~(swag bop chals)
+        %+  ~(swag bop weights)
           (mul 2 (add boundary.counts row.counts))
         (mul 2 transition.counts)
       ::
@@ -307,20 +341,35 @@
     :*  terminal.constraints
         trace
       ::
-        %-  ~(slag bop chals)
+        %+  ~(swag bop weights)
+          (mul 2 :(add boundary.counts row.counts transition.counts))
+        (mul 2 terminal.counts)
+      ::
+        dyns
+    ==
+  ::
+    ?.  is-extra  zero-bpoly
+    %-  bpdiv
+    :_  row-zerofier
+    %-  process-composition-constraints
+    :*  extra.constraints
+        trace
+      ::
+        %-  ~(slag bop weights)
         %+  mul  2
         ;:  add
           boundary.counts
           row.counts
           transition.counts
+          terminal.counts
         ==
       ::
         dyns
     ==
+  ::
   ==
   ::
   ++  process-composition-constraints
-    ~/  %process-composition-constraints
     |=  $:  constraints=(list [(list @) mp-ultra])
             trace=bpoly
             weights=bpoly
@@ -334,7 +383,7 @@
     ::  constraint type can contain multiple mp-mega constraints.
     ::
     =/  comps=(list bpoly)
-      (mp-substitute-ultra mp trace max-height chal-map dyns)
+      (mp-substitute-ultra mp trace max-height challenges dyns)
     %+  roll
       (zip-up degs comps)
     |=  [[deg=@ comp=bpoly] [idx=_idx acc=_acc]]
@@ -347,6 +396,8 @@
     ::
     =/  alpha  (~(snag bop weights) (mul 2 idx))
     =/  beta   (~(snag bop weights) (add 1 (mul 2 idx)))
+    ::~&  alpha+alpha
+    ::~&  beta+beta
     ::
     ::  adjust degree up to fri-deg-bound.
     ::  if fri-deg-bound is D-1 then we construct:
@@ -371,6 +422,7 @@
           weights=fpoly
           omicrons=fpoly
           deep-challenge=felt
+          comp-eval-point=felt
       ==
   |^  ^-  fpoly
   =/  [acc=fpoly num=@]
@@ -382,7 +434,13 @@
       (bpoly-to-fpoly (~(snag-as-bpoly ave p) i))
     =/  omicron  (~(snag fop omicrons) i)
     =/  [first-row=fpoly num=@]    :: first row:  f(x)-f(Z)/x-Z
-      (weighted-linear-combo lis trace-openings num (fp-c deep-challenge) weights)
+      %-  weighted-linear-combo
+      :*  lis
+          trace-openings
+          num
+          (fp-c deep-challenge)
+          weights
+      ==
     =/  [second-row=fpoly num=@]   :: second row:  f(x)-f(gZ)/x-gZ
       %-  weighted-linear-combo
       :*  lis
@@ -393,6 +451,36 @@
       ==
     :_  num
     :(fpadd acc first-row second-row)
+  ::
+  ::  do the same thing for the second composition poly evals
+  =/  [acc=fpoly num=@]
+    %^  zip-roll  (range (lent trace-polys))  trace-polys
+    |=  [[i=@ p=mary] acc=_acc num=_num]
+    =/  lis=(list fpoly)
+      %+  turn  (range len.array.p)
+      |=  i=@
+      (bpoly-to-fpoly (~(snag-as-bpoly ave p) i))
+    =/  omicron  (~(snag fop omicrons) i)
+    ::  add new composition poly
+    =/  [new-first-row=fpoly num=@]    :: first row:  f(x)-f(Z)/x-Z
+      %-  weighted-linear-combo
+      :*  lis
+          trace-openings
+          num
+          (fp-c comp-eval-point)
+          weights
+      ==
+    ::  second row
+    =/  [new-second-row=fpoly num=@]   :: second row:  f(x)-f(gZ)/x-gZ
+      %-  weighted-linear-combo
+      :*  lis
+          trace-openings
+          num
+          (fp-c (fmul omicron comp-eval-point))
+          weights
+      ==
+    :_  num
+    :(fpadd acc new-first-row new-second-row)
   ::
   =/  [pieces=fpoly @]
     %-  weighted-linear-combo
@@ -802,8 +890,7 @@
 --
 ~%  %pow  ..fock  ~
 |%
-++  pow-len  `@`128
-+$  tip5-hash-atom  @
+++  pow-len  `@`64
 ::
 ::  +puzzle-nock: powork puzzle
 ::
@@ -849,6 +936,9 @@
 ~%  %stark-engine  ..puzzle-nock  ~
 ::    stark-engine
 |%
+::
+::  This is a dummy arm which is only here so lib/stark/prover.hoon can use it as its parent core.
+::  Without it, jets won't work in that file.
 ++  stark-engine-jet-hook
   ~/  %stark-engine-jet-hook
   |=  n=@
@@ -915,12 +1005,13 @@
     |=  [funcs=verifier-funcs maybe-jutes=(unit jute-map)]
     ^-  constraint-degrees
     =/  jutes=jute-map  ?^(maybe-jutes (need maybe-jutes) *jute-map)
-    =-  [(snag 0 -) (snag 1 -) (snag 2 -) (snag 3 -)]
+    =-  [(snag 0 -) (snag 1 -) (snag 2 -) (snag 3 -) (snag 4 -)]
     %+  turn
       :~  (unlabel-constraints:util boundary-constraints:funcs)
           (unlabel-constraints:util row-constraints:funcs)
           (unlabel-constraints:util transition-constraints:funcs)
           (unlabel-constraints:util terminal-constraints:funcs)
+          (unlabel-constraints:util extra-constraints:funcs)
       ==
     |=  l=(list mp-ultra)
     %+  roll

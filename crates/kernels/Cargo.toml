@@ -12,3 +12,5 @@ bazel_build = []
 # Specific kernels
 dumb = []
 wallet = []
+miner = []
+verifier = []

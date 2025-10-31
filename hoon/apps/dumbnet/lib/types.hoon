@@ -1,59 +1,263 @@
 /=  *   /common/zoon
+/=  zeke  /common/zeke
 /=  w   /common/wrapper
 /=  dt  /common/tx-engine
+/=  sp  /common/stark/prover
+/=  miner-kernel  /apps/dumbnet/miner
 |%
 +|  %state
-+$  kernel-state
-  $+  kernel-state
-  $%  $:  %0
-          c=consensus-state
-          p=pending-state
-          a=admin-state
-          m=mining-state
-        ::
-          d=derived-state
-          constants=blockchain-constants:dt
-  ==  ==
++$  load-kernel-state
+  $+  load-kernel-state
+  $%  kernel-state-0
+      kernel-state-1
+      kernel-state-2
+      kernel-state-3
+      kernel-state-4
+      kernel-state-5
+      kernel-state-6
+  ==
 ::
-+$  consensus-state
-  $+  consensus-state
-  $:  balance=(z-mip block-id:dt nname:dt nnote:dt)
-      txs=(z-mip block-id:dt tx-id:dt tx:dt) ::  fully validated transactions
-      blocks=(z-map block-id:dt local-page:dt)  ::  fully validated blocks
++$  kernel-state-0
+  $:  %0
+      c=consensus-state-0
+      p=pending-state-0
+      a=admin-state-0
+      m=mining-state-0
     ::
-      heaviest-block=(unit block-id:dt) ::  most recent heaviest block
+      d=derived-state-0
+      constants=blockchain-constants:v0:dt
+  ==
+::
++$  kernel-state-1
+  $:  %1
+      c=consensus-state-1
+      p=pending-state-1
+      a=admin-state-1
+      m=mining-state-1
+    ::
+      d=derived-state-1
+      constants=blockchain-constants:v0:dt
+  ==
++$  kernel-state-2
+  $:  %2
+      c=consensus-state-2
+      p=pending-state-2
+      a=admin-state-2
+      m=mining-state-2
+    ::
+      d=derived-state-2
+      constants=blockchain-constants:v0:dt
+  ==
++$  kernel-state-3
+  $:  %3
+      c=consensus-state-3
+      p=pending-state-3
+      a=admin-state-3
+      m=mining-state-3
+    ::
+      d=derived-state-3
+      constants=blockchain-constants:v0:dt
+  ==
+::
++$  kernel-state-4
+  $:  %4
+      c=consensus-state-4
+      p=pending-state-4
+      a=admin-state-4
+      m=mining-state-4
+    ::
+      d=derived-state-4
+      constants=blockchain-constants:v0:dt
+  ==
+::
++$  kernel-state-5
+  $:  %5
+      c=consensus-state-5
+      a=admin-state-5
+      m=mining-state-5
+    ::
+      d=derived-state-5
+      constants=blockchain-constants:v0:dt
+  ==
+::
++$  kernel-state-6
+  $:  %6
+      c=consensus-state-6
+      a=admin-state-6
+      m=mining-state-6
+    ::
+      d=derived-state-6
+      constants=blockchain-constants:v1:dt
+  ==
+::
++$  kernel-state  kernel-state-6
+::
++$  consensus-state-0
+  $+  consensus-state-0
+  $:  balance=(z-mip block-id:v0:dt nname:v0:dt nnote:v0:dt)
+      txs=(z-mip block-id:v0:dt tx-id:v0:dt tx:v0:dt) ::  fully validated transactions
+      blocks=(z-map block-id:v0:dt local-page:v0:dt)  ::  fully validated blocks
+    ::
+      heaviest-block=(unit block-id:v0:dt) ::  most recent heaviest block
     ::
     ::  min timestamp of block that is a child of this block
-      min-timestamps=(z-map block-id:dt @)
+      min-timestamps=(z-map block-id:v0:dt @)
     ::  this map is used to calculate epoch duration. it is a map of each
     ::  block-id to the first block-id in that epoch.
-      epoch-start=(z-map block-id:dt block-id:dt)
+      epoch-start=(z-map block-id:v0:dt block-id:v0:dt)
     ::  this map contains the expected target for the child
     ::  of a given block-id.
-      targets=(z-map block-id:dt bignum:bignum:dt)
+      targets=(z-map block-id:v0:dt bignum:bignum:v0:dt)
     ::
     ::  Bitcoin block hash for genesis block
     ::>)  TODO: change face to btc-hash?
-      btc-data=(unit btc-hash:dt)
-      =genesis-seal:dt  ::  desired seal for genesis block
+      btc-data=(unit (unit btc-hash:v0:dt))
+      =genesis-seal:v0:dt  ::  desired seal for genesis block
   ==
+::
++$  consensus-state-1  $+(consensus-state-1 consensus-state-0)
+::
++$  consensus-state-2  $+(consensus-state-2 consensus-state-1)
+::
++$  consensus-state-3
+  $+  consensus-state-3
+  $:  balance=(z-mip block-id:v0:dt nname:v0:dt nnote:v0:dt)
+      txs=(z-mip block-id:v0:dt tx-id:v0:dt tx:v0:dt) ::  fully validated transactions
+      raw-txs=(z-map tx-id:v0:dt raw-tx:v0:dt) :: raw versions of fully validated transactions
+      blocks=(z-map block-id:v0:dt local-page:v0:dt)  ::  fully validated blocks
+    ::
+      heaviest-block=(unit block-id:v0:dt) ::  most recent heaviest block
+    ::
+    ::  min timestamp of block that is a child of this block
+      min-timestamps=(z-map block-id:v0:dt @)
+    ::  this map is used to calculate epoch duration. it is a map of each
+    ::  block-id to the first block-id in that epoch.
+      epoch-start=(z-map block-id:v0:dt block-id:v0:dt)
+    ::  this map contains the expected target for the child
+    ::  of a given block-id.
+      targets=(z-map block-id:v0:dt bignum:bignum:v0:dt)
+    ::
+    ::  Bitcoin block hash for genesis block
+    ::>)  TODO: change face to btc-hash?
+      btc-data=(unit (unit btc-hash:v0:dt))
+      =genesis-seal:v0:dt  ::  desired seal for genesis block
+  ==
+::
++$  consensus-state-4  $+(consensus-state-4 consensus-state-3)
+::
++$  consensus-state-5
+  $+  consensus-state-5
+  ::
+  ::  indexes and not-fully-validated state
+  $:
+    $:
+    :: keys in raw-txs must be in EXACTLY ONE OF blocks-needed-by or excluded-txs
+        blocks-needed-by=(z-jug tx-id:v0:dt block-id:v0:dt) :: dependencies
+        excluded-txs=(z-set tx-id:v0:dt) :: transactions unneeded by any block
+    ::
+    ::  every tx-id in spent-by must be in raw-txs and vice-versa
+        spent-by=(z-jug nname:v0:dt tx-id:v0:dt)
+    ::
+        pending-blocks=(z-map block-id:v0:dt [=page:v0:dt heard-at=@])  :: pending blocks
+    ==
+  ::
+  ::  core consensus state
+    $:  balance=(z-mip block-id:v0:dt nname:v0:dt nnote:v0:dt)
+        txs=(z-mip block-id:v0:dt tx-id:v0:dt tx:v0:dt) ::  fully validated transactions
+      ::
+      :: keys in raw-txs must be in EXACTLY ONE OF blocks-needed-by or excluded-txs
+        raw-txs=(z-map tx-id:v0:dt [=raw-tx:v0:dt heard-at=@]) :: raw transactions
+      ::
+        blocks=(z-map block-id:v0:dt local-page:v0:dt)  ::  fully validated blocks
+      ::
+        heaviest-block=(unit block-id:v0:dt) ::  most recent heaviest block
+      ::
+      ::  min timestamp of block that is a child of this block
+        min-timestamps=(z-map block-id:v0:dt @)
+      ::  this map is used to calculate epoch duration. it is a map of each
+      ::  block-id to the first block-id in that epoch.
+        epoch-start=(z-map block-id:v0:dt block-id:v0:dt)
+      ::  this map contains the expected target for the child
+      ::  of a given block-id.
+        targets=(z-map block-id:v0:dt bignum:bignum:v0:dt)
+      ::
+      ::  Bitcoin block hash for genesis block
+      ::>)  TODO: change face to btc-hash?
+        btc-data=(unit (unit btc-hash:v0:dt))
+        =genesis-seal:v0:dt  ::  desired seal for genesis block
+    ==
+  ==
+::
++$  consensus-state-6
+  $+  consensus-state-6
+  ::
+  ::  indexes and not-fully-validated state
+  $:
+    $:
+    :: keys in raw-txs must be in EXACTLY ONE OF blocks-needed-by or excluded-txs
+        blocks-needed-by=(z-jug tx-id:dt block-id:dt) :: dependencies
+        excluded-txs=(z-set tx-id:dt) :: transactions unneeded by any block
+    ::
+    ::  every tx-id in spent-by must be in raw-txs and vice-versa
+        spent-by=(z-jug nname:dt tx-id:dt)
+    ::
+        pending-blocks=(z-map block-id:dt [=page:dt heard-at=@])  :: pending blocks
+    ==
+  ::
+  ::  core consensus state
+    $:  balance=(z-mip block-id:dt nname:dt nnote:dt)
+        txs=(z-mip block-id:dt tx-id:dt tx:dt) ::  fully validated transactions
+      ::
+      :: keys in raw-txs must be in EXACTLY ONE OF blocks-needed-by or excluded-txs
+        raw-txs=(z-map tx-id:dt [=raw-tx:dt heard-at=@]) :: raw transactions
+      ::
+        blocks=(z-map block-id:dt local-page:dt)  ::  fully validated blocks
+      ::
+        heaviest-block=(unit block-id:dt) ::  most recent heaviest block
+      ::
+      ::  min timestamp of block that is a child of this block
+        min-timestamps=(z-map block-id:dt @)
+      ::  this map is used to calculate epoch duration. it is a map of each
+      ::  block-id to the first block-id in that epoch.
+        epoch-start=(z-map block-id:dt block-id:dt)
+      ::  this map contains the expected target for the child
+      ::  of a given block-id.
+        targets=(z-map block-id:dt bignum:bignum:dt)
+      ::
+      ::  Bitcoin block hash for genesis block
+      ::>)  TODO: change face to btc-hash?
+        btc-data=(unit (unit btc-hash:dt))
+        =genesis-seal:dt  ::  desired seal for genesis block
+    ==
+  ==
+::
++$  consensus-state  consensus-state-6
 ::
 ::  you will not have lost any chain state if you lost pending state, you'd just have to
-::  request data again from peers
-+$  pending-state
+::  request data again from peers and reset your mining state
++$  pending-state-0
   $+  pending-state
-  $:  pending-blocks=(z-map block-id:dt local-page:dt)  ::  blocks for which we are waiting on txs
+  $:  pending-blocks=(z-map block-id:v0:dt local-page:v0:dt)  ::  blocks for which we are waiting on txs
     ::  data we need
-      block-tx=(z-jug block-id:dt tx-id:dt)  ::  tx-id's needed before pending block-id can be validated
-      tx-block=(z-jug tx-id:dt block-id:dt)  ::  pending block-id's that include tx-id
+      block-tx=(z-jug block-id:v0:dt tx-id:v0:dt)  ::  tx-id's needed before pending block-id can be validated
+      tx-block=(z-jug tx-id:v0:dt block-id:v0:dt)  ::  pending block-id's that include tx-id
     ::  data we have
-      raw-txs=(z-map tx-id:dt raw-tx:dt)
-      spent-by=(z-map nname:dt tx-id:dt)        ::  names of notes and the pending tx trying to spend it
-      heard-at=(z-map tx-id:dt page-number:dt)  :: block height which a tx-id was first heard
+      raw-txs=(z-map tx-id:v0:dt raw-tx:v0:dt)
+      spent-by=(z-map nname:v0:dt tx-id:v0:dt)        ::  names of notes and the pending tx trying to spend it
+      heard-at=(z-map tx-id:v0:dt page-number:v0:dt)  :: block height which a tx-id was first heard
   ==
 ::
-+$  admin-state
-  $+  admin-state
++$  pending-state-1  $+(pending-state-1 pending-state-0)
+::
++$  pending-state-2  $+(pending-state-2 pending-state-1)
+::
++$  pending-state-3  $+(pending-state-3 pending-state-2)
+::
++$  pending-state-4  $+(pending-state-4 pending-state-3)
+::  for kernel version 5 and later there is no pending state
+::
++$  admin-state-0
+  $+  admin-state-0
   $:  desk-hash=(unit @uvI)               ::  hash of zkvm desk
       init=init-phase                     ::  boolean flag denoting whether kernel is in the init phase.
       retain=$~([~ 20] (unit @))          ::  how long to retain transactions before dropping
@@ -61,19 +265,78 @@
                                           ::  value of [~ 0] indicates drop everything every new block
   ==
 ::
-+$  derived-state
-  $+  derived-state
-  $:  heaviest-chain=(z-map page-number:dt block-id:dt)
++$  admin-state-1  $+(admin-state-1 admin-state-0)
+::
++$  admin-state-2  $+(admin-state-2 admin-state-1)
+::
++$  admin-state-3  $+(admin-state-3 admin-state-2)
+::
++$  admin-state-4  $+(admin-state-4 admin-state-3)
+::
++$  admin-state-5  $+(admin-state-5 admin-state-4)
+::
++$  admin-state-6  $+(admin-state-6 admin-state-5)
+::
++$  admin-state  admin-state-6
+::
++$  derived-state-0
+  $+  derived-state-0
+  $:  heaviest-chain=(z-map page-number:v0:dt block-id:v0:dt)
   ==
 ::
-+$  mining-state
-  $+  mining-state
++$  derived-state-1
+  $+  derived-state-1
+  $:  highest-block-height=(unit page-number:v0:dt)
+      heaviest-chain=(z-map page-number:v0:dt block-id:v0:dt)
+  ==
+::
++$  derived-state-2  $+(derived-state-2 derived-state-1)
+::
++$  derived-state-3  $+(derived-state-3 derived-state-2)
+::
++$  derived-state-4  $+(derived-state-4 derived-state-3)
+::
++$  derived-state-5  $+(derived-state-5 derived-state-4)
+::
++$  derived-state-6
+  $+  derived-state-6
+  $:  highest-block-height=(unit page-number:dt)
+      heaviest-chain=(z-map page-number:dt block-id:dt)
+  ==
+::
++$  derived-state  derived-state-6
+::
++$  mining-state-0
+  $+  mining-state-0
   $:  mining=?                        ::  build candidate blocks?
-      pubkeys=(z-set lock:dt)          ::  locks for coinbase in mined blocks
-      shares=(z-map lock:dt @)         ::  shares of coinbase+fees among locks
+      pubkeys=(z-set sig:v0:dt)          :: sigs for coinbase in mined blocks
+      shares=(z-map sig:v0:dt @)         ::  shares of coinbase+fees among sigs
+      candidate-block=page:v0:dt            ::  the next block we will attempt to mine.
+      candidate-acc=tx-acc:v0:dt           ::  accumulator for txs in candidate block
+      next-nonce=noun-digest:tip5:zeke  :: nonce being mined
+  ==
+::
++$  mining-state-1  $+(mining-state-1 mining-state-0)
+::
++$  mining-state-2  $+(mining-state-2 mining-state-1)
+::
++$  mining-state-3  $+(mining-state-3 mining-state-2)
+::
++$  mining-state-4  $+(mining-state-4 mining-state-3)
+::
++$  mining-state-5  $+(mining-state-4 mining-state-3)
+::
++$  mining-state-6
+  $+  mining-state-6
+  $:  mining=?                        ::  build candidate blocks?
+      shares=(z-map hash:dt @)              ::  shares of coinbase+fees among sighashes (v1)
+      v0-shares=(z-map sig:v0:dt @)         ::  shares of coinbase+fees among sigs (v0)
       candidate-block=page:dt            ::  the next block we will attempt to mine.
       candidate-acc=tx-acc:dt           ::  accumulator for txs in candidate block
+      next-nonce=noun-digest:tip5:zeke  :: nonce being mined
   ==
+::
++$  mining-state  mining-state-6
 ::
 +$  init-phase  $~(%.y ?)
 ::
@@ -87,16 +350,16 @@
 ::
 +$  command
   $+  command
-  $%  [%mine p=[@ @ @ @ @]]  ::  mine at nonce .p
-      [%set-mining-key p=@t]  ::  set $lock for coinbase in mined blocks
-      [%set-mining-key-advanced p=(list [share=@ m=@ keys=(list @t)])]  :: multisig and/or split coinbases
+  $%  [%pow prf=proof:sp dig=tip5-hash-atom:zeke bc=noun-digest:tip5:zeke nonce=noun-digest:tip5:zeke] :: check if a proof of work is good for the next block, issue a block if so
+      [%set-mining-key v0=@t v1=@t]  ::  set $lock for coinbase in mined blocks
+      [%set-mining-key-advanced v0=(list [share=@ m=@ keys=(list @t)]) v1=(list [share=@ phk=@t])]  :: multisig and/or split coinbases
       [%enable-mining p=?]  ::  switch for generating candidate blocks for mining
-      [%timer p=~] ::  ask for heaviest block and any pending transactions
+      [%timer p=~] ::  ask for heaviest block and any needed transactions for pending blocks
       [%born p=~]  ::  initial event the king sends on boot
       [%genesis p=[=btc-hash:dt block-height=@ message=cord]]  ::  emit genesis block with this template
       :: set expected btc height and msg hash of genesis block
       [%set-genesis-seal p=[height=page-number:dt msg-hash=@t]]
-      [%btc-data p=btc-hash:dt]  ::  data from BTC RPC node
+      [%btc-data p=(unit btc-hash:dt)]  ::  data from BTC RPC node
       test-command
   ==
 ::
@@ -106,22 +369,30 @@
   $%  [%set-constants p=blockchain-constants:dt]
   ==
 ::
-::  commands that can only be performed if init-phase is %.y
+::  commands that can be performed if init-phase is %.y
 +$  init-command
-  $?  %set-constants
+  $?  %born
+      %set-mining-key
+      %set-mining-key-advanced
+      %enable-mining
+      init-only-command
       %set-genesis-seal
-      %btc-data
-      %genesis
-      %born
   ==
-::  commands that can only be performed if init-phase is %.n
-+$  non-init-command  ?(%timer)
+::  commands that can *only* be performed if init-phase is %.y
++$  init-only-command
+  $?  %genesis
+      %set-constants
+      %btc-data
+  ==
 ::
 +$  fact
   $+  fact
-  $%  [%heard-block p=page:dt]
-      [%heard-tx p=raw-tx:dt]
-      [%heard-elders p=[oldest=page-number:dt ids=(list block-id:dt)]]
+  $:  version=%0
+    $=  data
+    $%  [%heard-block p=page:dt]
+        [%heard-tx p=raw-tx:dt]
+        [%heard-elders p=[oldest=page-number:dt ids=(list block-id:dt)]]
+    ==
   ==
 ::
 +$  effect
@@ -130,14 +401,22 @@
       [%request p=request]  :: request specific tx or block
       [%track p=track]  :: runtime tracking of blocks for %liar-block-id effect
       [%seen p=seen]    ::  seen so don't reprocess
+      [%mine mine-start]
       lie
       span-effect
+      [%exit code=@]
+  ==
+::
++$  mine-start
+  $%  [%0 block-commitment=noun-digest:tip5:zeke target=bignum:bignum:dt pow-len=@]
+      [%1 block-commitment=noun-digest:tip5:zeke target=bignum:bignum:dt pow-len=@]
+      [%2 block-commitment=noun-digest:tip5:zeke target=bignum:bignum:dt pow-len=@]
   ==
 ::
 +$  seen
   $+  seen
-  $%  [%block p=block-id:dt]  ::  block has been seen, don't reprocess
-      [%tx p=tx-id:dt]       ::  tx has been seen, don't reprocess
+  $%  [%block p=block-id:dt q=(unit page-number:dt)]  ::  block has been seen, don't reprocess
+      [%tx p=tx-id:dt]                                ::  tx has been seen, don't reprocess
   ==
 ::
 +$  span-field
@@ -205,4 +484,6 @@
 ::  $pok: kernel poke type
 ::
 +$  pok     [eny=@ our=@ux now=@da =cause]
+::
+++  realnet-genesis-msg  (from-b58:hash:dt '2c8Ltbg44dPkEGcNPupcVAtDgD87753M9pG2fg8yC2mTEqg5qAFvvbT')
 --

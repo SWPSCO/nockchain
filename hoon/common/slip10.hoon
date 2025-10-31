@@ -18,13 +18,14 @@
 ::  dep:  depth in chain
 ::  ind:  index at depth
 ::  pif:  parent fingerprint (4 bytes)
+::  ver:  protocol version (1 byte)
 =>  |%
-    +$  base  [prv=@ pub=a-pt:curve cad=@ dep=@ud ind=@ud pif=@]
+    +$  base  [prv=@ pub=a-pt:curve cad=@ dep=@ud ind=@ud pif=@ ver=@ud]
     --
 |_  base
 +$  base  ^base
 ::
-+$  keyc  [key=@ cai=@]  ::  prv/pub key + chain code
++$  keyc  [key=@ cai=@ ver=@]  ::  prv/pub key + chain code + protocol version
 ::
 ::  elliptic curve operations and values
 ::
@@ -35,6 +36,9 @@
 ++  n      g-order:curve
 ::
 ++  domain-separator  [14 'dees niahckcoN']
+::
+++  current-protocol  1
+++  protocol-version  ver
 ::
 ::
 ::  rendering
@@ -53,7 +57,7 @@
 ::  core initialization
 ::
 ++  from-seed
-  |=  byts
+  |=  [byts version=@]
   ^+  +>
   =+  der=(hmac-sha512l domain-separator [wid dat])
   =/  [left=@ right=@]
@@ -64,7 +68,7 @@
   ::  obtain a valid key. This prevents the distribution from being biased.
   |-
   ?:  (lth left n)
-    +>.^$(prv left, pub (point left a-gen:curve), cad right)
+    +>.^$(prv left, pub (point left a-gen:curve), cad right, ver version)
   =/  der  (hmac-sha512l domain-separator 64^der)
   %=    $
     der  der
@@ -73,15 +77,12 @@
   ==
 ::
 ++  from-private
-  |=  keyc
-  +>(prv key, pub (point key a-gen:curve), cad cai)
+  |=  =keyc
+  +>(prv key:keyc, pub (point key:keyc a-gen:curve), cad cai:keyc, ver ver:keyc)
 ::
-::  TODO: why is the input base58 encoded? will it be?
-::  TODO: assert that key is in G
-::  pt is not inf (id), if you raise it by G-order it should give you inf
 ++  from-public
-  |=  keyc
-  +>(pub (de-a-pt key), cad cai)
+  |=  =keyc
+  +>(pub (de-a-pt key:keyc), cad cai:keyc, ver ver:keyc)
 ::
 ::  derivation arms: Only used for testing.
 ::
@@ -167,6 +168,7 @@
       dep   +(dep)
       ind   i
       pif   fingerprint
+      ver   ver
     ==
   =/  [left=@ right=@]
     =-  [(cut 3 [32 32] -) (cut 3 [0 32] -)]
@@ -207,6 +209,7 @@
       dep   +(dep)
       ind   i
       pif   fingerprint
+      ver   ver
     ==
   =/  [left=@ right=@]
     =-  [(cut 3 [32 32] -) (cut 3 [0 32] -)]
@@ -217,4 +220,132 @@
     right  right
     key   (ch-add:affine:curve (point left a-gen:curve) pub)
   ==
+::
+::  extended key serialization
+::
+++  extended-private-key
+  ^-  @t
+  %-  crip
+  %-  en:base58:wrap
+  %-  add-checksum
+  (serialize-extended %.y)
+::
+++  extended-public-key
+  ^-  @t
+  %-  crip
+  %-  en:base58:wrap
+  %-  add-checksum
+  (serialize-extended %.n)
+::
+++  serialize-extended
+  |=  include-private=?
+  ^-  @
+  =/  typ=@
+    ?:  include-private
+      0x110.6331  ::  produces "zprv" for 78-byte cheetah private keys
+    0xc0e.bb09    ::  produces "zpub" for 142-byte cheetah public keys
+  =/  key-data=@
+    ?:  include-private
+      ::  private key: 0x00 + 32-byte private key (33 bytes total)
+      ::  this serves as a format indicator to distinguish between
+      ::  private and public keys, and is inherited from the
+      ::  bip32 spec to maintain format consistency
+      (can 3 ~[[32 private-key] [1 0]])
+    ::  public key: 97-byte cheetah curve point
+    public-key
+  =/  key-size=@  ?:(include-private 33 97)
+  =/  total-size=@  (add key-size 46)  ::  key + 46 bytes metadata
+  ::
+  %+  can  3
+  :~  [key-size key-data]
+      [32 cad]
+      [4 ind]
+      [4 pif]
+      [1 (mod dep 256)]
+      [1 ver]
+      [4 typ]
+  ==
+::
+++  add-checksum
+  |=  data=@
+  ^-  @
+  =/  data-size=@  (met 3 data)
+  =/  hash1=@  (sha-256:sha data)
+  =/  hash2=@  (sha-256:sha hash1)
+  =/  checksum=@  (cut 3 [28 4] hash2)  ::  first 4 bytes
+  (can 3 ~[[4 checksum] [data-size data]])
+::
+++  from-extended-key
+  |=  key=@t
+  ^+  +>
+  =/  decoded=@
+    (de:base58:wrap (trip key))
+  ?>  (verify-checksum decoded)
+  =/  total-size=@  (met 3 decoded)
+  ::  remove the checksum
+  =/  payload=@  (cut 3 [4 total-size] decoded)
+  =/  typ=@  (cut 3 [0 4] key)
+  =/  typ-text=@t  `@t`typ
+  =/  is-private=?
+    ?:  =(typ-text 'zprv')  %.y  ::  zprv
+    ?:  =(typ-text 'zpub')  %.n  ::  zpub
+    ~|("unsupported extended key type: {<typ>}" !!)
+  =/  key-size=@  ?:(is-private 33 97)
+  ::  check if protocol version byte exists (backward compatibility)
+  =/  has-protocol-version=?
+    ::  subtract the length of the checksum from total size
+    (gte (sub total-size 4) (add key-size 46))
+  =/  protocol-version=@ud
+    ?:(has-protocol-version (cut 3 [(add key-size 41) 1] payload) 0)
+  ::  metadata layout: [key-data][chain-code][index][parent-fp][depth][ver][typ]
+  =/  depth=@ud  (cut 3 [(add key-size 40) 1] payload)
+  =/  parent-fp=@  (cut 3 [(add key-size 36) 4] payload)
+  =/  index=@ud  (cut 3 [(add key-size 32) 4] payload)
+  =/  chain-code=@  (cut 3 [key-size 32] payload)
+  =/  key-data=@  (cut 3 [0 key-size] payload)
+  =/  private-key=@
+    ?.  is-private  0
+    (cut 3 [0 32] key-data)
+  =/  public-key=a-pt:curve
+    ?:  is-private
+      (point private-key a-gen:curve)
+    (de-a-pt key-data)
+  %_  +>.$
+      prv  private-key
+      pub  public-key
+      cad  chain-code
+      dep  depth
+      ind  index
+      pif  parent-fp
+      ver  protocol-version
+  ==
+::
+++  verify-checksum
+  |=  data=@
+  ^-  ?
+  =/  total-size=@  (met 3 data)
+  =/  payload=@  (cut 3 [4 total-size] data)
+  =/  provided-checksum=@  (cut 3 [0 4] data)
+  =/  hash1=@  (sha-256:sha payload)
+  =/  hash2=@  (sha-256:sha hash1)
+  =/  computed-checksum=@  (cut 3 [28 4] hash2)
+  =(provided-checksum computed-checksum)
+--
+::
+|%
+::
+++  extended-from-keyc
+  |=  [=keyc include-private=?]
+  ^-  @t
+  ?:  include-private
+    extended-private-key:(from-private keyc)
+  extended-public-key:(from-public keyc)
+::
+++  keyc-from-extended
+  |=  key=@t
+  ^-  keyc
+  =/  core  (from-extended-key key)
+  ?:  =(0 prv:core)
+    [public-key:core chain-code:core ver:core]
+  [private-key:core chain-code:core ver:core]
 --
