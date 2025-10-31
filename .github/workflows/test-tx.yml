@@ -1,0 +1,104 @@
+name: Build and push Nockchain OCI Image
+
+on:
+  repository_dispatch:
+    types: [build-master]
+  workflow_dispatch:
+
+jobs:
+  vars:
+    runs-on: ['self-hosted', 'Linux', 'X64']
+    outputs:
+      short_sha: ${{ steps.set.outputs.short_sha }}
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          ref: master
+      - name: set short git commit sha
+        id: set
+        run: |
+          calculatedSha=$(git rev-parse master | cut -c1-7)
+          echo "short_sha=$calculatedSha" >> $GITHUB_OUTPUT
+  build:
+    needs: vars
+    runs-on: ['self-hosted', 'Linux', 'X64']
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v3
+      with:
+        ref: mw/test_tx
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: Log in to Dockerhub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
+        
+    - name: Get commit hash
+      id: vars
+      run: |
+        hash=$(curl -s https://api.github.com/repos/zorp-corp/nockchain/commits/master | jq -r '.sha')
+        echo "hash=$hash" >> $GITHUB_OUTPUT
+        echo "timestamp=$(date +%s)" >> $GITHUB_OUTPUT
+        echo "build_date=$(date)" >> $GITHUB_OUTPUT
+        
+    - name: Create Dockerfile
+      run: |
+        cat << 'EOF' > Dockerfile
+        FROM rust:1.87-slim-bullseye as builder
+        ARG BUILD_LABEL="production"
+        ARG BUILD_HOST
+        ARG BUILD_USER
+        ARG BUILD_TIMESTAMP
+        ARG BUILD_DATE
+        ENV BUILD_LABEL=${BUILD_LABEL}
+        ENV BUILD_HOST=${BUILD_HOST}
+        ENV BUILD_USER=${BUILD_USER}
+        ENV BUILD_TIMESTAMP=${BUILD_TIMESTAMP}
+        ENV BUILD_DATE=${BUILD_DATE}
+        RUN apt-get update && apt-get install -y \
+            build-essential \
+            musl-tools \
+            git \
+            unzip \
+            curl \
+            && rm -rf /var/lib/apt/lists/*
+        RUN curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v30.2/protoc-30.2-linux-x86_64.zip && \
+            unzip protoc-30.2-linux-x86_64.zip -d /usr/local && \
+            rm protoc-30.2-linux-x86_64.zip
+        WORKDIR /build
+        RUN git clone https://github.com/zorp-corp/nockchain.git .
+        RUN rustup target add x86_64-unknown-linux-gnu
+        RUN mkdir -p ~/.cargo && \
+            echo '[net]' >> ~/.cargo/config.toml && \
+            echo 'git-fetch-with-cli = true' >> ~/.cargo/config.toml
+        RUN mkdir -p hoon assets
+        RUN cp .env_example .env
+        RUN cargo install --target x86_64-unknown-linux-gnu --locked --force --path crates/hoonc --bin hoonc
+        RUN make build-hoon-all
+        RUN cargo build --release --target x86_64-unknown-linux-gnu --bin nockchain
+        FROM debian:bullseye-slim
+        WORKDIR /nc
+        RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+        COPY --from=builder /build/target/x86_64-unknown-linux-gnu/release/nockchain /usr/local/bin/nockchain
+        ENTRYPOINT ["nockchain", "--help"]
+        EOF
+        
+    - name: Build and push
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        push: true
+        tags: |
+          swpsco/nockchain:test
+          swpsco/nockchain:${{ steps.vars.outputs.hash }}
+        build-args: |
+          BUILD_HOST=SWPSCoCI
+          BUILD_USER=SWPS
+          BUILD_TIMESTAMP=${{ steps.vars.outputs.timestamp }}
+          BUILD_DATE=${{ steps.vars.outputs.build_date }}
+        no-cache: true
