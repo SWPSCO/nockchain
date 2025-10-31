@@ -74,7 +74,11 @@ build-trivial: ensure-dirs
 	echo '%trivial' > hoon/trivial.hoon
 	hoonc --arbitrary hoon/trivial.hoon
 
+<<<<<<< HEAD
 HOON_TARGETS=assets/dumb.jam assets/miner.jam assets/verifier.jam
+=======
+HOON_TARGETS=assets/dumb.jam assets/wal.jam assets/miner.jam assets/nockchain-peek.jam
+>>>>>>> zorp-corp/master
 
 .PHONY: nuke-hoonc-data
 nuke-hoonc-data:
@@ -137,9 +141,18 @@ assets/miner.jam: ensure-dirs hoon/apps/dumbnet/miner.hoon $(HOON_SRCS)
 	hoonc hoon/apps/dumbnet/miner.hoon hoon
 	mv out.jam assets/miner.jam
 
+<<<<<<< HEAD
 ## Build verifier.jam with hoonc
 assets/verifier.jam: update-hoonc ensure-dirs hoon/apps/verifier/verifier.hoon $(HOON_SRCS)
 	$(call show_env_vars)
 	rm -f assets/verifier.jam
 	RUST_LOG=trace hoonc hoon/apps/verifier/verifier.hoon hoon
 	mv out.jam assets/verifier.jam
+=======
+## Build peek.jam with hoonc
+assets/nockchain-peek.jam: ensure-dirs hoon/apps/peek/peek.hoon $(HOON_SRCS)
+	$(call show_env_vars)
+	rm -f assets/nockchain-peek.jam
+	hoonc hoon/apps/peek/peek.hoon hoon
+	mv out.jam assets/nockchain-peek.jam
+>>>>>>> zorp-corp/master

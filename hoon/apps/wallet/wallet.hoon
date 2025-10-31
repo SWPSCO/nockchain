@@ -618,6 +618,15 @@
     %-  (debug "send-tx: creating raw-tx")
     ::
     =/  raw=raw-tx:v1:transact  (new:raw-tx:v1:transact p.dat.cause)
+    ?.  (validate:raw-tx:v1:transact raw)
+      :_  state
+      :~  :-  %markdown
+          %-  crip
+          """
+          Cannot send transaction: invalid raw-tx
+          """
+          [%exit 1]
+      ==
     =/  nock-cause=$>(%fact cause:dumb)
       [%fact %0 %heard-tx raw]
     %-  (debug "send-tx: made raw-tx, sending poke request over grpc")
