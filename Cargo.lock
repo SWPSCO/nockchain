@@ -3968,6 +3968,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "nockchain-peek"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "kernels",
+ "nockapp",
+ "nockapp-grpc",
+ "nockvm",
+ "nockvm_macros",
+ "rustls",
+ "tokio",
+ "tracing",
+ "zkvm-jetpack",
+]
+
+[[package]]
 name = "nockchain-types"
 version = "0.1.0"
 dependencies = [

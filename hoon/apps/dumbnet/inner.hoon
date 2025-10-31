@@ -1124,6 +1124,13 @@
         ::  a serious bug otherwise.
         ~|  'liar-effect: ATTN: miner or +do-genesis produced a bad block!'
         !!
+      ::
+          [%poke %sys *]
+        ?:  =(%not-a-genesis-block r)
+          ~|  'liar-effect: ATTN: received a bad genesis block! check pow params and jamfile'
+          !!
+        ~|  'liar-effect: ATTN: received an unknown bad poke!'
+        !!
       ==
     ::
     ++  get-peer-id

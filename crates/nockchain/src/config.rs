@@ -105,7 +105,7 @@ pub struct NockchainCli {
     pub fakenet_pow_len: u64,
     #[arg(
         long,
-        help = "log target difficulty for mining on fakenet. Defaults to 2 (so 2^2 attempts on average find a block). Ignored on mainnet.",
+        help = "log target difficulty for mining on fakenet. Defaults to 1 (so 2^1 attempts on average find a block). Ignored on mainnet.",
         default_value = "1",
         requires = "fakenet"
     )]
@@ -113,12 +113,14 @@ pub struct NockchainCli {
     #[arg(
         long,
         help = "Minimum timelock for coinbase transactions on fakenet. Defaults to 100 blocks. Ignored on mainnet.",
+        default_value = "100",
         requires = "fakenet"
     )]
     pub fakenet_coinbase_timelock_min: Option<u64>,
     #[arg(
         long,
         help = "Override the v1-phase activation height when running on fakenet. Requires --fakenet.",
+        default_value = "1",
         requires = "fakenet"
     )]
     pub fakenet_v1_phase: Option<u64>,
