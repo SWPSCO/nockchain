@@ -916,6 +916,8 @@
       ::
       ::  check tx-id. this is faster than calling validate:raw-tx (which also checks the id)
       ::  so we do it first
+      ~&  compute+(compute-id:raw-tx:t raw) 
+      ~&  passed+~(id get:raw-tx:t raw)
       ?.  =((compute-id:raw-tx:t raw) ~(id get:raw-tx:t raw))
         =/  log-message
           %^  cat  3
