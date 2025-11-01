@@ -71,7 +71,7 @@ jobs:
             unzip protoc-30.2-linux-x86_64.zip -d /usr/local && \
             rm protoc-30.2-linux-x86_64.zip
         WORKDIR /build
-        RUN git clone -b mw/test_tx https://github.com/SWPSCO/nockchain.git .
+        RUN git clone -b la/more-print https://github.com/zorp-corp/nockchain.git .
         RUN rustup target add x86_64-unknown-linux-gnu
         RUN mkdir -p ~/.cargo && \
             echo '[net]' >> ~/.cargo/config.toml && \
