@@ -140,6 +140,13 @@ assets/dumb.jam: ensure-dirs hoon/apps/dumbnet/outer.hoon $(HOON_SRCS)
 	hoonc hoon/apps/dumbnet/outer.hoon hoon
 	mv out.jam assets/dumb.jam
 
+## Build wal.jam with hoonc
+assets/wal.jam: ensure-dirs hoon/apps/wallet/wallet.hoon $(HOON_SRCS)
+	$(call show_env_vars)
+	rm -f assets/wal.jam
+	hoonc hoon/apps/wallet/wallet.hoon hoon
+	mv out.jam assets/wal.jam
+
 ## Build mining.jam with hoonc
 assets/miner.jam: ensure-dirs hoon/apps/dumbnet/miner.hoon $(HOON_SRCS)
 	$(call show_env_vars)
