@@ -9,3 +9,6 @@ pub mod miner;
 
 #[cfg(feature = "nockchain_peek")]
 pub mod nockchain_peek;
+
+#[cfg(feature = "verifier")]
+pub mod verifier;
