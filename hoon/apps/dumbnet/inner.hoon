@@ -916,11 +916,15 @@
       ::
       ::  check tx-id. this is faster than calling validate:raw-tx (which also checks the id)
       ::  so we do it first
-      ?.  =((compute-id:raw-tx:t raw) ~(id get:raw-tx:t raw))
+      =/  computed-id=hash:t  (compute-id:raw-tx:t raw)
+      ?.  =(computed-id ~(id get:raw-tx:t raw))
         =/  log-message
-          %^  cat  3
+          ;:  (cury cat 3)
             'heard-tx: Invalid transaction id: '
-          id-b58
+            id-b58
+            ', expected: '
+            (to-b58:hash:t computed-id)
+          ==
         ~>  %slog.[1 log-message]
         :_  k
         [(liar-effect wir %tx-id-invalid)]~
@@ -1174,6 +1178,13 @@
         ::  a bad genesis block. this should never happen, it indicates
         ::  a serious bug otherwise.
         ~|  'liar-effect: ATTN: miner or +do-genesis produced a bad block!'
+        !!
+      ::
+          [%poke %sys *]
+        ?:  =(%not-a-genesis-block r)
+          ~|  'liar-effect: ATTN: received a bad genesis block! check pow params and jamfile'
+          !!
+        ~|  'liar-effect: ATTN: received an unknown bad poke!'
         !!
       ==
     ::

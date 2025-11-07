@@ -1034,7 +1034,7 @@ mod tests {
     use nockchain_types::v1::Hash;
 
     use super::*;
-    use crate::pb::common::{v1 as pb_common_v1, v2 as pb_common_v2};
+    use crate::pb::common::v1 as pb_common_v1;
     use crate::public_nockchain::v1::fixtures as fixtures_v1;
     use crate::public_nockchain::v2::fixtures;
     use crate::v2::pagination::cmp_name;

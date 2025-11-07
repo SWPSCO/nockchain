@@ -118,19 +118,15 @@ pub fn create_mining_driver(
 ) -> IODriverFn {
     Box::new(move |handle| {
         Box::pin(async move {
-            let Some(configs) = mining_config else {
-                enable_mining(&handle, false).await?;
+            // set up empty config for v0 keys (TODO remove when taking out pubkey infra from kernel)
+            let mut configs = Vec::<MiningKeyConfig>::new();
+            configs.push(MiningKeyConfig {
+                share: 1,
+                m: 1,
+                // hardcoded key to satisfy pass-through for v0 pubkey mining infra
+                keys: vec!["2qwq9dQRZfpFx8BDicghpMRnYGKZsZGxxhh9m362pzpM9aeo276pR1yHZPS41y3CW3vPKxeYM8p8fzZS8GXmDGzmNNCnVNekjrSYogqfEFMqwhHh5iCjaKPaDTwhupWqiXj6".to_string()],
+            });
 
-                if let Some(tx) = init_complete_tx {
-                    tx.send(()).map_err(|_| {
-                        NockAppError::OtherError(String::from(
-                            "Could not send driver initialization for mining driver.",
-                        ))
-                    })?;
-                }
-
-                return Ok(());
-            };
             let Some(pkh_configs) = mining_pkh_config else {
                 enable_mining(&handle, false).await?;
 
@@ -342,7 +338,7 @@ async fn set_mining_key_advanced(
     let set_mining_key_adv = Atom::from_value(&mut set_mining_key_slab, "set-mining-key-advanced")
         .expect("Failed to create set-mining-key-advanced atom");
 
-    // Create the list of v0 (pubkey) configs
+    // Create the list of v0 (pubkey) configs (TODO remove when taking out pubkey infra)
     let mut configs_list = D(0);
     for config in configs {
         // Create the list of keys

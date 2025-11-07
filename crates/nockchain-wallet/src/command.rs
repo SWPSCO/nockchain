@@ -1,6 +1,7 @@
 use std::str::FromStr;
 
-use clap::{Parser, Subcommand};
+use clap::builder::BoolishValueParser;
+use clap::{ArgAction, Parser, Subcommand};
 use nockapp::driver::Operation;
 use nockapp::kernel::boot::Cli as BootCli;
 use nockapp::wire::{Wire, WireRepr};
@@ -254,7 +255,7 @@ pub enum Commands {
     },
 
     /// Import keys from a file, extended key, seed phrase, or master private key
-    #[command(group = clap::ArgGroup::new("import_source").required(true).args(&["file", "key", "seedphrase", "watch_only_pubkey"]))]
+    #[command(group = clap::ArgGroup::new("import_source").required(true).args(&["file", "key", "seedphrase"]))]
     ImportKeys {
         /// Path to the jammed keys file
         #[arg(short = 'f', long = "file", value_name = "FILE")]
@@ -273,10 +274,13 @@ pub enum Commands {
         /// Master key version to use when generating from seed phrase
         #[arg(long = "version", value_name = "VERSION", requires = "seedphrase")]
         version: Option<u64>,
+    },
 
-        /// Pubkey (watch only)
-        #[arg(short = 'c', long = "watch-only", value_name = "WATCH_ONLY")]
-        watch_only_pubkey: Option<String>,
+    /// Add a watch-only address or pubkey to the wallet
+    WatchAddress {
+        /// Public key hash (v1 address) or schnorr pubkey (v0 address). base58 encoded.
+        #[arg(value_name = "address")]
+        address: String,
     },
 
     /// Export keys to a file
@@ -335,15 +339,15 @@ pub enum Commands {
     /// Create a transaction (use --refund-pkh when spending legacy v0 notes)
     #[command(
         name = "create-tx",
-        override_usage = "nockchain-wallet create-tx --names <NAMES> --recipient <RECIPIENT> --fee <FEE> [--refund-pkh <REFUND_PKH>]\n\n# NOTE: --refund-pkh is required when spending from v0 notes. For v1 notes, the refund defaults to the note owner.\n\nExamples:\n  # Send to a single recipient\n  nockchain-wallet create-tx \\\n    --names \"[first1 last1],[first2 last2]\" \\\n    --recipient \"<pkh-b58>:<amount>\" \\\n    --fee 10 \\\n    --refund-pkh <pkh-b58>"
+        override_usage = "nockchain-wallet create-tx --names <NAMES> --recipient <RECIPIENT> --fee <FEE> [--refund-pkh <REFUND_PKH>] [--include-data <BOOL>]\n\n# NOTE: --refund-pkh is required when spending from v0 notes. For v1 notes, the refund defaults to the note owner. --include-data defaults to true (pass 'false' to exclude note data).\n\nExamples:\n  # Send to a single recipient\n  nockchain-wallet create-tx \\\n    --names \"[first1 last1],[first2 last2]\" \\\n    --recipient \"<pkh-b58>:<amount>\" \\\n    --fee 10 \\\n    --refund-pkh <pkh-b58>"
     )]
     CreateTx {
         /// Names of notes to spend (comma-separated)
         #[arg(long)]
         names: String,
         /// Transaction output, formatted as "<recipient>:<amount>"
-        #[arg(long)]
-        recipient: String,
+        #[arg(long = "recipient")]
+        recipients: Vec<String>,
         /// Transaction fee
         #[arg(long)]
         fee: u64,
@@ -356,6 +360,14 @@ pub enum Commands {
         /// Hardened or unhardened child key
         #[arg(long, default_value = "false")]
         hardened: bool,
+        /// Include note data in output note
+        #[arg(
+            long,
+            action = ArgAction::Set,
+            value_parser = BoolishValueParser::new(),
+            default_value_t = true
+        )]
+        include_data: bool,
     },
 
     /// Export a master public key
@@ -516,6 +528,7 @@ impl Commands {
             Commands::SignHash { .. } => "sign-hash",
             Commands::VerifyHash { .. } => "verify-hash",
             Commands::TxAccepted { .. } => "tx-accepted",
+            Commands::WatchAddress { .. } => "watch-address",
         }
     }
 }

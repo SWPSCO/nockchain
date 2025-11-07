@@ -364,7 +364,7 @@
         [%derive-child i=@ hardened=? label=(unit @tas)]
         [%import-keys keys=(list (pair trek *))]
         [%import-extended extended-key=@t]                ::  extended key string
-        [%import-watch-only-pubkey key=@t]                ::  imports base58-encoded pubkey
+        [%watch-address address=@t]                ::  imports base58-encoded pubkey
         [%export-keys ~]
         [%export-master-pubkey ~]
         [%import-master-pubkey coil=*]                    ::  base58-encoded pubkey + chain code
@@ -379,10 +379,15 @@
         [%list-notes-by-address-csv address=@t]             ::  base58-encoded address, CSV format
         $:  %create-tx
             names=(list [first=@t last=@t])               ::  base58-encoded name hashes
-            =order
+            orders=(list order)
             fee=coins:transact                            ::  fee
             sign-key=(unit [child-index=@ud hardened=?])  ::  child key information to sign from
             refund-pkh=(unit hash:transact)               ::  refund pkh for spends over v0 notes
+            include-data=?                                ::  whether or not we should include note-data. defaults
+                                                          ::  to yes in cli. not including note-data is a power-user option because
+                                                          ::  if the lock is not a standard 1-of-1 pkh or coinbase, the wallet won't
+                                                          ::  be able to guess it, so the funds could be lost forever if the user.
+                                                          ::  doesn't keep track of the lock.
         ==
         [%list-active-addresses ~]
         [%list-notes ~]

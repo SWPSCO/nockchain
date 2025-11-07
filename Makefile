@@ -8,7 +8,7 @@ include .env
 export RUST_BACKTRACE ?= full
 export RUST_LOG ?= info,nockchain=info,nockchain_libp2p_io=info,libp2p=info,libp2p_quic=info
 export MINIMAL_LOG_FORMAT ?= true
-export MINING_PUBKEY ?= 2qwq9dQRZfpFx8BDicghpMRnYGKZsZGxxhh9m362pzpM9aeo276pR1yHZPS41y3CW3vPKxeYM8p8fzZS8GXmDGzmNNCnVNekjrSYogqfEFMqwhHh5iCjaKPaDTwhupWqiXj6
+export MINING_PKH ?= 9yPePjfWAdUnzaQKyxcRXKRa5PpUzKKEwtpECBZsUYt9Jd7egSDEWoV
 export
 
 .PHONY: build
@@ -53,10 +53,25 @@ update-hoonc:
 	$(call show_env_vars)
 	cargo install --locked --path crates/hoonc --bin hoonc
 
+.PHONY: build-nockchain
+build-nockchain: assets/dumb.jam assets/miner.jam
+	$(call show_env_vars)
+	cargo build --release --bin nockchain --features tracing-tracy
+
 .PHONY: install-nockchain
 install-nockchain: assets/dumb.jam assets/miner.jam
 	$(call show_env_vars)
 	cargo install --locked --force --path crates/nockchain --bin nockchain
+
+.PHONY: install-nockchain-wallet
+install-nockchain-wallet: assets/wal.jam
+	$(call show_env_vars)
+	cargo install --locked --force --path crates/nockchain-wallet --bin nockchain-wallet
+
+.PHONY: install-nockchain-peek
+install-nockchain-peek: assets/nockchain-peek.jam
+	$(call show_env_vars)
+	cargo install --locked --force --path crates/nockchain-peek --bin nockchain-peek
 
 .PHONY: ensure-dirs
 ensure-dirs:
@@ -69,7 +84,7 @@ build-trivial: ensure-dirs
 	echo '%trivial' > hoon/trivial.hoon
 	hoonc --arbitrary hoon/trivial.hoon
 
-HOON_TARGETS=assets/dumb.jam assets/miner.jam assets/verifier.jam
+HOON_TARGETS=assets/dumb.jam assets/wal.jam assets/miner.jam assets/nockchain-peek.jam assets/verifier.jam
 
 .PHONY: nuke-hoonc-data
 nuke-hoonc-data:
@@ -131,6 +146,13 @@ assets/miner.jam: ensure-dirs hoon/apps/dumbnet/miner.hoon $(HOON_SRCS)
 	rm -f assets/miner.jam
 	hoonc hoon/apps/dumbnet/miner.hoon hoon
 	mv out.jam assets/miner.jam
+
+## Build peek.jam with hoonc
+assets/nockchain-peek.jam: ensure-dirs hoon/apps/peek/peek.hoon $(HOON_SRCS)
+	$(call show_env_vars)
+	rm -f assets/nockchain-peek.jam
+	hoonc hoon/apps/peek/peek.hoon hoon
+	mv out.jam assets/nockchain-peek.jam
 
 ## Build verifier.jam with hoonc
 assets/verifier.jam: update-hoonc ensure-dirs hoon/apps/verifier/verifier.hoon $(HOON_SRCS)

@@ -30,8 +30,8 @@ nockchain-wallet import-keys --key "zprv..."
 # importing the seed phrase again with version 1.
 nockchain-wallet import-keys --seedphrase "your seed phrase here" --version <version | 1 or 0>
 
-# Import a watch-only public address
-nockchain-wallet import-keys --watch-only <public-addr-base58>
+# Import a watch-only address or pubkey
+nockchain-wallet watch-address <base58-pkh-or-pubkey>
 
 # Import a master public key from exported file
 nockchain-wallet import-master-pubkey keys.export
@@ -143,13 +143,13 @@ Shows only the notes associated with the specified public key. Useful for filter
 ### List Arbitrary Notes by Public Key (Watch-Only)
 
 ```bash
-nockchain-wallet import-keys --watch-only <address>
+nockchain-wallet watch-address <address>
 nockchain-wallet list-notes-by-address <address> --include-watch-only
 ```
 
 Shows only the notes associated with the specified public key. Useful for filtering wallet contents by address or for multisig scenarios.
 
-You must add the watch-only pubkey to the wallet before it will be recognized.
+You must add the watch-only identifier to the wallet before it will be recognized.
 
 ### List Notes by Public Key (CSV format)
 
@@ -179,15 +179,21 @@ Displays the aggregate wallet balance, including the total number of notes and t
 
 ### Create a Transaction
 
-We currently only support fan-in transactions (multiple inputs, a single recipient).
-
-#### Single Recipient Transaction
+We support transactions with any amount of input notes going to any number of recipients.
 
 ```bash
 # Send to a single recipient
 nockchain-wallet create-tx \
   --names "[first1 last1],[first2 last2]" \
   --recipient "<pkh-b58>:<amount>" \
+  --fee 10
+
+# Send to multiple recipients
+nockchain-wallet create-tx \
+  --names "[first1 last1],[first2 last2]" \
+  --recipient "<pkh-b58>:<amount>" \
+  --recipient "<pkh-b58>:<amount>" \
+  ...
   --fee 10
 ```
 

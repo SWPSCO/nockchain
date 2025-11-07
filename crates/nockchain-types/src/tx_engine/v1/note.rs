@@ -40,12 +40,7 @@ impl NounDecode for Balance {
             .map(|kv| {
                 let [k, v] = kv.uncell()?;
                 let name = Name::from_noun(&k)?;
-                let cell = v.as_cell()?;
-                let note = match cell.head().as_direct() {
-                    Ok(tag) if tag.data() == 0 => Note::V0(NoteV0::from_noun(&v)?),
-                    Ok(tag) if tag.data() == 1 => Note::V1(NoteV1::from_noun(&v)?),
-                    _ => return Err(NounDecodeError::InvalidTag),
-                };
+                let note = <Note as NounDecode>::from_noun(&v)?;
 
                 Ok((name, note))
             })

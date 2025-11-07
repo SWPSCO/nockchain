@@ -1394,7 +1394,7 @@
     ^-  hashable:tip5
     |^
     :+  hash+(hash:spend-condition spend-condition.form)
-      leaf+axis
+      hash+(from-b58:^hash '6mhCSwJQDvbkbiPAUNjetJtVoo1VLtEhmEYoU4hmdGd6ep1F6ayaV4A')
     (hashable-merk-proof merk-proof.form)
     ::
     ++  hashable-merk-proof
@@ -1418,6 +1418,9 @@
   ++  check
     |=  [=form parent-firstname=^hash]
     ^-  ?
+    ?.  =(1 axis.form)
+      ~>  %slog.[0 'axis must be 1 until a protocol upgrade that properly commits to lmp in witness']
+      %.n
     =/  spend-firstname
       (hash-hashable:tip5 [leaf+& hash+root.merk-proof.form])
     ?.  =(spend-firstname parent-firstname)

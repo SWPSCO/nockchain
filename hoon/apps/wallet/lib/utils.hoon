@@ -31,6 +31,35 @@
 ++  make-markdown-effect
   |=  nodes=markdown:m
   [%markdown (crip (en:md nodes))]
+++  locks
+  |%
+  ++  pull-lock-inner
+    |=  [nd=note-data:v1:transact nn=nname:transact pkh=(unit hash:transact)]
+    ^-  (unit lock:transact)
+    ?~  lock-noun=(~(get z-by:zo nd) %lock)
+      ?~  pkh
+        ~
+      :: There's no stored lock. Attempt rebuilding from name
+      =/  simple-lock  [(simple-pkh-lp:v1:first-name:transact u.pkh)]~
+      ?:  =((first:nname:transact (hash:lock:transact simple-lock)) -.nn)
+        (some simple-lock)
+      =/  coinbase-lock  (coinbase-pkh-sc:v1:first-name:transact u.pkh)
+      ?:  =((first:nname:transact (hash:lock:transact coinbase-lock)) -.nn)
+        (some coinbase-lock)
+      ~>  %slog.[2 'unsupported lock type']
+      ~
+    ?~  soft-lock=((soft lock-data:wt) u.lock-noun)
+      ~>  %slog.[0 'lock data in note is malformed']  ~
+    (some lock.u.soft-lock)
+  ++  pull-lock
+    |=  [nd=note-data:v1:transact nn=nname:transact pkh=(unit hash:transact)]
+    ^-  (unit lock:transact)
+    ?~  lok=(pull-lock-inner [nd nn pkh])
+      ~
+    ?:  =((first:nname:transact (hash:lock:transact u.lok)) -.nn)
+      lok
+    ~>  %slog.[0 'first-name does not match the pulled lock']  ~
+  --
 ::
 ::  +timelock-helpers: helper functions for creating timelock-intents
 ::
@@ -75,7 +104,7 @@
   ::
   ++  base-path  ^-  trek
     ?~  active-master.state
-      ~|("base path not accessible because master not set" !!)
+      ~|('base path not accessible because master not set' !!)
     /keys/[t/(to-b58:active:wt active-master.state)]
   ::
   ++  watch-path  ^-  trek
@@ -171,7 +200,7 @@
       ^-  meta:wt
       (~(got of keys.state) seed-path)
     ::
-    ++  watch-keys
+    ++  watch-addrs
       ^-  (list @t)
       =/  subtree  (~(kids of keys.state) watch-path)
       %+  turn
@@ -225,11 +254,11 @@
         (welp key-path /label)
       label/u.label
     ::
-    ++  watch-key
-      |=  b58-key=@t
+    ++  watch-addrs
+      |=  b58-addr=@t
       %+  ~(put of keys.state)
-        (welp watch-path ~[t/b58-key])
-      [%watch-key b58-key]
+        (welp watch-path ~[t/b58-addr])
+      [%watch-key b58-addr]
     --
   ::
   ++  get-note
@@ -510,22 +539,6 @@
       ++  transaction
         |=  [name=@t outs=outputs:v1:transact fees=@]
         ^-  @t
-        ::=/  input-notes=tape
-        ::  =/  notes=(list nnote:transact)
-        ::    %~  tap  z-in:zo
-        ::    %-  ~(gas z-in:zo *(z-set:zo nnote:transact))
-        ::    %+  turn
-        ::      %+  roll  ~(val z-by:zo spends)
-        ::      |=  [=spend:v1:transact seeds=(z-set:zo seed-v1:transact)]
-        ::      (~(uni z-by:zo seeds) seeds.spend)
-        ::    |=(seed=seed-v1:transact note.seed)
-        ::  %-  zing
-        ::  %+  turn  notes
-        ::  |=  =nnote:transact
-        ::  """
-
-        ::  {(trip (note nnote))}
-        ::  """
         =/  output-notes=tape
           %-  zing
           %+  turn

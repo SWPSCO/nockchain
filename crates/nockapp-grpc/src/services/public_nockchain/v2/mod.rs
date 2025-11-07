@@ -7,7 +7,6 @@ pub mod server;
 #[cfg(test)]
 pub(crate) mod fixtures {
     use nockchain_math::belt::Belt;
-    use nockchain_math::crypto::cheetah::A_GEN;
     use nockchain_types::tx_engine::v1;
 
     pub fn make_balance_update(count: usize) -> (v1::BalanceUpdate, Vec<v1::Name>) {
