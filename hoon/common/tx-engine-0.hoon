@@ -42,7 +42,7 @@
           ::  14 days measured in seconds, 1.209.600
           target-epoch-duration=^~(:(mul 14 24 60 60))
           ::  how long to wait before changing candidate block timestamp
-          update-candidate-interval=~m5
+          update-candidate-interval=~m10
           ::  how far in the future to accept a timestamp on a block
           max-future-timestamp=^~((mul 60 120))
           ::  how many blocks in the past to look at to compute median timestamp from
