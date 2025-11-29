@@ -1,4 +1,4 @@
-name: Build and push Nockchain OCI Image
+name: Nockchain Docker image
 
 on:
   repository_dispatch:
@@ -41,7 +41,7 @@ jobs:
     - name: Get commit hash
       id: vars
       run: |
-        hash=$(curl -s https://api.github.com/repos/SWPSCO/nockchain/commits/excluded-tx-peek | jq -r '.sha')
+        hash=$(curl -s https://api.github.com/repos/nockchain/nockchain/commits/master | jq -r '.sha')
         echo "hash=$hash" >> $GITHUB_OUTPUT
         echo "timestamp=$(date +%s)" >> $GITHUB_OUTPUT
         echo "build_date=$(date)" >> $GITHUB_OUTPUT
@@ -71,8 +71,7 @@ jobs:
             unzip protoc-30.2-linux-x86_64.zip -d /usr/local && \
             rm protoc-30.2-linux-x86_64.zip
         WORKDIR /build
-        RUN git clone https://github.com/SWPSCO/nockchain.git .
-	RUN git checkout excluded-tx-peek
+        RUN git clone https://github.com/nockchain/nockchain.git .
         RUN rustup target add x86_64-unknown-linux-gnu
         RUN mkdir -p ~/.cargo && \
             echo '[net]' >> ~/.cargo/config.toml && \
