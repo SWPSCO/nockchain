@@ -293,7 +293,7 @@
   ^-  (z-set nname:t)
   ?-  -.tx
     %0  ~(key z-by inputs.raw-tx.tx)
-    %1  ~|("v1 transactions not yet supported" !!)
+    %1  ~(key z-by spends.raw-tx.tx)
   ==
 ::
 ++  extract-output-nnames
@@ -306,7 +306,12 @@
           |=  out=output:v0:t
           name.note.out
         (~(gas z-in `(z-set nname:t)`~) nname-list)
-    %1  ~|("v1 transactions not yet supported" !!)
+    %1  =/  output-list=(list output:v1:t)  ~(tap z-in outputs.tx)
+        =/  nname-list=(list nname:t)
+          %+  turn  output-list
+          |=  out=output:v1:t
+          ~(name get:nnote:t note.out)
+        (~(gas z-in `(z-set nname:t)`~) nname-list)
   ==
 ::
 ++  find-problematic-txs
@@ -346,7 +351,8 @@
       ?-  -.tx
         %0  :-  ~(wyt z-by inputs.raw-tx.tx)
             ~(wyt z-by outputs.tx)
-        %1  [0 0]
+        %1  :-  ~(wyt z-by spends.raw-tx.tx)
+            ~(wyt z-in outputs.tx)
       ==
     =/  tx-section=tape
       """
