@@ -466,8 +466,8 @@
         [%& ~(key z-by v0-shares.m.k)]
       ``[keys `(to-page-summary:page:t (to-page:local-page:t u.heaviest-block))]
     ::
-        [%commitment-at height=@ ~]
-      ^-  (unit (unit noun-digest:tip5:zeke))
+        [%commitment-at height=@ pkh-b58=@t ~]
+      ^-  (unit (unit [noun-digest:tip5:zeke coins:t]))
       =/  num=(unit page-number:t)
         ((soft page-number:t) height.pole)
       ?~  num
@@ -480,6 +480,14 @@
         (bind (~(get z-by blocks.c.k) u.id) to-page:local-page:t)
       ?~  pag
         [~ ~]
+      =/  cb=coinbase-split:t  ~(coinbase get:page:t u.pag)
+      ::  we only support page-v1 so if its a v0 page, we return a [~ ~]
+      ?.  ?=([%1 *] cb)
+        [~ ~]
+      =/  reward=(unit coins:t)
+        (~(get z-by +.cb) (from-b58:hash:t pkh-b58.pole))
+      ?~  reward
+        [~ ~]
       =/  pow-data  ~(pow get:page:t u.pag)
       ?~  pow-data
         [~ ~]
@@ -490,7 +498,7 @@
       ?.  ?=([%puzzle *] puzzle)
         [~ ~]
       ~&  commitment+commitment.puzzle
-      ``commitment.puzzle
+      ``[commitment.puzzle u.reward]
     ::
         [%template difficulty=@ ~]
       ^-  (unit (unit [?(%0 %1 %2) noun-digest:tip5:zeke bignum:bignum:zeke bignum:bignum:zeke @ @]))
