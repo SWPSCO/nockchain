@@ -6,6 +6,6 @@ test-follower
 .nockchain_identity
 .nockchain_identity.peerid
 target
-assets/*.jam
+# assets/*.jam
 !crates/nockapp/test-jams
 keys.export

@@ -1,3 +1,4 @@
+/=  nockpool  /apps/dumbnet/lib/nockpool
 /=  dk  /apps/dumbnet/lib/types
 /=  sp  /common/stark/prover
 /=  c-transact  /common/tx-engine
@@ -277,7 +278,7 @@
     ^-  (unit (unit *))
     ~>  %slog.[0 (cat 3 'peek: %' -.arg)]
     =/  =(pole)  arg
-    ?+  pole  ~
+    ?+  pole  (peek:nockpool arg k)
     ::
         [%mainnet ~]
       `(is-mainnet:der c.k)

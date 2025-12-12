@@ -1,3 +1,6 @@
+#[cfg(feature = "verifier")]
+pub mod verifier;
+
 #[cfg(feature = "wallet")]
 pub mod wallet;
 

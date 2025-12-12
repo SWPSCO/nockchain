@@ -136,3 +136,13 @@ assets/peek.jam: ensure-dirs hoon/apps/peek/peek.hoon $(HOON_SRCS)
 	rm -f assets/peek.jam
 	hoonc hoon/apps/peek/peek.hoon hoon
 	mv out.jam assets/peek.jam
+
+.PHONY: build-verifier
+build-verifier: update-hoonc ensure-dirs build-trivial assets/verifier.jam
+	$(call show_env_vars)
+
+assets/verifier.jam: ensure-dirs hoon/apps/verifier/verifier.hoon $(HOON_SRCS)
+	$(call show_env_vars)
+	rm -f assets/verifier.jam
+	RUST_LOG=trace hoonc hoon/apps/verifier/verifier.hoon hoon
+	mv out.jam assets/verifier.jam

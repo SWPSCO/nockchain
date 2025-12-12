@@ -10,6 +10,7 @@ default = []
 bazel_build = []
 
 # Specific kernels
+verifier = []
 dumb = []
 wallet = []
 miner = []
