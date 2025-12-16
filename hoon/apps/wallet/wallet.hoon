@@ -219,6 +219,7 @@
         %import-seed-phrase    (do-import-seed-phrase cause)
         %send-tx               (do-send-tx cause)
         %show-tx                (do-show-tx cause)
+        %sign-tx               (do-sign-tx cause)
         %list-active-addresses  (do-list-active-addresses cause)
         %show-key-tree          (do-show-key-tree cause)
         %show-seed-phrase       (do-show-seed-phrase cause)
@@ -795,6 +796,78 @@
       [%markdown markdown-text]
       [%exit 0]
     ==
+  ::
+  ++  do-sign-tx
+    |=  =cause:wt
+    ?>  ?=(%sign-tx -.cause)
+    |^
+    %-  (debug "sign-tx: validating and signing transaction")
+    =/  =transaction:wt  dat.cause
+    =/  transaction-name=@t  name.transaction
+    =/  =spends:transact  spends.transaction
+    =/  display=transaction-display:wt  display.transaction
+    =/  =witness-data:wt  witness-data.transaction
+
+    ::  Apply witness data and validate (similar to send-tx)
+    =/  signed-spends=spends:v1:transact
+      (apply:witness-data:wt witness-data spends)
+    =/  raw=raw-tx:v1:transact  (new:raw-tx:v1:transact signed-spends)
+    =/  =tx:v1:transact  (new:tx:v1:transact raw height.balance.state)
+
+    =+  data=data:*blockchain-constants:transact
+    =/  valid=(reason:dumb ~)
+      %-  validate-with-context:spends:transact
+      [notes.balance.state signed-spends height.balance.state max-size.data]
+
+    ?-    -.valid
+        %.y
+      (save-signed-transaction transaction)
+    ::
+        %.n
+      =/  msg=@t
+        %-  crip
+        """
+        # TX Validation Failed
+
+        Failed to validate transaction {(trip transaction-name)}.
+        Reason: {(trip p.valid)}
+
+        Transaction was NOT signed or saved.
+        ---
+
+        """
+      %-  (debug "{(trip msg)}")
+      :_  state
+      :~  [%markdown msg]
+          [%exit 1]
+      ==
+    ==
+    ::
+    ++  save-signed-transaction
+      |=  =transaction:wt
+      ^-  [(list effect:wt) state:wt]
+      =/  transaction-jam  (jam transaction)
+      =/  path=@t
+        (crip "./txs/{(trip name.transaction)}.tx")
+      %-  (debug "saving signed transaction to {<path>}")
+      =/  markdown-text=@t
+        %-  crip
+        """
+        ## Transaction Signed Successfully
+
+        - Transaction: {(trip name.transaction)}
+        - Saved to: {(trip path)}
+
+        The transaction has been validated and signed. You can now send it using:
+        `nockchain-wallet send-tx {(trip path)}`
+
+        """
+      :_  state
+      :~  [%file %write path transaction-jam]
+          [%markdown markdown-text]
+          [%exit 0]
+      ==
+    --
   ::
   ++  do-list-active-addresses
     |=  =cause:wt

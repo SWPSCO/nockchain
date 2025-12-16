@@ -355,6 +355,12 @@ pub enum Commands {
         transaction: String,
     },
 
+    /// Sign a transaction file without sending it
+    SignTx {
+        /// Transaction file to sign (.psnt extension)
+        transaction: String,
+    },
+
     /// Summarize the wallet balance
     ShowBalance,
 
@@ -576,6 +582,7 @@ impl Commands {
             Commands::SignMultisigTx { .. } => "sign-multisig-tx",
             Commands::SendTx { .. } => "send-tx",
             Commands::ShowTx { .. } => "show-tx",
+            Commands::SignTx { .. } => "sign-tx",
             Commands::ShowBalance => "show",
             Commands::ExportMasterPubkey => "export-master-pubkey",
             Commands::ImportMasterPubkey { .. } => "import-master-pubkey",

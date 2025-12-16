@@ -98,6 +98,7 @@ async fn main() -> Result<(), NockAppError> {
         | Commands::ShowMasterZPrv
         | Commands::ShowKeyTree { .. }
         | Commands::ShowTx { .. }
+        | Commands::SignTx { .. }
         | Commands::SignMultisigTx { .. }
         | Commands::Watch { .. }
         | Commands::TxAccepted { .. } => false,
@@ -306,6 +307,7 @@ async fn main() -> Result<(), NockAppError> {
         } => Wallet::sign_multisig_tx(transaction, sign_keys.as_deref()),
         Commands::SendTx { transaction } => Wallet::send_tx(transaction),
         Commands::ShowTx { transaction } => Wallet::show_tx(transaction),
+        Commands::SignTx { transaction } => Wallet::sign_tx(transaction),
         Commands::ShowBalance => Wallet::show_balance(),
         Commands::ExportMasterPubkey => Wallet::export_master_pubkey(),
         Commands::ImportMasterPubkey { key_path } => Wallet::import_master_pubkey(key_path),
@@ -518,58 +520,22 @@ impl Wallet {
         )
     }
 
-    /// Signs a transaction.
+    /// Signs a transaction file.
     ///
     /// # Arguments
     ///
-    /// * `transaction_path` - Path to the transaction file
-    /// * `index` - Optional index of the key to use for signing
-    fn sign_tx(
-        transaction_path: &str,
-        index: Option<u64>,
-        hardened: bool,
-    ) -> CommandNoun<NounSlab> {
-        let mut slab = NounSlab::new();
-
-        // Validate index is within range (though clap should prevent this)
-        if let Some(idx) = index {
-            if idx >= 2 << 31 {
-                return Err(
-                    CrownError::Unknown("Key index must not exceed 2^31 - 1".into()).into(),
-                );
-            }
-        }
-
-        // Read and decode the input bundle
+    /// * `transaction_path` - Path to the transaction file to sign
+    fn sign_tx(transaction_path: &str) -> CommandNoun<NounSlab> {
+        // Read and decode the transaction file
         let transaction_data = fs::read(transaction_path)
-            .map_err(|e| CrownError::Unknown(format!("Failed to read transaction: {}", e)))?;
+            .map_err(|e| CrownError::Unknown(format!("Failed to read transaction file: {}", e)))?;
 
-        // Convert the bundle data into a noun using cue
-        let transaction_noun = slab
-            .cue_into(transaction_data.as_bytes()?)
-            .map_err(|e| CrownError::Unknown(format!("Failed to decode transaction: {}", e)))?;
+        let mut slab = NounSlab::new();
+        let transaction_noun = slab.cue_into(transaction_data.as_bytes()?).map_err(|e| {
+            CrownError::Unknown(format!("Failed to decode transaction data: {}", e))
+        })?;
 
-        // Format information about signing key
-        let sign_key_noun = match index {
-            Some(i) => {
-                let inner = D(i);
-                let hardened_noun = if hardened { YES } else { NO };
-                T(&mut slab, &[D(0), inner, hardened_noun])
-            }
-            None => SIG,
-        };
-
-        // Generate random entropy
-        let mut entropy_bytes = [0u8; 32];
-        getrandom::fill(&mut entropy_bytes).map_err(|e| CrownError::Unknown(e.to_string()))?;
-        let entropy = from_bytes(&mut slab, &entropy_bytes).as_noun();
-
-        Self::wallet(
-            "sign-tx",
-            &[transaction_noun, sign_key_noun, entropy],
-            Operation::Poke,
-            &mut slab,
-        )
+        Self::wallet("sign-tx", &[transaction_noun], Operation::Poke, &mut slab)
     }
 
     fn sign_message(

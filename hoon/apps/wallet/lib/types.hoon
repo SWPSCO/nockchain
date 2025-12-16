@@ -395,6 +395,7 @@
         grpc-bind-cause
         [%send-tx dat=transaction]
         [%show-tx dat=transaction]
+        [%sign-tx dat=transaction]
         [%sign-message msg=@ sign-key=(unit [child-index=@ud hardened=?])]
         [%verify-message msg=@ sig=@ pk-b58=@t]
         [%sign-hash hash-b58=@t sign-key=(unit [child-index=@ud hardened=?])]
