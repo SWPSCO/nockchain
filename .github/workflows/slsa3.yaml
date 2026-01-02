@@ -41,6 +41,7 @@ jobs:
           apt-get update
           apt-get install -y \
             build-essential \
+            libclang-dev \
             curl \
             git \
             unzip \
