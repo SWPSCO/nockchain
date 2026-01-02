@@ -33,27 +33,46 @@ jobs:
   build-linux-x64:
     needs: vars
     runs-on: ['self-hosted', 'Linux', 'X64']
+    container:
+      image: ubuntu:22.04
     steps:
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y \
+            build-essential \
+            curl \
+            git \
+            unzip \
+            pkg-config \
+            libssl-dev \
+            ca-certificates
       - uses: actions/checkout@v3
         with:
           ref: master
-      - uses: dtolnay/rust-toolchain@nightly
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain nightly
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+      - name: Install protoc
+        run: |
+          curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v30.2/protoc-30.2-linux-x86_64.zip
+          unzip protoc-30.2-linux-x86_64.zip -d /usr/local
+          rm protoc-30.2-linux-x86_64.zip
       - name: Configure Git fetch with CLI
         run: |
           mkdir -p ~/.cargo
           echo '[net]' > ~/.cargo/config.toml
           echo 'git-fetch-with-cli = true' >> ~/.cargo/config.toml
-      - name: Install build dependencies
+      - name: Setup build environment
         run: |
-          sudo apt-get update && sudo apt-get install -y build-essential
           mkdir -p hoon
           mkdir -p assets
-          rustup default nightly
           cp .env_example .env
       - name: build
         run: |
+          . "$HOME/.cargo/env"
           mkdir -p target/x86_64-unknown-linux-gnu/release
-          rustup update nightly && rustup default nightly
           cargo install --target x86_64-unknown-linux-gnu --locked --force --path crates/hoonc --bin hoonc
           cp $(which hoonc) target/x86_64-unknown-linux-gnu/release/
           make build-assets
