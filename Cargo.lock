@@ -4491,6 +4491,10 @@ name = "kernels-open-nockchain-peek"
 version = "0.1.0"
 
 [[package]]
+name = "kernels-open-verifier"
+version = "0.1.0"
+
+[[package]]
 name = "kernels-open-wallet"
 version = "0.1.0"
 
