@@ -1,6 +1,13 @@
 # New Mars: Memory layout and representation
 
-This document describes the current (2022/01/13) state of the memory layout and noun representation for New Mars.
+Status: Historical
+Owner: Nockchain Runtime Maintainers
+Last Reviewed: 2026-02-19
+Canonical/Legacy: Legacy (historical memory-model notes for New Mars/Ares experiments)
+
+*Trust posture: this document is useful implementation context, but not canonical architecture policy.*
+
+This document captures a 2022-era model of New Mars memory layout and noun representation.
 
 ## Noun representation
 
@@ -9,7 +16,7 @@ By treating a 0 MSB as the tag for a direct atom, we can compute directly with d
 
 
 | MSBs | Noun                  |
-|------|-----------------------|
+| ---- | --------------------- |
 | 0    | Direct Atom           |
 | 10   | Indirect Atom Pointer |
 | 110  | Cell Pointer          |
@@ -46,28 +53,25 @@ Thus the two stacks logically form one single computational stack.
 The stack on which the current frame is located is termed the "polarity".
 Thus, the current stack frame may be said to have "west" or "east" polarity.
 
-Two pointers are kept in registers.
-The "frame pointer" is changed only when pushing a new stack frame.
+Three pointers are tracked:
+the frame pointer, stack pointer, and allocation pointer.
+
+The "frame pointer" is changed when pushing/popping a stack frame.
 When the current polarity is west, it points to the westernmost byte in the current frame.
 Slots relative to the frame (for register saves or return addresses) are addressed by offsetting eastward.
 When the current polarity is east, it points to the easternmost byte _west of_ the current frame.
 Slots relative to the frame are in this case addressed by offsetting westward.
 Note that we do not reverse which "end" of a machine word we address by the polarity.
 
-The "stack pointer" is changed when pushing a new stack frame, and also to allocate memory.
+The "stack pointer" is changed when pushing a new stack frame and when using the lightweight stack.
 When the current polarity is west, it points to the westernmost byte east of the current frame.
 When the current polarity is east, it points to the westernmost byte *of* the current frame.
 
-When pushing a new frame, the frame pointer is always set to the stack pointer of the *previous* frame to the current.
-This achieves the polarity reversal.
-The stack pointer is offset east of the frame pointer by the machine words necessary (for a west frame) or west of the frame pointer (for an east frame).
-Note that the bytecode instruction for a push implicitly adds two machine words to the requested stack frame size.
-This is because each frame saves the previous frame's stack and frame pointer as its first and second word slots,
-respectively.
-This provides both a return mechanism (restore stack and frame pointer from current frame, flip polarity), and
-a polarity-swapping push (frame pointer is previous stack pointer, stack pointer offset from frame pointer, flip polarity.
+The "allocation pointer" is changed to allocate memory inside the current frame.
+When pushing a new frame, polarity reverses and the frame reserves three words for previous frame/stack/allocation pointers (see `RESERVED = 3` in `rust/nockvm/src/mem.rs`).
+This provides both a return mechanism (restore frame, stack, and allocation pointers) and polarity-swapping frame push behavior.
 
-Allocation is achieved by saving the stack pointer, moving it east, and returning the saved pointer (for a west frame) or by moving the stack pointer west and returning the result (for an east frame).
+Allocation is achieved by moving the allocation pointer toward the stack pointer and returning the allocation start (west/east behavior is mirrored by polarity).
 
 When popping a frame, the result register is examined to provide a collection root.
 Pointers which fall within the current frame are recursively chased and copied to the parent frames allocation area, bumping the saved stack pointer as this progresses. This ensures that data allocated in this frame (or a child frame and then copied here) which is live from the returned result is not lost when the frame is popped.
@@ -79,7 +83,6 @@ stack with the head and tail of the cell as destinations.
 Copying a direct atom is just a matter of writing it to the destination.
 Copying an indirect atom involves an allocation, copying of the atom's memory, and writing the new allocation to the saved destination.
 
-Frames to which a call may return should reserve the first frame slot (after the frame and stack pointers) for the return address.
+Frames to which a call may return should reserve the first local frame slot (after the three reserved frame/stack/allocation pointer words) for the return address.
 _Note that this makes it the ***caller's*** responsibility to push a new frame for a non-tail call._
-
 

@@ -1,8 +1,8 @@
 use std::net::SocketAddr;
 
 use nockapp::driver::{make_driver, IODriverFn, NockAppHandle};
-use nockapp::NounExt;
 use nockchain_types::tx_engine::v0;
+use nockvm::ext::NounExt;
 use nockvm_macros::tas;
 use noun_serde::{NounDecode, NounDecodeError};
 use tracing::{error, info, warn};

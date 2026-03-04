@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use clap::{arg, command, value_parser, ArgAction, Parser};
-use nockchain_types::tx_engine::common::{Hash, SchnorrPubkey};
+use clap::{value_parser, ArgAction, Parser};
+use nockchain_types::tx_engine::common::Hash;
 
-use crate::mining::{MiningKeyConfig, MiningPkhConfig};
+use crate::mining::MiningPkhConfig;
 
 // TODO: command-line/configure
 /** Path to read current node's identity from */
@@ -112,22 +112,22 @@ pub struct NockchainCli {
     pub fakenet_log_difficulty: u64,
     #[arg(
         long,
-        help = "Minimum timelock for coinbase transactions on fakenet. Defaults to 100 blocks. Ignored on mainnet.",
-        default_value = "100",
-        requires = "fakenet"
-    )]
-    pub fakenet_coinbase_timelock_min: Option<u64>,
-    #[arg(
-        long,
         help = "Override the v1-phase activation height when running on fakenet. Requires --fakenet.",
         default_value = "1",
         requires = "fakenet"
     )]
     pub fakenet_v1_phase: Option<u64>,
+    #[arg(
+        long,
+        help = "Override the bythos-phase activation height when running on fakenet. Requires --fakenet.",
+        default_value = "1",
+        requires = "fakenet"
+    )]
+    pub fakenet_bythos_phase: Option<u64>,
     #[arg(long, help = "Path to fake genesis block jam file")]
     pub fakenet_genesis_jam_path: Option<PathBuf>,
-    #[arg(long, value_parser = clap::value_parser!(std::net::SocketAddr), default_value = "127.0.0.1:5555")]
-    pub bind_public_grpc_addr: std::net::SocketAddr,
+    #[arg(long, help = "Public gRPC binding address (off by default), recommended value = \"127.0.0.1:5555\"", value_parser = clap::value_parser!(std::net::SocketAddr))]
+    pub bind_public_grpc_addr: Option<std::net::SocketAddr>,
     #[arg(long, default_value = "5555")]
     pub bind_private_grpc_port: u16,
     #[arg(long, default_value = "false")]
@@ -199,9 +199,9 @@ mod tests {
             fakenet_pow_len: 2,
             fakenet_log_difficulty: 1,
             fakenet_v1_phase: None,
+            fakenet_bythos_phase: None,
             fakenet_genesis_jam_path: None,
-            fakenet_coinbase_timelock_min: None,
-            bind_public_grpc_addr: "127.0.0.1:5555".parse().unwrap(),
+            bind_public_grpc_addr: Some("127.0.0.1:5555".parse().unwrap()),
             bind_private_grpc_port: 5555,
             fast_sync: false,
         }

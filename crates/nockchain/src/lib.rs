@@ -1,3 +1,13 @@
+// Allow architectural patterns
+#![allow(clippy::result_large_err)]
+#![allow(clippy::collapsible_else_if)]
+#![allow(clippy::let_underscore_future)]
+#![allow(clippy::manual_map)]
+#![allow(clippy::redundant_field_names)]
+#![allow(clippy::new_without_default)]
+#![allow(clippy::vec_init_then_push)]
+#![cfg_attr(test, allow(clippy::unwrap_used))]
+
 pub mod config;
 pub mod mining;
 pub mod setup;
@@ -136,12 +146,20 @@ pub mod driver_init {
 /// can be expanded into a struct if necessary
 #[derive(Debug, Clone)]
 pub enum NockchainAPIConfig {
-    EnablePublicServer,
+    EnablePublicServer(std::net::SocketAddr),
     DisablePublicServer,
 }
+
 impl NockchainAPIConfig {
     pub fn deploy_public(&self) -> bool {
-        matches!(self, NockchainAPIConfig::EnablePublicServer)
+        matches!(self, NockchainAPIConfig::EnablePublicServer(_))
+    }
+
+    pub fn addr(&self) -> Option<std::net::SocketAddr> {
+        match self {
+            NockchainAPIConfig::EnablePublicServer(addr) => Some(*addr),
+            NockchainAPIConfig::DisablePublicServer => None,
+        }
     }
 }
 
@@ -384,11 +402,11 @@ pub async fn init_with_kernel<J: Jammer + Send + 'static>(
         // Set the require fakenet constants first, then handle the optional ones
         let mut fakenet_constants =
             fakenet_blockchain_constants(cli.fakenet_pow_len, cli.fakenet_log_difficulty);
-        if let Some(coinbase_timelock_min) = cli.fakenet_coinbase_timelock_min {
-            fakenet_constants = fakenet_constants.with_coinbase_timelock_min(coinbase_timelock_min);
-        }
         if let Some(v1_phase) = cli.fakenet_v1_phase {
             fakenet_constants = fakenet_constants.with_v1_phase(v1_phase);
+        }
+        if let Some(bythos_phase) = cli.fakenet_bythos_phase {
+            fakenet_constants = fakenet_constants.with_bythos_phase(bythos_phase);
         }
         setup::poke(
             &mut nockapp,
@@ -498,10 +516,11 @@ pub async fn init_with_kernel<J: Jammer + Send + 'static>(
     nockapp.add_io_driver(born_driver).await;
 
     if server_config.deploy_public() {
+        let addr = server_config
+            .addr()
+            .expect("addr should be Some when deploy_public is true");
         nockapp
-            .add_io_driver(nockapp_grpc::public_nockchain::grpc_server_driver(
-                cli.bind_public_grpc_addr,
-            ))
+            .add_io_driver(nockapp_grpc::public_nockchain::grpc_server_driver(addr))
             .await;
     }
     nockapp

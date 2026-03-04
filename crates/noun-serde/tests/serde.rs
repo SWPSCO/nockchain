@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
@@ -174,8 +176,7 @@ mod complex_tests {
     use std::collections::HashMap;
     use std::fmt::Debug;
 
-    use nockapp::utils::make_tas;
-    use nockapp::AtomExt;
+    use nockvm::ext::{make_tas, AtomExt};
     use nockvm::noun::{FullDebugCell, Noun, NounAllocator, Slots, T};
     use noun_serde::{NounDecode, NounDecodeError, NounEncode};
 

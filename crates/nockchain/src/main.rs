@@ -1,9 +1,9 @@
 use std::error::Error;
 
+use chaff::Chaff;
 use clap::Parser;
-use kernels::dumb::KERNEL;
+use kernels_open_dumb::KERNEL;
 use nockapp::kernel::boot;
-use nockapp::NockApp;
 use nockchain::NockchainAPIConfig;
 use zkvm_jetpack::hot::produce_prover_hot_state;
 
@@ -24,13 +24,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
     boot::init_default_tracing(&cli.nockapp_cli);
 
     let prover_hot_state = produce_prover_hot_state();
-    let mut nockchain: NockApp = nockchain::init_with_kernel(
-        cli,
-        KERNEL,
-        prover_hot_state.as_slice(),
-        NockchainAPIConfig::DisablePublicServer,
-    )
-    .await?;
+
+    let api_config = if let Some(addr) = cli.bind_public_grpc_addr {
+        NockchainAPIConfig::EnablePublicServer(addr)
+    } else {
+        NockchainAPIConfig::DisablePublicServer
+    };
+
+    let mut nockchain =
+        nockchain::init_with_kernel::<Chaff>(cli, KERNEL, prover_hot_state.as_slice(), api_config)
+            .await?;
     nockchain.run().await?;
     Ok(())
 }

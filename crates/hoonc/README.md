@@ -1,24 +1,29 @@
 # `hoonc`: compile hoon
 
-To self-bootstrap:
+Status: Active
+Owner: Nockchain Maintainers
+Last Reviewed: 2026-02-20
+Canonical/Legacy: Legacy (crate-level reference; canonical docs spine starts at [`START_HERE.md`](../../START_HERE.md))
+
+From the repo root, rebuild the minimal bootstrap jam:
 
 ```bash
-cargo run --release hoon/apps/hoonc/hoonc.hoon hoon
+cargo run --release -p hoonc -- hoon/apps/hoonc/hoonc.hoon hoon
 ```
 
-This will save the built kernel as `out.jam` in the current directory. This should be moved to the bootstrap directory so the `hoonc` binary can pick it up:
+This writes `out.jam` in the current directory. Move it to the crate bootstrap path:
 
 ```bash
-mv out.jam bootstrap/hoonc.jam
+mv out.jam crates/hoonc/bootstrap/hoonc.jam
 ```
 
-Once this is done, you should be able to run
+Once this is done, build the compiler binary:
 
-``` bash
-cargo build --release
+```bash
+cargo build --release -p hoonc
 ```
 
-and use the resulting binary in `target/release/hoonc` (in the `nockapp` directory) to build NockApp kernels or arbitrary hoon files as detailed in the following section.
+The resulting binary is `target/release/hoonc`.
 
 ## Bootstraps
 
@@ -30,14 +35,14 @@ The repository ships with two bootstrap jams:
 Regenerate the prewarmed bootstrap after changing the kernel or bundled Hoon text:
 
 ```bash
-cargo run --release --bin prewarm -- --output bootstrap/hoonc-prewarm.jam
+cargo run --release -p hoonc --bin prewarm -- --output crates/hoonc/bootstrap/hoonc-prewarm.jam
 ```
 
 The helper writes to a temporary data directory by default; pass `--data-dir` if you need to inspect the intermediate checkpoint.
 
 ## Usage
 
-The following assumes you have the `hoonc` binary in your path, which can be built with `cargo build --release` and found in `target/release/hoonc`.
+The following assumes you have `hoonc` on your path (or invoke it as `target/release/hoonc`).
 
 For `hoonc`, the first argument is the entrypoint to the program, while the second argument is the root directory for source files.
 
@@ -84,8 +89,8 @@ runes:
 If you make changes to the `poke` arm in `hoonc.hoon` or in `wrapper.hoon`, you'll need to update the minimal `hoonc.jam` file by running:
 
 ```bash
-cargo run --release hoon/apps/hoonc/hoonc.hoon hoon
-mv out.jam bootstrap/hoonc.jam
+cargo run --release -p hoonc -- hoon/apps/hoonc/hoonc.hoon hoon
+mv out.jam crates/hoonc/bootstrap/hoonc.jam
 ```
 
-and committing the changes to `hoonc.jam` so that the CI can properly bootstrap the `hoonc` kernel. Afterwards, re-run the prewarm helper to refresh `bootstrap/hoonc-prewarm.jam`.
+and committing the changes so CI can bootstrap `hoonc`. Afterwards, re-run the prewarm helper to refresh `crates/hoonc/bootstrap/hoonc-prewarm.jam`.

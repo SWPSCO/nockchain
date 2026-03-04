@@ -12,8 +12,6 @@ use serde::de::Error as SerdeError;
 use serde::{Deserialize as SerdeDeserialize, Serialize as SerdeSerialize};
 use tracing::debug;
 
-use crate::based;
-
 // Base field arithmetic functions.
 pub const PRIME: u64 = 18446744069414584321;
 pub const PRIME_PRIME: u64 = PRIME - 2;
@@ -63,6 +61,7 @@ impl<'de> SerdeDeserialize<'de> for Belt {
     }
 }
 
+#[inline]
 pub fn based_check(a: u64) -> bool {
     a < PRIME
 }
@@ -137,6 +136,10 @@ impl Belt {
     #[inline(always)]
     pub fn ordered_root(&self) -> Result<Self, FieldError> {
         // Belt(bpow(H, ORDER / self.0))
+        if self.0 == 0 {
+            debug!("ordered_root: zero");
+            return Err(FieldError::OrderedRootError);
+        }
         let log_of_self = self.0.ilog2();
         if (log_of_self as usize) >= ROOTS.len() {
             debug!("ordered_root: out of bounds");

@@ -1,4 +1,8 @@
 # Notes ~2021.9.24
+
+> Historical note. Archived design notes, not current protocol or runtime authority.
+> Authoritative docs: [`START_HERE.md`](../../../../START_HERE.md), [`crates/nockvm/README.md`](../../README.md).
+
 ## Exploration of `+mink`
 The [`+mink`](https://github.com/urbit/urbit/blob/fa894b9690deae9e2334ccec5492ba90cb0b38f9/pkg/arvo/sys/hoon.hoon#L5978-L6106)
 arm in [`hoon.hoon`](https://github.com/urbit/urbit/blob/master/pkg/arvo/sys/hoon.hoon) is a metacircular Nock interpreter

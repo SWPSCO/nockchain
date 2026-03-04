@@ -133,6 +133,7 @@ impl CachedResponse {
         self.timestamp.elapsed() > max_age
     }
 
+    #[allow(clippy::result_large_err)]
     fn to_response(&self) -> Result<Response<Body>, HttpError> {
         let mut res = Response::builder().status(self.status);
         for (k, v) in &self.headers {
@@ -300,7 +301,8 @@ pub fn http() -> IODriverFn {
             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
             // Start certificate generation in background - don't block main loop
-            let acme_manager = acme_manager_opt.unwrap();
+            let acme_manager =
+                acme_manager_opt.expect("acme_manager should be set when https is enabled");
             let app_for_https = app.clone();
             tokio::spawn(async move {
                 match tokio::time::timeout(
@@ -315,15 +317,24 @@ pub fn http() -> IODriverFn {
 
                         match tokio::net::TcpListener::bind("0.0.0.0:443").await {
                             Ok(https_listener) => {
-                                let https_addr = https_listener.local_addr().unwrap();
+                                let https_addr = https_listener
+                                    .local_addr()
+                                    .expect("listener should have local addr");
                                 info!("HTTPS server listening on {}", https_addr);
-                                let std_listener = https_listener.into_std().unwrap();
-                                if let Err(e) =
-                                    axum_server::from_tcp_rustls(std_listener, rustls_config)
-                                        .serve(app_for_https.into_make_service())
-                                        .await
-                                {
-                                    error!("HTTPS server error: {}", e);
+                                let std_listener = https_listener
+                                    .into_std()
+                                    .expect("listener should convert to std");
+                                match axum_server::from_tcp_rustls(std_listener, rustls_config) {
+                                    Ok(server) => {
+                                        if let Err(e) =
+                                            server.serve(app_for_https.into_make_service()).await
+                                        {
+                                            error!("HTTPS server error: {}", e);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        error!("Failed to create HTTPS server: {}", e);
+                                    }
                                 }
                             }
                             Err(e) => {
@@ -344,8 +355,9 @@ pub fn http() -> IODriverFn {
         }
 
         let channel_map = RwLock::new(HashMap::<u64, Responder>::new());
-        let regular_cache = Arc::new(RwLock::new(Option::<CachedResponse>::None));
-        let htmx_cache = Arc::new(RwLock::new(Option::<CachedResponse>::None));
+        let uri_map = RwLock::new(HashMap::<u64, String>::new());
+        let regular_cache = Arc::new(RwLock::new(HashMap::<String, CachedResponse>::new()));
+        let htmx_cache = Arc::new(RwLock::new(HashMap::<String, CachedResponse>::new()));
 
         // Parse cache expiration from environment variable, default to never expire
         let cache_duration = env::var("EXPIRE_CACHE")
@@ -366,7 +378,7 @@ pub fn http() -> IODriverFn {
                     loop {
                         interval.tick().await;
                         debug!("invalidating regular response cache");
-                        *regular_cache.write().await = None;
+                        regular_cache.write().await.clear();
                     }
                 })
             };
@@ -378,7 +390,7 @@ pub fn http() -> IODriverFn {
                     loop {
                         interval.tick().await;
                         debug!("invalidating htmx response cache");
-                        *htmx_cache.write().await = None;
+                        htmx_cache.write().await.clear();
                     }
                 })
             };
@@ -418,7 +430,7 @@ pub fn http() -> IODriverFn {
                             let cache_to_use = if is_htmx { &htmx_cache } else { &regular_cache };
 
                             let cache_read = cache_to_use.read().await;
-                            if let Some(cached) = &*cache_read {
+                            if let Some(cached) = cache_read.get(&msg.uri.to_string()) {
                                 // Check expiration only if cache_duration is set
                                 let should_serve = if let Some(cache_duration) = cache_duration {
                                     !cached.is_expired(cache_duration)
@@ -438,6 +450,7 @@ pub fn http() -> IODriverFn {
                         }
 
                         channel_map.write().await.insert(msg.id, msg.resp);
+                        uri_map.write().await.insert(msg.id, msg.uri.to_string());
                         let mut slab = NounSlab::new();
 
                         let id = Atom::from_value(&mut slab, msg.id)
@@ -484,6 +497,7 @@ pub fn http() -> IODriverFn {
                             error!("Kernel nacked the request for {}", msg.uri);
                             let resp_tx = channel_map.write().await.remove(&msg.id)
                                 .ok_or(HttpError::ResponseChannelNotFound(msg.id))?;
+                            uri_map.write().await.remove(&msg.id);
                             let _ = resp_tx.send(Err(StatusCode::BAD_REQUEST));
                         }
 
@@ -494,6 +508,7 @@ pub fn http() -> IODriverFn {
                         error!("Error processing HTTP request: {}", e);
                         // Try to send error response if we still have the channel
                         if let Some(resp_tx) = channel_map.write().await.remove(&msg.id) {
+                            uri_map.write().await.remove(&msg.id);
                             let _ = resp_tx.send(Err(StatusCode::INTERNAL_SERVER_ERROR));
                         }
                     }
@@ -627,13 +642,15 @@ pub fn http() -> IODriverFn {
 
                             // Cache logic - determine which cache to use based on effect type
                             if status == StatusCode::OK {
-                                let cached_response = CachedResponse::new(status, header_vec.clone(), body.clone());
-                                if tag_val == tas!(b"htmx") || tag_val == tas!(b"h-cache") {
-                                    debug!("caching HTMX response (htmx or h-cache effect)");
-                                    *htmx_cache.write().await = Some(cached_response);
-                                } else {
-                                    debug!("caching regular response (res or cache effect)");
-                                    *regular_cache.write().await = Some(cached_response);
+                                if let Some(request_uri) = uri_map.read().await.get(&id).cloned() {
+                                    let cached_response = CachedResponse::new(status, header_vec.clone(), body.clone());
+                                    if tag_val == tas!(b"htmx") || tag_val == tas!(b"h-cache") {
+                                        debug!("caching HTMX response for {} (htmx or h-cache effect)", request_uri);
+                                        htmx_cache.write().await.insert(request_uri, cached_response);
+                                    } else {
+                                        debug!("caching regular response for {} (res or cache effect)", request_uri);
+                                        regular_cache.write().await.insert(request_uri, cached_response);
+                                    }
                                 }
                             }
 
@@ -647,6 +664,7 @@ pub fn http() -> IODriverFn {
                         if tag_val == tas!(b"res") || tag_val == tas!(b"htmx") {
                             let resp_tx = channel_map.write().await.remove(&id)
                                 .ok_or(HttpError::ResponseChannelNotFound(id))?;
+                            uri_map.write().await.remove(&id);
                             debug!("Sending response back to client for request id: {}", id);
                             let _ = resp_tx.send(resp);
                         }
@@ -771,5 +789,5 @@ async fn favicon_handler() -> Response {
         .header("content-type", "image/svg+xml")
         .header("cache-control", "public, max-age=86400")
         .body(Body::from(svg))
-        .unwrap()
+        .expect("static response should build successfully")
 }

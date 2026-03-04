@@ -1,4 +1,8 @@
 # Notes ~2021.9.23
+
+> Historical note. Archived design notes, not current protocol or runtime authority.
+> Authoritative docs: [`START_HERE.md`](../../../../START_HERE.md), [`crates/nockvm/README.md`](../../README.md).
+
 ## Discussion with ~rovnys-ricfer
 * Some discussion of the memory model, in particular using tag bits to identify
   - direct noun

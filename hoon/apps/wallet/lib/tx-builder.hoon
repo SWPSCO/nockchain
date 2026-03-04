@@ -1,221 +1,544 @@
 /=  transact  /common/tx-engine
+/=  wutils  /apps/wallet/lib/utils
 /=  wt  /apps/wallet/lib/types
 /=  zo  /common/zoon
+/=  bridge  /apps/bridge/types
 ::
+::  Builds m-to-n transaction that can emit both simple PKH and multisig locks.
+|_  bc=blockchain-constants:transact
++*  t  ~(. transact bc)
+    utils  ~(. wutils %.y bc)
+++  build
 |=  $:  names=(list nname:transact)
-        =order:wt
+        orders=(list order:wt)
         fee=coins:transact
-        sign-key=schnorr-seckey:transact
-        =timelock-intent:transact
+        allow-low-fee=?
+        sign-keys=(list schnorr-seckey:transact)
+        refund-pkh=(unit hash:transact)
         get-note=$-(nname:transact nnote:transact)
+        include-data=?
+        note-selection=selection-strategy:wt
+        height=page-number:transact
     ==
 |^
-^-  inputs:transact
-?-  -.order
-    %multiple  (create-multiple-inputs build-multiple-ledger)
-    %single  (create-single-inputs build-single-ledger names)
-==
+^-  $:  spends:v1:transact
+        witness-data:wt
+        display=transaction-display:wt
+    ==
+=+  orders-valid=(orders-valid orders)
+?:  ?=(%.n -.orders-valid)
+  ~|("One or more orders are invalid. Reason: {<p.orders-valid>}" !!)
+=/  signer-pubkeys=(list schnorr-pubkey:transact)
+  %+  turn  sign-keys
+  |=  sk=schnorr-seckey:transact
+  %-  from-sk:schnorr-pubkey:transact
+  (to-atom:schnorr-seckey:transact sk)
+?~  signer-pubkeys
+  ~|("At least one signing key is required" !!)
+=/  sender-pubkey=schnorr-pubkey:transact  i.signer-pubkeys
+=/  sender-pkh=hash:transact  (hash:schnorr-pubkey:transact sender-pubkey)
+=/  notes=(list nnote:transact)  (turn names get-note)
+=/  ascending=?  ?=(%asc note-selection)
+::  If all notes are v0
+=/  [raw-spends=spends:v1:transact =witness-data:wt display=transaction-display:wt]
+  ?:  (levy notes |=(=nnote:transact ?=(^ -.nnote)))
+    ?~  refund-pkh
+      ~|('Need to specify a refund address if spending from v0 notes. Use the `--refund-pkh` flag in the create-tx command' !!)
+    =/  notes-v0=(list nnote:v0:transact)
+      %+  turn  notes
+      |=  =nnote:transact
+      ?>  ?=(^ -.nnote)
+      nnote
+    =.  notes-v0
+      %+  sort  notes-v0
+      |=  [a=nnote:v0:transact b=nnote:v0:transact]
+      ?:(ascending (lth assets.a assets.b) (gth assets.a assets.b))
+    =/  refund-lock=lock:transact  [%pkh [m=1 (z-silt:zo ~[u.refund-pkh])]]~
+    (create-spends-0 notes-v0 orders fee sender-pubkey refund-lock)
+  ::  If all notes are v1
+  ?:  (levy notes |=(=nnote:transact ?=(@ -.nnote)))
+    =/  notes-v1=(list nnote-1:v1:transact)
+      %+  turn  notes
+      |=  =nnote:transact
+      ?>  ?=(@ -.nnote)
+      nnote
+    =.  notes-v1
+      %+  sort  notes-v1
+      |=  [a=nnote-1:v1:transact b=nnote-1:v1:transact]
+      ?:(ascending (lth assets.a assets.b) (gth assets.a assets.b))
+    =/  multisig-lock=(unit lock:transact)
+      ::
+      ::  ensure that all multisig locks are the same in the input notes
+      |-
+      ?~  notes-v1  ~
+      ?^  lok=(multisig-lock i.notes-v1)
+        =+  ref-fn=(first:nname:v1:transact (hash:lock:transact u.lok))
+        ?:  %+  levy  `(list nnote-1:v1:transact)`notes-v1
+            |=  note=nnote-1:v1:transact
+            =(ref-fn ~(first-name get:nnote:transact note))
+          lok
+        ~|('Multisig detected in input. When a multisig is present, all inputs must share the same lock.' !!)
+      $(notes-v1 t.notes-v1)
+    =/  refund-lock=lock:transact
+      ?^  refund-pkh
+        [%pkh [m=1 (z-silt:zo ~[u.refund-pkh])]]~
+      %+  fall  multisig-lock
+      [%pkh [m=1 (z-silt:zo ~[sender-pkh])]]~
+    (create-spends-1 notes-v1 orders fee sender-pkh refund-lock)
 ::
-++  build-multiple-ledger
-  ?>  ?=(%multiple -.order)
-  =/  gifts=(list coins:transact)  gifts.order
-  =/  recipients=(list lock:transact)  (parse-recipients recipients.order)
-  ?.  ?&  =((lent names) (lent recipients))
-          =((lent names) (lent gifts))
+~>  %slog.[0 'Notes must all be the same version!!!']  !!
+::
+=+  min-fee=(spends:estimate-fee:utils raw-spends inputs.display height)
+:: uncomment to debug out of band fee estimation
+:: =+  min-fee-ref=(calculate-min-fee:spends:transact (apply:witness-data:wt witness-data raw-spends))
+:: ~&  min-fee-est+min-fee
+:: ~&  min-fee-ref+min-fee-ref
+?:  (lth fee min-fee)
+  ?:  =(allow-low-fee %.n)
+    ~|("Min fee not met. This transaction requires at least: {(trip (format-ui:common:display:utils min-fee))} nicks" !!)
+    [raw-spends witness-data display]
+  [raw-spends witness-data display]
+::
+::  helpers for building display metadata
+::
+++  update-display-0
+  |=  $:  note=nnote:v0:transact
+          display=transaction-display:wt
+          addition=output-lock-map:wt
       ==
-    ~|("different number of names/recipients/gifts" !!)
-  =|  result=ledger:wt
-  |-
-  ?~  names  result
-  ?~  gifts  result
-  ?~  recipients  result
-  %=  $
-    result      [[i.names i.recipients i.gifts timelock-intent] result]
-    names       t.names
-    gifts       t.gifts
-    recipients  t.recipients
+  ^-  transaction-display:wt
+  ?>  ?=(%0 -.inputs.display)
+  %=    display
+      outputs
+    (~(uni z-by:zo outputs.display) addition)
+  ::
+      inputs
+    :-  %0
+    %-  ~(put z-by:zo p.inputs.display)
+    [name.note sig.note]
   ==
 ::
-++  build-single-ledger
-  ?>  ?=(%single -.order)
-  =/  recipient=lock:transact  (parse-recipient recipient.order)
-  ::  validate sufficient funds
-  =/  total-assets=coins:transact
-    %+  roll  names
-    |=  [name=nname:transact acc=coins:transact]
-    (add acc assets:(get-note name))
-  ?.  (gte total-assets (add gift.order fee))
-    ~|("insufficient funds: need {<(add gift.order fee)>}, have {<total-assets>}" !!)
-  ::  create single ledger entry
-  ~[[-.names recipient gift.order timelock-intent]]
-::
-++  create-multiple-inputs
-  |=  =ledger:wt
-  ^-  inputs:transact
-  =/  [ins=(list input:transact) spent-fee=?]
-    %^  spin  ledger  `?`%.n
-    |=  $:  $:  name=nname:transact
-                recipient=lock:transact
-                gift=coins:transact
-                =timelock-intent:transact
-            ==
-          spent-fee=?
-        ==
-    =/  note=nnote:transact  (get-note name)
-    ?:  (gth gift assets.note)
-      ~|  "gift {<gift>} larger than assets {<assets.note>} for recipient {<recipient>}"
-      !!
-    ?:  ?&  !spent-fee
-            (lte (add gift fee) assets.note)
-        ==
-      ::  we can subtract the fee from this note
-      :_  %.y
-      (create-input note recipient gift timelock-intent fee)
-    ::  we cannot subtract the fee from this note
-    :_  spent-fee
-    (create-input note recipient gift timelock-intent 0)
-  ?.  spent-fee
-    ~|("no note suitable to subtract fee from, aborting operation" !!)
-  (multi:new:inputs:transact ins)
-::
-++  create-single-inputs
-  |=  [=ledger:wt names=(list nname:transact)]
-  ^-  inputs:transact
-  ?~  ledger  ~
-  =/  recipient=lock:transact  recipient.i.ledger
-  =/  gifts=coins:transact  gifts.i.ledger
-  =/  =timelock-intent:transact  timelock-intent.i.ledger
-  (distribute-single-spend names recipient gifts timelock-intent)
-::
-++  distribute-single-spend
-  |=  $:  names=(list nname:transact)
-          recipient=lock:transact
-          gifts=coins:transact
-          =timelock-intent:transact
+++  update-display-1
+  |=  $:  name=nname:transact
+          display=transaction-display:wt
+          addition=output-lock-map:wt
+          =lock:transact
       ==
-  ::  check total assets can cover gift + fee
-  =/  total-assets=coins:transact
-    %+  roll  names
-    |=  [name=nname:transact acc=coins:transact]
-    (add acc assets:(get-note name))
-  ?.  (gte total-assets (add gifts fee))
-    ~|("insufficient total assets: need {<(add gifts fee)>}, have {<total-assets>}" !!)
-  ::  distribute gift across notes, with fee distributed separately
-  =/  remaining-gift=coins:transact  gifts
-  =/  remaining-fee=coins:transact  fee
-  =|  result=(list input:transact)
+  ^-  transaction-display:wt
+  ?>  ?=(%1 -.inputs.display)
+  %=    display
+      outputs
+    (~(uni z-by:zo outputs.display) addition)
+  ::
+      inputs
+    :-  %1
+    %-  ~(put z-by:zo p.inputs.display)
+    ::  assert that the lock is a spend-condition
+    ?>  ?=(^ -.lock)
+    [name lock]
+  ==
+::
+++  create-spends-0
+  |=  $:  notes=(list nnote:v0:transact)
+          orders=(list order:wt)
+          fee=@
+          pubkey=schnorr-pubkey:transact
+          refund-lock=lock:transact
+      ==
+  ^-  [=spends:v1:transact witness-data:wt transaction-display:wt]
+  =/  initial-state=spend-build-state:wt
+    %*  .  *spend-build-state:wt
+      fee      fee
+      orders   orders
+      wd       [%0 ~]
+      display  [[%0 ~] ~]
+    ==
+  =/  final-state
+    (process-spends-0 notes initial-state pubkey refund-lock)
+  =+  remaining-orders=orders.final-state
+  =+  remaining-fee=fee.final-state
+  ?.  ?&  =(~ remaining-orders)
+          =(0 remaining-fee)
+      ==
+    ~|('Insufficient funds to pay fee and gift' !!)
+  [spends.final-state wd.final-state display.final-state]
+::
+++  process-spends-0
+  |=  $:  notes=(list nnote:v0:transact)
+          state=spend-build-state:wt
+          pubkey=schnorr-pubkey:transact
+          refund-lock=lock:transact
+      ==
+  ^-  spend-build-state:wt
+  ?~  notes
+    state
+  =/  note  i.notes
+  ?.  ?|  =(pubkeys.sig.note (z-silt:zo ~[pubkey]))
+          ?&  =(1 m.sig.note)
+              (~(has z-in:zo pubkeys.sig.note) pubkey)
+          ==
+      ==
+    ~>  %slog.[0 'Note not spendable by signing key']  !!
+  =/  [pending-orders=(list order:wt) specs=(list order:wt) remainder=@]
+    (allocate-orders orders.state assets.note)
+  =/  fee-portion=@  (min fee.state remainder)
+  =/  new-fee=@  (sub fee.state fee-portion)
+  =/  refund=@  (sub remainder fee-portion)
+  =?  specs  !=(refund 0)
+    [(build-refund-order refund refund-lock) specs]
+  ?:  =(~ specs)
+    %=  $
+      notes   t.notes
+    ==
+  =/  [=seeds:v1:transact output-map=output-lock-map:wt]
+    (seeds-from-specs specs note fee-portion)
+  ?~  seeds
+    ~|('No seeds were provided' !!)
+  =/  spend=spend-0:v1:transact
+    %*  .  *spend-0:v1:transact
+      seeds  seeds
+      fee    fee-portion
+    ==
+  %=  $
+    notes          t.notes
+    spends.state   (~(put z-by:zo spends.state) [name.note [%0 spend]])
+    fee.state      new-fee
+    orders.state   pending-orders
+    display.state  (update-display-0 note display.state output-map)
+    wd.state       (sign-spend name.note [%0 spend] wd.state)
+  ==
+::
+++  create-spends-1
+  |=  $:  notes=(list nnote-1:v1:transact)
+          orders=(list order:wt)
+          fee=@
+          sender-pkh=hash:transact
+          refund-lock=lock:transact
+      ==
+  ^-  [=spends:v1:transact witness-data:wt transaction-display:wt]
+  =/  initial-state=spend-build-state:wt
+    %*  .  *spend-build-state:wt
+      fee      fee
+      orders   orders
+      wd       [%1 ~]
+      display  [[%1 ~] ~]
+    ==
+  =/  final-state
+    (process-spends-1 notes initial-state sender-pkh refund-lock)
+  =+  remaining-orders=orders.final-state
+  =+  remaining-fee=fee.final-state
+  ?.  ?&  =(~ remaining-orders)
+          =(0 remaining-fee)
+      ==
+    ~|('Insufficient funds to pay fee and gift' !!)
+  [spends.final-state wd.final-state display.final-state]
+::
+++  process-spends-1
+  |=  $:  notes=(list nnote-1:v1:transact)
+          state=spend-build-state:wt
+          sender-pkh=hash:transact
+          refund-lock=lock:transact
+      ==
+  ^-  spend-build-state:wt
+  ?~  notes
+    state
+  =/  note  i.notes
+  =/  nd=(unit note-data:v1:transact)
+    ((soft note-data:v1:transact) note-data.note)
+  ?~  nd
+    ~>  %slog.[0 'error: note-data malformed in note!']  !!
+  =+  pulled=(pull:locks:utils [u.nd name.note (some sender-pkh)])
+  ?~  pulled
+    =+  name-cord=(name:v1:display:utils name.note)
+    ~|  "Error processing note {<name-cord>}. Reason: first-name did not correspond to a supported lock."  !!
+  =/  pkh=(unit pkh:v1:transact)
+    =/  input-lock=spend-condition:transact  u.pulled
+    |-
+    ?~  input-lock
+      ~
+    ?:  ?=(%pkh -.i.input-lock)
+      `+.i.input-lock
+    $(input-lock t.input-lock)
+  =/  signable=?
+    ?~  pkh  %.y
+    %+  levy  sign-keys
+    |=  sk=schnorr-seckey:transact
+    %-  ~(has z-in:zo h.u.pkh)
+    %-  hash:schnorr-pubkey:transact
+    %-  from-sk:schnorr-pubkey:transact
+    (to-atom:schnorr-seckey:transact sk)
+  ?.  signable
+    ~|  ^-  @t
+        ;:  (cury cat 3)
+            'One or more of the provided signing keys is not required by note '
+            (name:v1:display:utils name.note)
+            '.'
+        ==
+    !!
+  =/  input-lock=lock:transact  u.pulled
+  =/  allocation  (allocate-orders orders.state assets.note)
+  =/  [pending-orders=(list order:wt) specs=(list order:wt) remainder=@]
+    allocation
+  =/  fee-portion=@  (min fee.state remainder)
+  =/  new-fee=@  (sub fee.state fee-portion)
+  =/  refund=@  (sub remainder fee-portion)
+  =/  specs-with-refund=(list order:wt)
+    ?:  =(refund 0)
+      specs
+    [(build-refund-order refund refund-lock) specs]
+  ?:  =(~ specs-with-refund)
+    $(notes t.notes)
+  =/  [=seeds:v1:transact output-map=output-lock-map:wt]
+    (seeds-from-specs specs-with-refund note fee-portion)
+  ?~  seeds
+    ~|('No seeds were provided' !!)
+  =/  bythos-active=?
+    (gte origin-page.note bythos-phase.bc)
+  =/  lmp=lock-merkle-proof:transact
+    ?:  bythos-active
+      (build-lock-merkle-proof-full:lock:transact input-lock 1)
+    (build-lock-merkle-proof-stub:lock:transact input-lock 1)
+  =/  spend=spend-1:v1:transact
+    %*  .  *spend-1:v1:transact
+      seeds  seeds
+      fee    fee-portion
+    ==
+  =.  witness.spend
+    %*  .  *witness:transact
+      lmp  lmp
+    ==
+  %=  $
+    notes          t.notes
+    spends.state   (~(put z-by:zo spends.state) [name.note [%1 spend]])
+    fee.state      new-fee
+    orders.state   pending-orders
+    display.state  (update-display-1 name.note display.state output-map input-lock)
+    wd.state       (sign-spend name.note [%1 spend] wd.state)
+  ==
+++  sign-spend
+  |=  [name=nname:transact =spend:v1:transact wd=witness-data:wt]
+  ^-  witness-data:wt
+  ?-    -.spend
+      %0
+    ?>  ?=(%0 -.wd)
+    :-  %0
+    %+  ~(put z-by:zo p.wd)
+      name
+    =+  sig-hash=(sig-hash:spend:v1:transact spend)
+    %+  roll  sign-keys
+    |=  $:  sk=schnorr-seckey:transact
+            acc=_signature.spend
+        ==
+    (sign:signature:transact acc sk sig-hash)
+  ::
+      %1
+    ?>  ?=(%1 -.wd)
+    :-  %1
+    %+  ~(put z-by:zo p.wd)
+      name
+    =+  sig-hash=(sig-hash:spend:v1:transact spend)
+    %+  roll  sign-keys
+    |=  $:  sk=schnorr-seckey:transact
+            acc=_witness.spend
+        ==
+    (sign:witness:transact acc sk sig-hash)
+  ==
+::
+++  allocate-orders
+  |=  [orders=(list order:wt) assets=@]
+  ^-  [orders=(list order:wt) specs=(list order:wt) remainder=@]
+  %+  roll  orders
+  |=  $:  ord=order:wt
+          next-orders=(list order:wt)
+          out-orders=(list order:wt)
+          rem=_assets
+      ==
+  ?:  =(0 rem)
+    [[ord next-orders] out-orders rem]
+  =/  gift-out  (order-gift ord)
+  =/  take=@  (min gift-out rem)
+  =.  rem  (sub rem take)
+  =.  out-orders  [(with-gift ord take) out-orders]
+  =?  next-orders  (lth take gift-out)
+    [(with-gift ord (sub gift-out take)) next-orders]
+  [next-orders out-orders rem]
+::
+++  seeds-from-specs
+  |=  $:  specs=(list order:wt)
+          note=nnote:transact
+          fee-portion=@
+      ==
+  ^-  [seeds:v1:transact output-lock-map:wt]
+  =;  [seeds=(list seed:v1:transact) total-gifts=@ =output-lock-map:wt]
+    ?.  =(assets.note (add total-gifts fee-portion))
+      ~&  [assets+assets.note total-gifts+total-gifts fee-portion+fee-portion]
+      ~|  "assets in must equal gift + fee + refund"  !!
+    [(z-silt:zo seeds) output-lock-map]
+  %+  roll  specs
+  |=  $:  spec=order:wt
+          seeds=(list seed:v1:transact)
+          gifts=@
+          =output-lock-map:wt
+      ==
+  =/  metadata=lock-metadata-1:wt  (extract-metadata spec)
+  =?  include-data  ?=(%multisig -.spec)
+    %.y
+  =|  nd=note-data:v1:transact
+  =/  [lock-root=hash:transact nd=note-data:v1:transact]
+    ?-    -.+.metadata
+        %lock
+      =?  nd  include-data
+        %-  ~(put z-by:zo nd)
+        [%lock ^-(lock-data:wt [%0 lock.metadata])]
+      [(hash:lock:transact lock.metadata) nd]
+    ::
+        %lock-root
+      [root.metadata nd]
+    ::
+        %bridge-deposit
+      :-  root.metadata
+      %-  ~(put z-by:zo nd)
+      [%bridge [%0 %base (evm-address-to-based:bridge addr.metadata)]]
+    ==
+  =/  seed=seed:v1:transact
+    :*  output-source=~
+        lock-root=lock-root
+        note-data=nd
+        gift=(order-gift spec)
+        parent-hash=(hash:nnote:transact note)
+    ==
+  :*  [seed seeds]
+      (add gifts (order-gift spec))
+      %-  ~(put z-by:zo output-lock-map)
+      [(first:nname:transact lock-root.seed) metadata]
+  ==
+::
+++  orders-valid
+  |=  orders=(list order:wt)
+  ^-  (reason:transact ~)
+  ?:  =(0 (lent orders))
+    [%.n 'cannot create transaction with no orders']
+  =|  num-bridge-orders=@
   |-
-  ?~  names  (multi:new:inputs:transact result)
-  ::  exit early if nothing left to distribute
-  ?:  &(=(0 remaining-gift) =(0 remaining-fee))  (multi:new:inputs:transact result)
-  =/  note=nnote:transact  (get-note i.names)
-  ::  determine how much of the gift this note should handle
-  =/  gift-portion=coins:transact
-    ?:  =(0 remaining-gift)  0
-    (min remaining-gift assets.note)
-  =.  remaining-gift  (sub remaining-gift gift-portion)
-  ::  determine fee portion after reserving for gift
-  =/  available-for-fee=coins:transact  (sub assets.note gift-portion)
-  =/  fee-portion=coins:transact
-    ?:  =(0 remaining-fee)  0
-    (min remaining-fee available-for-fee)
-  =.  remaining-fee  (sub remaining-fee fee-portion)
-  ::  only create input if there's something to spend
-  ?:  &(=(0 gift-portion) =(0 fee-portion))
-    $(names t.names)
-  ::  create input with this note's contribution
-  =/  input=input:transact
-    (create-distributed-input note recipient gift-portion timelock-intent fee-portion)
-  =.  result  [input result]
-  $(names t.names)
+  ?~  orders
+    ?:  (gth num-bridge-orders 1)
+      [%.n %bridge-orders-exceeds-one]
+    [%.y ~]
+  =/  ord=order:wt  i.orders
+  ?-    -.ord
+      %pkh
+    ?:  =(0 gift.ord)
+      [%.n %gift-cannot-be-zero]
+    $(orders t.orders)
+  ::
+      %multisig
+    =/  participants=(list hash:transact)  participants.ord
+    =/  unique=@ud
+      ~(wyt z-in:zo (z-silt:zo participants))
+    ?:  =(participants ~)
+      [%.n 'Multisig order must include at least one participant']
+    ?:  (lte threshold.ord 0)
+      [%.n 'Multisig threshold must be greater than zero']
+    ?:  (gth threshold.ord (lent participants))
+      [%.n 'Multisig threshold cannot exceed number of participants']
+    ?:  (lth unique (lent participants))
+      [%.n 'Multisig participants must be unique']
+    ?:  =(0 gift.ord)
+      [%.n 'order must include a gift greater than 0']
+    $(orders t.orders)
+  ::
+     %bridge-deposit
+   ?.  (gte gift.ord (mul *minimum-event-nocks:bridge nicks-per-nock:transact))
+     [%.n %gift-amount-is-less-than-minimum-bridge-deposit]
+   $(orders t.orders, num-bridge-orders +(num-bridge-orders))
+  ::
+     %lock-root
+    ?:  =(0 gift.ord)
+      [%.n %gift-cannot-be-zero]
+    $(orders t.orders)
+  ==
 ::
-++  create-distributed-input
-  |=  $:  note=nnote:transact
-          recipient=lock:transact
-          gift-portion=coins:transact
-          =timelock-intent:transact
-          fee-portion=coins:transact
-      ==
-  ^-  input:transact
-  =/  used=coins:transact  (add gift-portion fee-portion)
-  ?.  (gte assets.note used)
-    ~|("note has insufficient assets: need {<used>}, have {<assets.note>}" !!)
-  =/  refund=coins:transact  (sub assets.note used)
-  =/  refund-address=lock:transact  lock.note
-  =/  seed-list=(list seed:transact)
-    =|  seeds=(list seed:transact)
-    ::  add gift seed if there's a gift portion
-    =?  seeds  (gth gift-portion 0)
-      :_  seeds
-      %-  new:seed:transact
-      :*  *(unit source:transact)
-          recipient
-          timelock-intent
-          gift-portion
-          (hash:nnote:transact note)
-      ==
-    ::  add refund seed if there's a refund
-    =?  seeds  (gth refund 0)
-      :_  seeds
-      %-  new:seed:transact
-      :*  *(unit source:transact)
-          refund-address
-          *timelock-intent:transact
-          refund
-          (hash:nnote:transact note)
-      ==
-    seeds
-  =/  seeds-set=seeds:transact  (new:seeds:transact seed-list)
-  =/  spend-obj=spend:transact  (new:spend:transact seeds-set fee-portion)
-  =.  spend-obj  (sign:spend:transact spend-obj sign-key)
-  [note spend-obj]
-::
-++  create-input
-  |=  $:  note=nnote:transact
-          recipient=lock:transact
-          gifts=coins:transact
-          =timelock-intent:transact
-          fee=coins:transact
-      ==
-  ^-  input:transact
-  =/  gift-seed=seed:transact
-    %-  new:seed:transact
-    :*  *(unit source:transact)
-        recipient
-        timelock-intent
-        gifts
-        (hash:nnote:transact note)
+++  order-gift
+  |=  ord=order:wt
+  ^-  coins:transact
+  ?-    -.ord
+      %pkh       gift.ord
+      %multisig  gift.ord
+      %lock-root  gift.ord
+      %bridge-deposit  gift.ord
     ==
-  =/  refund=coins:transact  (sub assets.note (add gifts fee))
-  =/  refund-address=lock:transact  lock.note
-  =/  seed-list=(list seed:transact)
-    ?:  =(0 refund)  ~[gift-seed]
-    :~  gift-seed
-        %-  new:seed:transact
-        :*  *(unit source:transact)
-            refund-address
-            *timelock-intent:transact
-            refund
-            (hash:nnote:transact note)
-        ==
+::
+++  with-gift
+  |=  [ord=order:wt gift=coins:transact]
+  ^-  order:wt
+  ?-    -.ord
+      %pkh       ord(gift gift)
+      %multisig  ord(gift gift)
+      %lock-root  ord(gift gift)
+      %bridge-deposit  ord(gift gift)
     ==
-  =/  seeds-set=seeds:transact  (new:seeds:transact seed-list)
-  =/  spend-obj=spend:transact  (new:spend:transact seeds-set fee)
-  =.  spend-obj  (sign:spend:transact spend-obj sign-key)
-  [note spend-obj]
 ::
-++  parse-recipients
-  |=  raw-recipients=(list [m=@ pks=(list @t)])
-  ^-  (list lock:transact)
-  (turn raw-recipients parse-recipient)
+++  extract-metadata
+  |=  ord=order:wt
+  ^-  lock-metadata-1:wt
+  :-  %1
+  ?-    -.ord
+      %bridge-deposit
+    [%bridge-deposit root=bridge-lock-root-default:bridge addr=address.ord]
+  ::
+      %lock-root
+    [%lock-root root=root.ord]
+  ::
+      %pkh
+    [%lock [%pkh [m=1 (z-silt:zo ~[recipient.ord])]]~ include-data]
+    ::
+      %multisig
+    =/  participants=(list hash:transact)  participants.ord
+    =/  allowed=(z-set:zo hash:transact)  (z-silt:zo participants)
+    [%lock [%pkh [m=threshold.ord allowed]]~ include-data=%.y]
+  ==
 ::
-++  parse-recipient
-  |=  raw-recipient=[m=@ pks=(list @t)]
-  ^-  lock:transact
-  =/  lk=lock:transact
-    %+  from-list:m-of-n:new:lock:transact  m.raw-recipient
-    (turn pks.raw-recipient from-b58:schnorr-pubkey:transact)
-  ?.  (spendable:lock:transact lk)
-    ~|("recipient {<(to-b58:lock:transact lk)>} is not spendable" !!)
-  lk
+++  order-from-lock
+  |=  [lok=lock:transact gift=@]
+  ^-  (unit order:wt)
+  ?@  -.lok  ~
+  =/  primitive=lock-primitive:transact  i.lok
+  ?.  ?=(%pkh -.primitive)
+    ~
+  =/  threshold=@  m.primitive
+  =/  allowed=(z-set:zo hash:transact)  h.primitive
+  =/  participants=(list hash:transact)  ~(tap z-in:zo allowed)
+  ?~  participants
+    ~|('Invalid lock, no participants specified.' !!)
+  ?:  &(=(threshold 1) =(1 (lent participants)))
+    (some [%pkh recipient=i.participants gift=gift])
+  (some [%multisig threshold=threshold participants=participants gift=gift])
+::
+++  build-refund-order
+  |=  [refund=@ refund-lock=lock:transact]
+  ^-  order:wt
+  ?~  parsed=(order-from-lock [refund-lock refund])
+    ~|('Unsupported owner lock for refund; please specify --refund-pkh' !!)
+  u.parsed
+::
+++  multisig-lock
+ |=  note=nnote-1:v1:transact
+ ^-  (unit lock:transact)
+ ?~  lock-noun=(~(get z-by:zo note-data.note) %lock)
+   ~
+ ?~  soft-lock=((soft lock-data:wt) u.lock-noun)
+   ~>  %slog.[0 'lock data in note is malformed']  ~
+ =+  pulled=lock.u.soft-lock
+ ?@  -.pulled
+   ~
+ ?:  !=(1 (lent pulled))
+   ~
+ =/  lp=lock-primitive:transact  -.pulled
+ ?.  ?=(%pkh -.lp)
+   ~
+ ?:  =(1 ~(wyt z-in:zo h.lp))
+   ~
+  `pulled
+::
+--
 --

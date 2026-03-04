@@ -2,7 +2,7 @@ extern crate proc_macro;
 
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
-use syn::{parse_macro_input, Attribute, Data, DeriveInput, Fields};
+use syn::{parse_macro_input, Attribute, Data, DeriveInput, Fields, LitBool, Token};
 
 /// Parses the `#[noun(tagged = bool)]` attribute from a list of attributes.
 ///
@@ -33,28 +33,33 @@ use syn::{parse_macro_input, Attribute, Data, DeriveInput, Fields};
 ///
 /// Untagged noun encoding: `[%variant value1 value2 ...]`
 ///
-fn parse_tagged_attr(attrs: &[Attribute]) -> Option<bool> {
-    attrs.iter().find_map(|attr| {
-        if attr.path().is_ident("noun") {
-            attr.parse_args::<syn::MetaNameValue>().ok().and_then(|nv| {
-                if nv.path.is_ident("tagged") {
-                    if let syn::Expr::Lit(syn::ExprLit {
-                        lit: syn::Lit::Bool(b),
-                        ..
-                    }) = nv.value
-                    {
-                        Some(b.value())
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            })
-        } else {
-            None
+fn parse_noun_bool_attr(attrs: &[Attribute], key: &str) -> Option<bool> {
+    let mut value = None;
+    for attr in attrs {
+        if !attr.path().is_ident("noun") {
+            continue;
         }
-    })
+        let _ = attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident(key) {
+                if meta.input.peek(Token![=]) {
+                    let lit = meta.value()?.parse::<LitBool>()?;
+                    value = Some(lit.value());
+                } else {
+                    value = Some(true);
+                }
+            }
+            Ok(())
+        });
+    }
+    value
+}
+
+fn parse_tagged_attr(attrs: &[Attribute]) -> Option<bool> {
+    parse_noun_bool_attr(attrs, "tagged")
+}
+
+fn parse_untagged_attr(attrs: &[Attribute]) -> Option<bool> {
+    parse_noun_bool_attr(attrs, "untagged")
 }
 
 /// Parses the `#[noun(axis = u64)]` attribute from a list of attributes.
@@ -119,6 +124,7 @@ fn parse_axis_attr(attrs: &[Attribute]) -> Option<u64> {
 ///
 /// - `#[noun(tag = "string")]`: Specifies a custom tag for enum variants (defaults to lowercase variant name)
 /// - `#[noun(tagged = bool)]`: Controls whether fields are tagged with their names (enum-level or variant-level)
+/// - `#[noun(untagged)]`: Encode enum variants without tags and try variants in order when decoding
 ///
 /// # Encoding Format
 ///
@@ -186,14 +192,60 @@ pub fn derive_noun_encode(input: TokenStream) -> TokenStream {
     let name = input.ident;
 
     let enum_tagged = parse_tagged_attr(&input.attrs);
+    let enum_untagged = parse_untagged_attr(&input.attrs).unwrap_or(false);
 
     let encode_impl = match input.data {
         Data::Struct(data) => {
             let field_encoders = match data.fields {
                 Fields::Named(fields) => {
-                    let field_encoders = fields.named.iter().enumerate().map(|(i, field)| {
-                        let field_name = field.ident.as_ref().unwrap();
-                        let field_var = format_ident!("field_{}", i);
+                    let field_count = fields.named.len();
+                    let mut field_infos: Vec<(u64, &syn::Field, usize)> = fields
+                        .named
+                        .iter()
+                        .enumerate()
+                        .map(|(i, field)| {
+                            let default_axis = if i == 0 {
+                                2
+                            } else if i == field_count - 1 {
+                                let mut axis = 2;
+                                for _ in 1..i {
+                                    axis = 2 * axis + 2;
+                                }
+                                axis + 1
+                            } else {
+                                let mut axis = 2;
+                                for _ in 1..=i {
+                                    axis = 2 * axis + 2;
+                                }
+                                axis
+                            };
+                            let axis = parse_axis_attr(&field.attrs).unwrap_or(default_axis);
+                            (axis, field, i)
+                        })
+                        .collect();
+
+                    let has_custom_axis = field_infos
+                        .iter()
+                        .any(|(_axis, field, _)| parse_axis_attr(&field.attrs).is_some());
+                    if has_custom_axis {
+                        field_infos.sort_by_key(|(axis, _field, _i)| *axis);
+                        let mut axes = field_infos
+                            .iter()
+                            .map(|(axis, _, _)| *axis)
+                            .collect::<Vec<_>>();
+                        axes.sort();
+                        if axes.windows(2).any(|w| w[0] == w[1]) {
+                            return syn::Error::new_spanned(
+                                &name, "duplicate #[noun(axis = ...)] values in struct fields",
+                            )
+                            .to_compile_error()
+                            .into();
+                        }
+                    }
+
+                    let field_encoders = field_infos.iter().enumerate().map(|(out_i, (_axis, field, _in_i))| {
+                        let field_name = field.ident.as_ref().expect("named field must have ident");
+                        let field_var = format_ident!("field_{}", out_i);
                         quote! {
                             let #field_var = ::noun_serde::NounEncode::to_noun(&self.#field_name, allocator);
                             encoded_fields.push(#field_var);
@@ -204,7 +256,13 @@ pub fn derive_noun_encode(input: TokenStream) -> TokenStream {
                         quote! { ::nockvm::noun::D(0) }
                     } else if fields.named.len() == 1 {
                         // Single field: just return the field itself
-                        let field_name = fields.named.first().unwrap().ident.as_ref().unwrap();
+                        let field_name = fields
+                            .named
+                            .first()
+                            .expect("field must exist")
+                            .ident
+                            .as_ref()
+                            .expect("named field must have ident");
                         quote! {
                             ::noun_serde::NounEncode::to_noun(&self.#field_name, allocator)
                         }
@@ -232,9 +290,53 @@ pub fn derive_noun_encode(input: TokenStream) -> TokenStream {
                             ::noun_serde::NounEncode::to_noun(&self.0, allocator)
                         }
                     } else {
-                        let field_encoders = (0..field_count).map(|i| {
-                            let idx = syn::Index::from(i);
-                            let field_var = format_ident!("field_{}", i);
+                        let mut field_infos: Vec<(u64, usize)> = fields
+                            .unnamed
+                            .iter()
+                            .enumerate()
+                            .map(|(i, field)| {
+                                let default_axis = if i == 0 {
+                                    2
+                                } else if i == field_count - 1 {
+                                    let mut axis = 2;
+                                    for _ in 1..i {
+                                        axis = 2 * axis + 2;
+                                    }
+                                    axis + 1
+                                } else {
+                                    let mut axis = 2;
+                                    for _ in 1..=i {
+                                        axis = 2 * axis + 2;
+                                    }
+                                    axis
+                                };
+                                let axis = parse_axis_attr(&field.attrs).unwrap_or(default_axis);
+                                (axis, i)
+                            })
+                            .collect();
+
+                        let has_custom_axis = field_infos
+                            .iter()
+                            .any(|(_axis, i)| parse_axis_attr(&fields.unnamed[*i].attrs).is_some());
+                        if has_custom_axis {
+                            field_infos.sort_by_key(|(axis, _i)| *axis);
+                            let mut axes = field_infos
+                                .iter()
+                                .map(|(axis, _)| *axis)
+                                .collect::<Vec<_>>();
+                            axes.sort();
+                            if axes.windows(2).any(|w| w[0] == w[1]) {
+                                return syn::Error::new_spanned(
+                                    &name, "duplicate #[noun(axis = ...)] values in tuple fields",
+                                )
+                                .to_compile_error()
+                                .into();
+                            }
+                        }
+
+                        let field_encoders = field_infos.iter().enumerate().map(|(out_i, (_axis, i))| {
+                            let idx = syn::Index::from(*i);
+                            let field_var = format_ident!("field_{}", out_i);
                             quote! {
                                 let #field_var = ::noun_serde::NounEncode::to_noun(&self.#idx, allocator);
                                 encoded_fields.push(#field_var);
@@ -266,132 +368,239 @@ pub fn derive_noun_encode(input: TokenStream) -> TokenStream {
             }
         }
         Data::Enum(data) => {
-            let cases: Vec<_> = data
-                .variants
-                .iter()
-                .map(|variant| {
-                    let variant_name = &variant.ident;
-                    let tag = variant
-                        .attrs
-                        .iter()
-                        .find_map(|attr| {
-                            if attr.path().is_ident("noun") {
-                                attr.parse_args::<syn::MetaNameValue>().ok().and_then(|nv| {
-                                    if nv.path.is_ident("tag") {
-                                        if let syn::Expr::Lit(syn::ExprLit {
-                                            lit: syn::Lit::Str(s),
-                                            ..
-                                        }) = nv.value
-                                        {
-                                            Some(s.value())
+            if enum_untagged {
+                let cases: Vec<_> = data
+                    .variants
+                    .iter()
+                    .map(|variant| {
+                        let variant_name = &variant.ident;
+                        match &variant.fields {
+                            Fields::Named(fields) => {
+                                let field_names: Vec<_> = fields
+                                    .named
+                                    .iter()
+                                    .map(|f| f.ident.as_ref().expect("named field must have ident"))
+                                    .collect();
+
+                                if fields.named.is_empty() {
+                                    quote! {
+                                        #name::#variant_name { } => {
+                                            ::nockvm::noun::D(0)
+                                        }
+                                    }
+                                } else if fields.named.len() == 1 {
+                                    let field_name = field_names[0];
+                                    quote! {
+                                        #name::#variant_name { #field_name } => {
+                                            ::noun_serde::NounEncode::to_noun(#field_name, allocator)
+                                        }
+                                    }
+                                } else {
+                                    let field_encoders = fields.named.iter().enumerate().map(|(i, field)| {
+                                        let field_name = field.ident.as_ref().expect("named field must have ident");
+                                        let field_var = format_ident!("encoded_field_{}", i);
+                                        quote! {
+                                            let #field_var = ::noun_serde::NounEncode::to_noun(#field_name, allocator);
+                                            encoded_fields.push(#field_var);
+                                        }
+                                    });
+                                    quote! {
+                                        #name::#variant_name { #(#field_names),* } => {
+                                            let mut encoded_fields = Vec::new();
+                                            #(#field_encoders)*
+                                            let mut result = encoded_fields.pop().unwrap();
+                                            for noun in encoded_fields.into_iter().rev() {
+                                                result = ::nockvm::noun::T(allocator, &[noun, result]);
+                                            }
+                                            result
+                                        }
+                                    }
+                                }
+                            }
+                            Fields::Unnamed(fields) => {
+                                let field_count = fields.unnamed.len();
+                                let field_idents: Vec<_> = (0..field_count)
+                                    .map(|i| format_ident!("field_{}", i))
+                                    .collect();
+
+                                if field_count == 0 {
+                                    quote! {
+                                        #name::#variant_name => {
+                                            ::nockvm::noun::D(0)
+                                        }
+                                    }
+                                } else if field_count == 1 {
+                                    quote! {
+                                        #name::#variant_name(value) => {
+                                            ::noun_serde::NounEncode::to_noun(value, allocator)
+                                        }
+                                    }
+                                } else {
+                                    let field_encoders = field_idents.iter().enumerate().map(|(i, ident)| {
+                                        let field_var = format_ident!("encoded_field_{}", i);
+                                        quote! {
+                                            let #field_var = ::noun_serde::NounEncode::to_noun(#ident, allocator);
+                                            encoded_fields.push(#field_var);
+                                        }
+                                    });
+                                    quote! {
+                                        #name::#variant_name(#(#field_idents),*) => {
+                                            let mut encoded_fields = Vec::new();
+                                            #(#field_encoders)*
+                                            let mut result = encoded_fields.pop().unwrap();
+                                            for noun in encoded_fields.into_iter().rev() {
+                                                result = ::nockvm::noun::T(allocator, &[noun, result]);
+                                            }
+                                            result
+                                        }
+                                    }
+                                }
+                            }
+                            Fields::Unit => {
+                                quote! {
+                                    #name::#variant_name => {
+                                        ::nockvm::noun::D(0)
+                                    }
+                                }
+                            }
+                        }
+                    })
+                    .collect();
+
+                quote! {
+                    match self {
+                        #(#cases),*
+                    }
+                }
+            } else {
+                let cases: Vec<_> = data
+                    .variants
+                    .iter()
+                    .map(|variant| {
+                        let variant_name = &variant.ident;
+                        let tag = variant
+                            .attrs
+                            .iter()
+                            .find_map(|attr| {
+                                if attr.path().is_ident("noun") {
+                                    attr.parse_args::<syn::MetaNameValue>().ok().and_then(|nv| {
+                                        if nv.path.is_ident("tag") {
+                                            if let syn::Expr::Lit(syn::ExprLit {
+                                                lit: syn::Lit::Str(s),
+                                                ..
+                                            }) = nv.value
+                                            {
+                                                Some(s.value())
+                                            } else {
+                                                None
+                                            }
                                         } else {
                                             None
                                         }
-                                    } else {
-                                        None
+                                    })
+                                } else {
+                                    None
+                                }
+                            })
+                            .unwrap_or_else(|| variant_name.to_string().to_lowercase());
+
+                        // Check variant-level tagged attribute, fallback to enum-level
+                        let is_tagged =
+                            parse_tagged_attr(&variant.attrs).unwrap_or(enum_tagged.unwrap_or(false));
+
+                        match &variant.fields {
+                            Fields::Named(fields) => {
+                                let field_names: Vec<_> = fields
+                                    .named
+                                    .iter()
+                                    .map(|f| f.ident.as_ref().expect("named field must have ident"))
+                                    .collect();
+
+                                if is_tagged {
+                                    // Tagged encoding: [%tag [[%field1 value1] [%field2 value2] ...]]
+                                    quote! {
+                                        #name::#variant_name { #(#field_names),* } => {
+                                            let tag = ::nockvm::ext::make_tas(allocator, #tag).as_noun();
+                                            let mut field_nouns = Vec::new();
+                                            #(
+                                                let field_tag = ::nockvm::ext::make_tas(allocator, stringify!(#field_names)).as_noun();
+                                                let field_value = ::noun_serde::NounEncode::to_noun(#field_names, allocator);
+                                                field_nouns.push(::nockvm::noun::T(allocator, &[field_tag, field_value]));
+                                            )*
+                                            // Fold field pairs into a list: [[k1 v1] [[k2 v2] ... 0]]
+                                            let data = field_nouns.into_iter().rev().fold(::nockvm::noun::D(0), |acc, pair_noun| {
+                                                 if acc.is_atom() && acc.as_atom().map_or(false, |a| a.as_u64() == Ok(0)) {
+                                                    ::nockvm::noun::T(allocator, &[pair_noun, ::nockvm::noun::D(0)]) // Base case: [last_pair 0]
+                                                } else {
+                                                    ::nockvm::noun::T(allocator, &[pair_noun, acc])
+                                                }
+                                            });
+                                            ::nockvm::noun::T(allocator, &[tag, data])
+                                        }
                                     }
-                                })
-                            } else {
-                                None
-                            }
-                        })
-                        .unwrap_or_else(|| variant_name.to_string().to_lowercase());
-
-                    // Check variant-level tagged attribute, fallback to enum-level
-                    let is_tagged = parse_tagged_attr(&variant.attrs).unwrap_or(enum_tagged.unwrap_or(false));
-
-                    match &variant.fields {
-                        Fields::Named(fields) => {
-                            let field_names: Vec<_> = fields
-                                .named
-                                .iter()
-                                .map(|f| f.ident.as_ref().unwrap())
-                                .collect();
-
-                            if is_tagged {
-                                // Tagged encoding: [%tag [[%field1 value1] [%field2 value2] ...]]
-                                quote! {
-                                    #name::#variant_name { #(#field_names),* } => {
-                                        let tag = ::nockapp::utils::make_tas(allocator, #tag).as_noun();
-                                        let mut field_nouns = Vec::new();
-                                        #(
-                                            let field_tag = ::nockapp::utils::make_tas(allocator, stringify!(#field_names)).as_noun();
-                                            let field_value = ::noun_serde::NounEncode::to_noun(#field_names, allocator);
-                                            field_nouns.push(::nockvm::noun::T(allocator, &[field_tag, field_value]));
-                                        )*
-                                        // Fold field pairs into a list: [[k1 v1] [[k2 v2] ... 0]]
-                                        let data = field_nouns.into_iter().rev().fold(::nockvm::noun::D(0), |acc, pair_noun| {
-                                             if acc.is_atom() && acc.as_atom().map_or(false, |a| a.as_u64() == Ok(0)) {
-                                                ::nockvm::noun::T(allocator, &[pair_noun, ::nockvm::noun::D(0)]) // Base case: [last_pair 0]
-                                            } else {
-                                                ::nockvm::noun::T(allocator, &[pair_noun, acc])
-                                            }
-                                        });
-                                        ::nockvm::noun::T(allocator, &[tag, data])
+                                } else {
+                                    // Untagged encoding: [%tag [value1 value2 ...]]
+                                    quote! {
+                                        #name::#variant_name { #(#field_names),* } => {
+                                            let tag = ::nockvm::ext::make_tas(allocator, #tag).as_noun();
+                                            let mut field_nouns = vec![tag];
+                                            #(
+                                                let field_noun = ::noun_serde::NounEncode::to_noun(#field_names, allocator);
+                                                field_nouns.push(field_noun);
+                                            )*
+                                            ::nockvm::noun::T(allocator, &field_nouns)
+                                        }
                                     }
                                 }
-                            } else {
-                                // Untagged encoding: [%tag [value1 value2 ...]]
+                            }
+                            Fields::Unnamed(fields) => {
+                                let field_count = fields.unnamed.len();
+                                let field_idents: Vec<_> = (0..field_count)
+                                    .map(|i| format_ident!("field_{}", i))
+                                    .collect();
+
+                                if field_count == 1 {
+                                    let _ty = &fields.unnamed[0].ty;
+                                    quote! {
+                                        #name::#variant_name(value) => {
+                                            let tag = ::nockvm::ext::make_tas(allocator, #tag).as_noun();
+                                            let data = ::noun_serde::NounEncode::to_noun(value, allocator);
+                                            ::nockvm::noun::T(allocator, &[tag, data])
+                                        }
+                                    }
+                                } else {
+                                    let field_idents_rev = field_idents.iter().rev().collect::<Vec<_>>();
+                                    let first_field = field_idents_rev[0];
+                                    let rest_fields = &field_idents_rev[1..];
+
+                                    quote! {
+                                        #name::#variant_name(#(#field_idents),*) => {
+                                            let tag = ::nockvm::ext::make_tas(allocator, #tag).as_noun();
+                                            // Build nested cell structure right-to-left
+                                            let mut data = ::noun_serde::NounEncode::to_noun(#first_field, allocator);
+                                            #(
+                                                data = ::nockvm::noun::T(allocator, &[::noun_serde::NounEncode::to_noun(#rest_fields, allocator), data]);
+                                            )*
+                                            ::nockvm::noun::T(allocator, &[tag, data])
+                                        }
+                                    }
+                                }
+                            }
+                            Fields::Unit => {
                                 quote! {
-                                    #name::#variant_name { #(#field_names),* } => {
-                                        let tag = ::nockapp::utils::make_tas(allocator, #tag).as_noun();
-                                        let mut field_nouns = vec![tag];
-                                        #(
-                                            let field_noun = ::noun_serde::NounEncode::to_noun(#field_names, allocator);
-                                            field_nouns.push(field_noun);
-                                        )*
-                                        ::nockvm::noun::T(allocator, &field_nouns)
+                                    #name::#variant_name => {
+                                        ::nockvm::ext::make_tas(allocator, #tag).as_noun()
                                     }
                                 }
                             }
                         }
-                        Fields::Unnamed(fields) => {
-                            let field_count = fields.unnamed.len();
-                            let field_idents: Vec<_> = (0..field_count)
-                                .map(|i| format_ident!("field_{}", i))
-                                .collect();
+                    })
+                    .collect();
 
-                            if field_count == 1 {
-                                let _ty = &fields.unnamed[0].ty;
-                                quote! {
-                                    #name::#variant_name(value) => {
-                                        let tag = ::nockapp::utils::make_tas(allocator, #tag).as_noun();
-                                        let data = ::noun_serde::NounEncode::to_noun(value, allocator);
-                                        ::nockvm::noun::T(allocator, &[tag, data])
-                                    }
-                                }
-                            } else {
-                                let field_idents_rev = field_idents.iter().rev().collect::<Vec<_>>();
-                                let first_field = field_idents_rev[0];
-                                let rest_fields = &field_idents_rev[1..];
-
-                                quote! {
-                                    #name::#variant_name(#(#field_idents),*) => {
-                                        let tag = ::nockapp::utils::make_tas(allocator, #tag).as_noun();
-                                        // Build nested cell structure right-to-left
-                                        let mut data = ::noun_serde::NounEncode::to_noun(#first_field, allocator);
-                                        #(
-                                            data = ::nockvm::noun::T(allocator, &[::noun_serde::NounEncode::to_noun(#rest_fields, allocator), data]);
-                                        )*
-                                        ::nockvm::noun::T(allocator, &[tag, data])
-                                    }
-                                }
-                            }
-                        }
-                        Fields::Unit => {
-                            quote! {
-                                #name::#variant_name => {
-                                    ::nockapp::utils::make_tas(allocator, #tag).as_noun()
-                                }
-                            }
-                        }
+                quote! {
+                    match self {
+                        #(#cases),*
                     }
-                })
-                .collect();
-
-            quote! {
-                match self {
-                    #(#cases),*
                 }
             }
         }
@@ -415,10 +624,12 @@ pub fn derive_noun_encode(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(NounDecode, attributes(noun))]
 pub fn derive_noun_decode(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
-    let name = input.ident;
+    let name = input.ident.clone();
+    let name_str = name.to_string();
 
     // Get enum-level tagged attribute
     let enum_tagged = parse_tagged_attr(&input.attrs);
+    let enum_untagged = parse_untagged_attr(&input.attrs).unwrap_or(false);
 
     // Generate implementation based on the type
     let decode_impl = match input.data {
@@ -428,21 +639,30 @@ pub fn derive_noun_decode(input: TokenStream) -> TokenStream {
                     let field_names: Vec<_> = fields
                         .named
                         .iter()
-                        .map(|f| f.ident.as_ref().unwrap())
+                        .map(|f| f.ident.as_ref().expect("named field must have ident"))
                         .collect();
 
                     let field_types: Vec<_> = fields.named.iter().map(|f| &f.ty).collect();
 
                     if fields.named.is_empty() {
                         quote! {
+                            ::tracing::trace!(target: "noun_serde_decode", "Decoding {} (empty struct)", #name_str);
                             Ok(Self {})
                         }
                     } else if fields.named.len() == 1 {
                         // Single field: decode directly from noun
                         let field_name = &field_names[0];
+                        let field_name_str = field_name.to_string();
                         let field_type = &field_types[0];
                         quote! {
-                            let #field_name = <#field_type as ::noun_serde::NounDecode>::from_noun(noun)?;
+                            ::tracing::trace!(target: "noun_serde_decode", "Decoding {} (single field struct), is_atom={}, is_cell={}", #name_str, noun.is_atom(), noun.is_cell());
+                            ::tracing::trace!(target: "noun_serde_decode", "  field={} type={}", #field_name_str, stringify!(#field_type));
+                            let #field_name = <#field_type as ::noun_serde::NounDecode>::from_noun(noun)
+                                .map_err(|e| {
+                                    ::tracing::trace!(target: "noun_serde_decode", "  FAILED decoding field {} in {}: {:?}", #field_name_str, #name_str, e);
+                                    e
+                                })?;
+                            ::tracing::trace!(target: "noun_serde_decode", "  SUCCESS decoded field {} in {}", #field_name_str, #name_str);
                             Ok(Self { #field_name })
                         }
                     } else {
@@ -457,8 +677,8 @@ pub fn derive_noun_decode(input: TokenStream) -> TokenStream {
                                 let field = fields
                                     .named
                                     .iter()
-                                    .find(|f| f.ident.as_ref().unwrap().to_string() == name.to_string())
-                                    .unwrap();
+                                    .find(|f| f.ident.as_ref().expect("named field must have ident") == *name)
+                                    .expect("field must exist");
 
                                 // Check for custom axis
                                 let custom_axis = parse_axis_attr(&field.attrs);
@@ -491,14 +711,32 @@ pub fn derive_noun_decode(input: TokenStream) -> TokenStream {
                                 };
 
                                 let axis = custom_axis.unwrap_or(default_axis);
+                                let field_name_str = name.to_string();
                                 quote! {
-                                    let #name = <#ty as ::noun_serde::NounDecode>::from_noun(&::nockvm::noun::Slots::slot(&cell, #axis)?)?;
+                                    ::tracing::trace!(target: "noun_serde_decode", "  field={} type={} axis={}", #field_name_str, stringify!(#ty), #axis);
+                                    let field_noun = ::nockvm::noun::Slots::slot(&cell, #axis)
+                                        .map_err(|e| {
+                                            ::tracing::trace!(target: "noun_serde_decode", "  FAILED to get slot {} for field {} in {}: {:?}", #axis, #field_name_str, #name_str, e);
+                                            ::noun_serde::NounDecodeError::ExpectedCell
+                                        })?;
+                                    ::tracing::trace!(target: "noun_serde_decode", "  field={} is_atom={} is_cell={}", #field_name_str, field_noun.is_atom(), field_noun.is_cell());
+                                    let #name = <#ty as ::noun_serde::NounDecode>::from_noun(&field_noun)
+                                        .map_err(|e| {
+                                            ::tracing::trace!(target: "noun_serde_decode", "  FAILED decoding field {} in {}: {:?}", #field_name_str, #name_str, e);
+                                            e
+                                        })?;
+                                    ::tracing::trace!(target: "noun_serde_decode", "  SUCCESS decoded field {} in {}", #field_name_str, #name_str);
                                 }
                             });
 
                         quote! {
-                            let cell = noun.as_cell().map_err(|_| ::noun_serde::NounDecodeError::ExpectedCell)?;
+                            ::tracing::trace!(target: "noun_serde_decode", "Decoding {} (multi-field struct), is_atom={}, is_cell={}", #name_str, noun.is_atom(), noun.is_cell());
+                            let cell = noun.as_cell().map_err(|e| {
+                                ::tracing::trace!(target: "noun_serde_decode", "FAILED {} expected cell but got atom", #name_str);
+                                ::noun_serde::NounDecodeError::ExpectedCell
+                            })?;
                             #(#field_decoders)*
+                            ::tracing::trace!(target: "noun_serde_decode", "SUCCESS decoded {}", #name_str);
                             Ok(Self {
                                 #(#field_names),*
                             })
@@ -510,7 +748,14 @@ pub fn derive_noun_decode(input: TokenStream) -> TokenStream {
                     if field_count == 1 {
                         let field_type = &fields.unnamed[0].ty;
                         quote! {
-                            let field_0 = <#field_type as ::noun_serde::NounDecode>::from_noun(noun)?;
+                            ::tracing::trace!(target: "noun_serde_decode", "Decoding {} (single field tuple), is_atom={}, is_cell={}", #name_str, noun.is_atom(), noun.is_cell());
+                            ::tracing::trace!(target: "noun_serde_decode", "  field=0 type={}", stringify!(#field_type));
+                            let field_0 = <#field_type as ::noun_serde::NounDecode>::from_noun(noun)
+                                .map_err(|e| {
+                                    ::tracing::trace!(target: "noun_serde_decode", "  FAILED decoding field 0 in {}: {:?}", #name_str, e);
+                                    e
+                                })?;
+                            ::tracing::trace!(target: "noun_serde_decode", "SUCCESS decoded {}", #name_str);
                             Ok(Self(field_0))
                         }
                     } else {
@@ -566,203 +811,511 @@ pub fn derive_noun_decode(input: TokenStream) -> TokenStream {
                             };
 
                             let axis = custom_axis.unwrap_or(default_axis);
+                            let field_num_str = i.to_string();
 
                             quote! {
+                                ::tracing::trace!(target: "noun_serde_decode", "  field={} type={} axis={}", #field_num_str, stringify!(#field_type), #axis);
                                 let field_noun = ::nockvm::noun::Slots::slot(&cell, #axis)
-                                    .map_err(|_| ::noun_serde::NounDecodeError::FieldError(stringify!(#field_ident).to_string(), "Missing field".into()))?;
+                                    .map_err(|e| {
+                                        ::tracing::trace!(target: "noun_serde_decode", "  FAILED to get slot {} for field {} in {}: {:?}", #axis, #field_num_str, #name_str, e);
+                                        ::noun_serde::NounDecodeError::FieldError(stringify!(#field_ident).to_string(), "Missing field".into())
+                                    })?;
+                                ::tracing::trace!(target: "noun_serde_decode", "  field={} is_atom={} is_cell={}", #field_num_str, field_noun.is_atom(), field_noun.is_cell());
                                 let #field_ident = <#field_type as ::noun_serde::NounDecode>::from_noun(&field_noun)
-                                    .map_err(|e| ::noun_serde::NounDecodeError::FieldError(stringify!(#field_ident).to_string(), e.to_string()))?;
+                                    .map_err(|e| {
+                                        ::tracing::trace!(target: "noun_serde_decode", "  FAILED decoding field {} in {}: {:?}", #field_num_str, #name_str, e);
+                                        ::noun_serde::NounDecodeError::FieldError(stringify!(#field_ident).to_string(), e.to_string())
+                                    })?;
+                                ::tracing::trace!(target: "noun_serde_decode", "  SUCCESS decoded field {} in {}", #field_num_str, #name_str);
                             }
                         });
 
                         let field_idents = (0..field_count).map(|i| format_ident!("field_{}", i));
 
                         quote! {
-                            let cell = noun.as_cell().map_err(|_| ::noun_serde::NounDecodeError::ExpectedCell)?;
+                            ::tracing::trace!(target: "noun_serde_decode", "Decoding {} (multi-field tuple), is_atom={}, is_cell={}", #name_str, noun.is_atom(), noun.is_cell());
+                            let cell = noun.as_cell().map_err(|e| {
+                                ::tracing::trace!(target: "noun_serde_decode", "FAILED {} expected cell but got atom", #name_str);
+                                ::noun_serde::NounDecodeError::ExpectedCell
+                            })?;
                             #(#field_decoders)*
+                            ::tracing::trace!(target: "noun_serde_decode", "SUCCESS decoded {}", #name_str);
                             Ok(Self(#(#field_idents),*))
                         }
                     }
                 }
                 Fields::Unit => {
                     quote! {
+                        ::tracing::trace!(target: "noun_serde_decode", "Decoding {} (unit struct)", #name_str);
+                        ::tracing::trace!(target: "noun_serde_decode", "SUCCESS decoded {}", #name_str);
                         Ok(Self)
                     }
                 }
             }
         }
         Data::Enum(data) => {
-            let cases: Vec<_> = data.variants.iter().map(|variant| {
-                let variant_name = &variant.ident;
-                let tag = variant.attrs.iter()
-                    .find_map(|attr| {
-                        if attr.path().is_ident("noun") {
-                            attr.parse_args::<syn::MetaNameValue>().ok()
-                                .and_then(|nv| if nv.path.is_ident("tag") {
-                                    if let syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(s), .. }) = nv.value {
-                                        Some(s.value())
-                                    } else {
-                                        None
+            if enum_untagged {
+                let attempts: Vec<_> = data
+                    .variants
+                    .iter()
+                    .map(|variant| {
+                        let variant_name = &variant.ident;
+                        let attempt = match &variant.fields {
+                            Fields::Named(fields) => {
+                                let field_names: Vec<_> = fields
+                                    .named
+                                    .iter()
+                                    .map(|f| f.ident.as_ref().expect("named field must have ident"))
+                                    .collect();
+                                let field_types: Vec<_> =
+                                    fields.named.iter().map(|f| &f.ty).collect();
+
+                                if fields.named.is_empty() {
+                                    quote! {
+                                        let atom = noun
+                                            .as_atom()
+                                            .map_err(|_| ::noun_serde::NounDecodeError::ExpectedAtom)?;
+                                        let atom_u64 = atom
+                                            .as_u64()
+                                            .map_err(|_| ::noun_serde::NounDecodeError::InvalidEnumVariant)?;
+                                        if atom_u64 == 0 {
+                                            Ok(Self::#variant_name { })
+                                        } else {
+                                            Err(::noun_serde::NounDecodeError::InvalidEnumVariant)
+                                        }
+                                    }
+                                } else if fields.named.len() == 1 {
+                                    let field_name = field_names[0];
+                                    let field_type = field_types[0];
+                                    quote! {
+                                        let #field_name = <#field_type as ::noun_serde::NounDecode>::from_noun(noun)?;
+                                        Ok(Self::#variant_name { #field_name })
                                     }
                                 } else {
-                                    None
-                                })
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or_else(|| variant_name.to_string().to_lowercase());
-
-                // Check variant-level tagged attribute, fallback to enum-level
-                let is_tagged = parse_tagged_attr(&variant.attrs).unwrap_or(enum_tagged.unwrap_or(false));
-
-                match &variant.fields {
-                    Fields::Named(fields) => {
-                        let field_names: Vec<_> = fields.named.iter()
-                            .map(|f| f.ident.as_ref().unwrap())
-                            .collect();
-
-                        let field_types: Vec<_> = fields.named.iter()
-                            .map(|f| &f.ty)
-                            .collect();
-
-                        if is_tagged {
-                            // Tagged decoding: [%tag [[%field1 value1] [%field2 value2] ...]]
-                            let field_decoders = field_names.iter().zip(field_types.iter()).enumerate()
-                                .map(|(i, (name, ty))| {
-                                    // print name and type decoding
-                                    // Get the corresponding field
-                                    let field = fields.named.iter().find(|f| {
-                                        f.ident.as_ref().unwrap().to_string() == name.to_string()
-                                    }).unwrap();
-
-                                    // Check for custom axis
-                                    let custom_axis = parse_axis_attr(&field.attrs);
-
-                                    // Calculate the axis for right-branching binary tree
-                                    // For field i, axis = 2 for i=0, axis = ((1*2+1)...*2+1)*2 for i>0
-                                    let default_axis = if i == 0 {
-                                        2
-                                    } else {
-                                        let mut axis = 1;
-                                        for _ in 0..i {
-                                            axis = axis * 2 + 1;
-                                        }
-                                        axis * 2
-                                    };
-
-                                    let axis = custom_axis.unwrap_or(default_axis);
+                                    let num_fields = field_names.len();
+                                    let field_decoders = field_names
+                                        .iter()
+                                        .zip(field_types.iter())
+                                        .enumerate()
+                                        .map(|(i, (name, ty))| {
+                                            let field = fields
+                                                .named
+                                                .iter()
+                                                .find(|f| {
+                                                    f.ident
+                                                        .as_ref()
+                                                        .expect("named field must have ident")
+                                                        == *name
+                                                })
+                                                .expect("field must exist");
+                                            let custom_axis = parse_axis_attr(&field.attrs);
+                                            let default_axis = if i == 0 {
+                                                2
+                                            } else if i == num_fields - 1 {
+                                                let mut axis = 2;
+                                                for _ in 1..i {
+                                                    axis = 2 * axis + 2;
+                                                }
+                                                axis + 1
+                                            } else {
+                                                let mut axis = 2;
+                                                for _ in 1..=i {
+                                                    axis = 2 * axis + 2;
+                                                }
+                                                axis
+                                            };
+                                            let axis = custom_axis.unwrap_or(default_axis);
+                                            quote! {
+                                                let field_noun = ::nockvm::noun::Slots::slot(&cell, #axis)
+                                                    .map_err(|_| ::noun_serde::NounDecodeError::ExpectedCell)?;
+                                                let #name = <#ty as ::noun_serde::NounDecode>::from_noun(&field_noun)?;
+                                            }
+                                        });
                                     quote! {
-                                        let field_cell = ::nockvm::noun::Slots::slot(&data, #axis)?.as_cell()?;
-                                        let #name = <#ty as ::noun_serde::NounDecode>::from_noun(&field_cell.tail())?;
-                                    }
-                                });
-
-                            quote! {
-                                tag if tag == #tag => {
-                                    if let Ok(cell) = noun.as_cell() {
-                                        let data = cell.tail();
+                                        let cell = noun
+                                            .as_cell()
+                                            .map_err(|_| ::noun_serde::NounDecodeError::ExpectedCell)?;
                                         #(#field_decoders)*
                                         Ok(Self::#variant_name { #(#field_names),* })
-                                    } else {
-                                        Err(::noun_serde::NounDecodeError::ExpectedCell)
                                     }
                                 }
                             }
-                        } else {
-                            // Untagged decoding: [%tag value1 value2 ...]
-                            quote! {
-                                tag if tag == #tag => {
-                                    if let Ok(cell) = noun.as_cell() {
-                                        let tail = cell.tail();
-                                        let tail_cell = tail.as_cell()?;
-                                        #(
-                                            let #field_names = <#field_types as ::noun_serde::NounDecode>::from_noun(
-                                                &if stringify!(#field_names) == stringify!(x) {
-                                                    tail_cell.head()
-                                                } else {
-                                                    tail_cell.tail()
-                                                }
-                                            )?;
-                                        )*
-                                        Ok(Self::#variant_name { #(#field_names),* })
-                                    } else {
-                                        Err(::noun_serde::NounDecodeError::ExpectedCell)
+                            Fields::Unnamed(fields) => {
+                                let field_count = fields.unnamed.len();
+                                let field_names: Vec<_> = (0..field_count)
+                                    .map(|i| format_ident!("field_{}", i))
+                                    .collect();
+                                let field_types: Vec<_> =
+                                    fields.unnamed.iter().map(|f| &f.ty).collect();
+
+                                if field_count == 0 {
+                                    quote! {
+                                        let atom = noun
+                                            .as_atom()
+                                            .map_err(|_| ::noun_serde::NounDecodeError::ExpectedAtom)?;
+                                        let atom_u64 = atom
+                                            .as_u64()
+                                            .map_err(|_| ::noun_serde::NounDecodeError::InvalidEnumVariant)?;
+                                        if atom_u64 == 0 {
+                                            Ok(Self::#variant_name)
+                                        } else {
+                                            Err(::noun_serde::NounDecodeError::InvalidEnumVariant)
+                                        }
                                     }
-                                }
-                            }
-                        }
-                    }
-                    Fields::Unnamed(fields) => {
-                        let field_count = fields.unnamed.len();
-                        let field_names: Vec<_> = (0..field_count)
-                            .map(|i| format_ident!("field_{}", i))
-                            .collect();
-
-                        let field_types: Vec<_> = fields.unnamed.iter()
-                            .map(|f| &f.ty)
-                            .collect();
-
-                        if field_count == 1 {
-                            let ty = &field_types[0];
-                            quote! {
-                                tag if tag == #tag => {
-                                    if let Ok(cell) = noun.as_cell() {
-                                        let value = <#ty as ::noun_serde::NounDecode>::from_noun(&cell.tail())?;
+                                } else if field_count == 1 {
+                                    let field_type = field_types[0];
+                                    quote! {
+                                        let value = <#field_type as ::noun_serde::NounDecode>::from_noun(noun)?;
                                         Ok(Self::#variant_name(value))
-                                    } else {
-                                        Err(::noun_serde::NounDecodeError::ExpectedCell)
+                                    }
+                                } else {
+                                    let field_decoders = field_names
+                                        .iter()
+                                        .zip(field_types.iter())
+                                        .enumerate()
+                                        .map(|(i, (name, ty))| {
+                                            let field = &fields.unnamed[i];
+                                            let custom_axis = parse_axis_attr(&field.attrs);
+                                            let default_axis = if i == 0 {
+                                                2
+                                            } else if i == field_count - 1 {
+                                                let mut axis = 2;
+                                                for _ in 1..i {
+                                                    axis = 2 * axis + 2;
+                                                }
+                                                axis + 1
+                                            } else {
+                                                let mut axis = 2;
+                                                for _ in 1..=i {
+                                                    axis = 2 * axis + 2;
+                                                }
+                                                axis
+                                            };
+                                            let axis = custom_axis.unwrap_or(default_axis);
+                                            quote! {
+                                                let field_noun = ::nockvm::noun::Slots::slot(&cell, #axis)
+                                                    .map_err(|_| ::noun_serde::NounDecodeError::ExpectedCell)?;
+                                                let #name = <#ty as ::noun_serde::NounDecode>::from_noun(&field_noun)?;
+                                            }
+                                        });
+                                    quote! {
+                                        let cell = noun
+                                            .as_cell()
+                                            .map_err(|_| ::noun_serde::NounDecodeError::ExpectedCell)?;
+                                        #(#field_decoders)*
+                                        Ok(Self::#variant_name(#(#field_names),*))
                                     }
                                 }
                             }
-                        } else {
-                            let field_idents_rev = field_names.iter().rev().collect::<Vec<_>>();
-                            let first_field = field_idents_rev[0];
-                            let rest_fields = &field_idents_rev[1..];
+                            Fields::Unit => {
+                                quote! {
+                                    let atom = noun
+                                        .as_atom()
+                                        .map_err(|_| ::noun_serde::NounDecodeError::ExpectedAtom)?;
+                                    let atom_u64 = atom
+                                        .as_u64()
+                                        .map_err(|_| ::noun_serde::NounDecodeError::InvalidEnumVariant)?;
+                                    if atom_u64 == 0 {
+                                        Ok(Self::#variant_name)
+                                    } else {
+                                        Err(::noun_serde::NounDecodeError::InvalidEnumVariant)
+                                    }
+                                }
+                            }
+                        };
 
-                            quote! {
-                                #name::#variant_name(#(#field_names),*) => {
-                                    let tag = ::nockapp::utils::make_tas(allocator, #tag).as_noun();
-                                    // Build nested cell structure right-to-left
-                                    let mut data = ::noun_serde::NounEncode::to_noun(#first_field, allocator);
-                                    #(
-                                        data = ::nockvm::noun::T(allocator, &[::noun_serde::NounEncode::to_noun(#rest_fields, allocator), data]);
-                                    )*
-                                    ::nockvm::noun::T(allocator, &[tag, data])
+                        quote! {
+                            match (|| -> Result<Self, ::noun_serde::NounDecodeError> {
+                                #attempt
+                            })() {
+                                Ok(value) => return Ok(value),
+                                Err(err) => last_err = Some(err),
+                            }
+                        }
+                    })
+                    .collect();
+
+                quote! {
+                    ::tracing::trace!(target: "noun_serde_decode", "Decoding enum {} (untagged), is_atom={}, is_cell={}", #name_str, noun.is_atom(), noun.is_cell());
+                    let mut last_err: Option<::noun_serde::NounDecodeError> = None;
+                    #(#attempts)*
+                    Err(last_err.unwrap_or(::noun_serde::NounDecodeError::InvalidEnumVariant))
+                }
+            } else {
+                let cases: Vec<_> = data.variants.iter().map(|variant| {
+                    let variant_name = &variant.ident;
+                    let tag = variant.attrs.iter()
+                        .find_map(|attr| {
+                            if attr.path().is_ident("noun") {
+                                attr.parse_args::<syn::MetaNameValue>().ok()
+                                    .and_then(|nv| if nv.path.is_ident("tag") {
+                                        if let syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(s), .. }) = nv.value {
+                                            Some(s.value())
+                                        } else {
+                                            None
+                                        }
+                                    } else {
+                                        None
+                                    })
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap_or_else(|| variant_name.to_string().to_lowercase());
+
+                    // Check variant-level tagged attribute, fallback to enum-level
+                    let is_tagged = parse_tagged_attr(&variant.attrs).unwrap_or(enum_tagged.unwrap_or(false));
+
+                    match &variant.fields {
+                        Fields::Named(fields) => {
+                            let field_names: Vec<_> = fields.named.iter()
+                                .map(|f| f.ident.as_ref().expect("named field must have ident"))
+                                .collect();
+
+                            let field_types: Vec<_> = fields.named.iter()
+                                .map(|f| &f.ty)
+                                .collect();
+
+                            let variant_name_str = variant_name.to_string();
+
+                            if is_tagged {
+                                // Tagged decoding: [%tag [[%field1 value1] [%field2 value2] ...]]
+                                let variant_name_str = variant_name.to_string();
+                                let field_decoders = field_names.iter().zip(field_types.iter()).enumerate()
+                                    .map(|(i, (name, ty))| {
+                                        let field_name_str = name.to_string();
+                                        // Get the corresponding field
+                                        let field = fields.named.iter().find(|f| {
+                                            f.ident.as_ref().expect("named field must have ident") == *name
+                                        }).expect("field must exist");
+
+                                        // Check for custom axis
+                                        let custom_axis = parse_axis_attr(&field.attrs);
+
+                                        // Calculate the axis for right-branching binary tree
+                                        let default_axis = if i == 0 {
+                                            2
+                                        } else {
+                                            let mut axis = 1;
+                                            for _ in 0..i {
+                                                axis = axis * 2 + 1;
+                                            }
+                                            axis * 2
+                                        };
+
+                                        let axis = custom_axis.unwrap_or(default_axis);
+                                        quote! {
+                                            ::tracing::trace!(target: "noun_serde_decode", "  variant={} field={} type={} axis={}", #variant_name_str, #field_name_str, stringify!(#ty), #axis);
+                                            let field_cell = ::nockvm::noun::Slots::slot(&data, #axis)
+                                                .map_err(|e| {
+                                                    ::tracing::trace!(target: "noun_serde_decode", "  FAILED to get slot {} for field {} in variant {}: {:?}", #axis, #field_name_str, #variant_name_str, e);
+                                                    e
+                                                })?
+                                                .as_cell()
+                                                .map_err(|e| {
+                                                    ::tracing::trace!(target: "noun_serde_decode", "  FAILED field {} in variant {} expected cell: {:?}", #field_name_str, #variant_name_str, e);
+                                                    e
+                                                })?;
+                                            let #name = <#ty as ::noun_serde::NounDecode>::from_noun(&field_cell.tail())
+                                                .map_err(|e| {
+                                                    ::tracing::trace!(target: "noun_serde_decode", "  FAILED decoding field {} in variant {}: {:?}", #field_name_str, #variant_name_str, e);
+                                                    e
+                                                })?;
+                                            ::tracing::trace!(target: "noun_serde_decode", "  SUCCESS decoded field {} in variant {}", #field_name_str, #variant_name_str);
+                                        }
+                                    });
+
+                                quote! {
+                                    tag if tag == #tag => {
+                                        ::tracing::trace!(target: "noun_serde_decode", "Matched variant {} (tagged named fields)", #variant_name_str);
+                                        if let Ok(cell) = noun.as_cell() {
+                                            let data = cell.tail();
+                                            #(#field_decoders)*
+                                            ::tracing::trace!(target: "noun_serde_decode", "SUCCESS decoded variant {}", #variant_name_str);
+                                            Ok(Self::#variant_name { #(#field_names),* })
+                                        } else {
+                                            ::tracing::trace!(target: "noun_serde_decode", "FAILED variant {} expected cell", #variant_name_str);
+                                            Err(::noun_serde::NounDecodeError::ExpectedCell)
+                                        }
+                                    }
+                                }
+                            } else {
+                                let num_fields = field_names.len();
+                                let field_decoders = field_names.iter().zip(field_types.iter()).enumerate()
+                                    .map(|(i, (name, ty))| {
+                                        let field = fields.named.iter().find(|f| {
+                                            f.ident.as_ref().expect("named field must have ident") == *name
+                                        }).expect("field must exist");
+
+                                        let custom_axis = parse_axis_attr(&field.attrs);
+
+                                        let default_axis = if i == 0 {
+                                            2  // first field at axis 2
+                                        } else if i == num_fields - 1 {
+                                            let mut axis = 2;
+                                            for _ in 1..i {
+                                                axis = 2 * axis + 2;
+                                            }
+                                            axis + 1
+                                        } else {
+                                            let mut axis = 2;
+                                            for _ in 1..=i {
+                                                axis = 2 * axis + 2;
+                                            }
+                                            axis
+                                        };
+
+                                        let axis = custom_axis.unwrap_or(default_axis);
+                                        let field_name_str = name.to_string();
+                                        quote! {
+                                            ::tracing::trace!(target: "noun_serde_decode", "  variant={} field={} type={} axis={}", #variant_name_str, #field_name_str, stringify!(#ty), #axis);
+                                            let field_noun = ::nockvm::noun::Slots::slot(&data_cell, #axis)
+                                                .map_err(|e| {
+                                                    ::tracing::trace!(target: "noun_serde_decode", "  FAILED to get slot {} for field {} in variant {}: {:?}", #axis, #field_name_str, #variant_name_str, e);
+                                                    ::noun_serde::NounDecodeError::ExpectedCell
+                                                })?;
+                                            ::tracing::trace!(target: "noun_serde_decode", "  variant={} field={} is_atom={} is_cell={}", #variant_name_str, #field_name_str, field_noun.is_atom(), field_noun.is_cell());
+                                            let #name = <#ty as ::noun_serde::NounDecode>::from_noun(&field_noun)
+                                                .map_err(|e| {
+                                                    ::tracing::trace!(target: "noun_serde_decode", "  FAILED decoding field {} in variant {}: {:?}", #field_name_str, #variant_name_str, e);
+                                                    e
+                                                })?;
+                                            ::tracing::trace!(target: "noun_serde_decode", "  SUCCESS decoded field {} in variant {}", #field_name_str, #variant_name_str);
+                                        }
+                                    });
+
+                                let payload_atom_handler = if num_fields == 1 {
+                                    let field_name = field_names[0];
+                                    let field_type = field_types[0];
+                                    let field_name_str = field_name.to_string();
+                                    quote! {
+                                        ::tracing::trace!(target: "noun_serde_decode", "Matched variant {} (untagged named fields, payload atom)", #variant_name_str);
+                                        let #field_name = <#field_type as ::noun_serde::NounDecode>::from_noun(&payload)
+                                            .map_err(|e| {
+                                                ::tracing::trace!(target: "noun_serde_decode", "  FAILED decoding field {} in variant {}: {:?}", #field_name_str, #variant_name_str, e);
+                                                e
+                                            })?;
+                                        ::tracing::trace!(target: "noun_serde_decode", "SUCCESS decoded variant {}", #variant_name_str);
+                                        Ok(Self::#variant_name { #field_name })
+                                    }
+                                } else {
+                                    quote! {
+                                        ::tracing::trace!(target: "noun_serde_decode", "FAILED variant {} payload atom but multiple fields expected", #variant_name_str);
+                                        Err(::noun_serde::NounDecodeError::ExpectedCell)
+                                    }
+                                };
+
+                                quote! {
+                                    tag if tag == #tag => {
+                                        ::tracing::trace!(target: "noun_serde_decode", "Matched variant {} (untagged named fields)", #variant_name_str);
+                                        if let Ok(cell) = noun.as_cell() {
+                                            let payload = cell.tail();
+                                            if let Ok(payload_cell) = payload.as_cell() {
+                                                let data_cell = payload_cell;
+                                                #(#field_decoders)*
+                                                ::tracing::trace!(target: "noun_serde_decode", "SUCCESS decoded variant {}", #variant_name_str);
+                                                Ok(Self::#variant_name { #(#field_names),* })
+                                            } else {
+                                                #payload_atom_handler
+                                            }
+                                        } else {
+                                            ::tracing::trace!(target: "noun_serde_decode", "FAILED variant {} expected cell", #variant_name_str);
+                                            Err(::noun_serde::NounDecodeError::ExpectedCell)
+                                        }
+                                    }
                                 }
                             }
                         }
-                    }
-                    Fields::Unit => {
-                        quote! {
-                            tag if tag == #tag => Ok(Self::#variant_name)
+                        Fields::Unnamed(fields) => {
+                            let field_count = fields.unnamed.len();
+                            let field_names: Vec<_> = (0..field_count)
+                                .map(|i| format_ident!("field_{}", i))
+                                .collect();
+
+                            let field_types: Vec<_> = fields.unnamed.iter()
+                                .map(|f| &f.ty)
+                                .collect();
+
+                            if field_count == 1 {
+                                let ty = &field_types[0];
+                                quote! {
+                                    tag if tag == #tag => {
+                                        if let Ok(cell) = noun.as_cell() {
+                                            let value = <#ty as ::noun_serde::NounDecode>::from_noun(&cell.tail())?;
+                                            Ok(Self::#variant_name(value))
+                                        } else {
+                                            Err(::noun_serde::NounDecodeError::ExpectedCell)
+                                        }
+                                    }
+                                }
+                            } else {
+                                let field_idents_rev = field_names.iter().rev().collect::<Vec<_>>();
+                                let first_field = field_idents_rev[0];
+                                let rest_fields = &field_idents_rev[1..];
+
+                                quote! {
+                                    #name::#variant_name(#(#field_names),*) => {
+                                        let tag = ::nockvm::ext::make_tas(allocator, #tag).as_noun();
+                                        // Build nested cell structure right-to-left
+                                        let mut data = ::noun_serde::NounEncode::to_noun(#first_field, allocator);
+                                        #(
+                                            data = ::nockvm::noun::T(allocator, &[::noun_serde::NounEncode::to_noun(#rest_fields, allocator), data]);
+                                        )*
+                                        ::nockvm::noun::T(allocator, &[tag, data])
+                                    }
+                                }
+                            }
+                        }
+                        Fields::Unit => {
+                            quote! {
+                                tag if tag == #tag => Ok(Self::#variant_name)
+                            }
                         }
                     }
-                }
-            }).collect();
+                }).collect();
 
-            quote! {
-                let tag = if let Ok(atom) = noun.as_atom() {
-                    let bytes = atom.as_ne_bytes();
-                    ::std::str::from_utf8(bytes)
-                        .map_err(|_| ::noun_serde::NounDecodeError::InvalidTag)?
-                        .trim_end_matches('\0')
-                        .to_string()
-                } else if let Ok(cell) = noun.as_cell() {
-                    let atom = cell.head().as_atom()
-                        .map_err(|_| ::noun_serde::NounDecodeError::InvalidTag)?;
-                    let bytes = atom.as_ne_bytes();
-                    ::std::str::from_utf8(bytes)
-                        .map_err(|_| ::noun_serde::NounDecodeError::InvalidTag)?
-                        .trim_end_matches('\0')
-                        .to_string()
-                } else {
-                    return Err(::noun_serde::NounDecodeError::InvalidEnumData);
-                };
+                quote! {
+                    ::tracing::trace!(target: "noun_serde_decode", "Decoding enum {}, is_atom={}, is_cell={}", #name_str, noun.is_atom(), noun.is_cell());
+                    let tag = if let Ok(atom) = noun.as_atom() {
+                        let bytes = atom.as_ne_bytes();
+                        let tag_str = ::std::str::from_utf8(bytes)
+                            .map_err(|e| {
+                                ::tracing::trace!(target: "noun_serde_decode", "FAILED to decode tag for {} as UTF-8: {:?}", #name_str, e);
+                                ::noun_serde::NounDecodeError::InvalidTag
+                            })?
+                            .trim_end_matches('\0')
+                            .to_string();
+                        ::tracing::trace!(target: "noun_serde_decode", "Decoded tag for {} (from atom): {:?}", #name_str, tag_str);
+                        tag_str
+                    } else if let Ok(cell) = noun.as_cell() {
+                        let atom = cell.head().as_atom()
+                            .map_err(|e| {
+                                ::tracing::trace!(target: "noun_serde_decode", "FAILED to decode tag for {}, head is not atom", #name_str);
+                                ::noun_serde::NounDecodeError::InvalidTag
+                            })?;
+                        let bytes = atom.as_ne_bytes();
+                        let tag_str = ::std::str::from_utf8(bytes)
+                            .map_err(|e| {
+                                ::tracing::trace!(target: "noun_serde_decode", "FAILED to decode tag for {} as UTF-8: {:?}", #name_str, e);
+                                ::noun_serde::NounDecodeError::InvalidTag
+                            })?
+                            .trim_end_matches('\0')
+                            .to_string();
+                        ::tracing::trace!(target: "noun_serde_decode", "Decoded tag for {} (from cell head): {:?}", #name_str, tag_str);
+                        tag_str
+                    } else {
+                        ::tracing::trace!(target: "noun_serde_decode", "FAILED to decode tag for {}, neither atom nor cell", #name_str);
+                        return Err(::noun_serde::NounDecodeError::InvalidEnumData);
+                    };
 
-                match tag.as_str() {
-                    #(#cases,)*
-                    _ => Err(::noun_serde::NounDecodeError::InvalidEnumVariant)
+                    ::tracing::trace!(target: "noun_serde_decode", "Matching enum {} with tag {:?}", #name_str, tag);
+                    match tag.as_str() {
+                        #(#cases,)*
+                        _ => {
+                            ::tracing::trace!(target: "noun_serde_decode", "FAILED to match variant for {} with tag {:?}", #name_str, tag);
+                            Err(::noun_serde::NounDecodeError::InvalidEnumVariant)
+                        }
+                    }
                 }
             }
         }

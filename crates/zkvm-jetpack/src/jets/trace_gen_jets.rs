@@ -1,8 +1,7 @@
-use nockapp::Noun;
 use nockvm::interpreter::Context;
 use nockvm::jets::util::{slot, BAIL_FAIL};
 use nockvm::jets::JetErr;
-use nockvm::noun::{IndirectAtom, T};
+use nockvm::noun::{IndirectAtom, Noun, T};
 use tracing::error;
 
 use crate::form::felt::Felt;

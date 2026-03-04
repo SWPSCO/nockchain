@@ -2,6 +2,7 @@
 name = "nockapp-grpc-proto"
 version.workspace = true
 edition.workspace = true
+license = "MIT OR Apache-2.0"
 
 [features]
 default = ["server"]
@@ -12,14 +13,12 @@ client = []
 anyhow = { workspace = true }
 nockchain-math = { workspace = true }
 nockchain-types = { workspace = true }
+nockvm_macros = { workspace = true }
 
 prost = { workspace = true }
-prost-build = { workspace = true }
 prost-types = { workspace = true }
 thiserror = { workspace = true }
 tonic = { workspace = true }
-tonic-build = { workspace = true }
-tonic-health = { workspace = true }
 tonic-prost = { workspace = true }
 
 [build-dependencies]

@@ -1,5 +1,8 @@
 # Subject Knowledge Analysis
 
+> Historical note. This document captures SKA design exploration, not current protocol or runtime authority.
+> Authoritative docs: [`START_HERE.md`](../../../START_HERE.md), [`crates/nockvm/README.md`](../README.md).
+
 Nock is inherently a very dynamic language.
 Nock has no concept corresponding directly to a procedure call, only to an "eval" of a dynamically-computed noun as a Nock formula.
 Actual procedure calls are implemented by looking up a noun corresponding to a formula from a core (a pair of a "battery" of Nock formulas and a pair of "sample" and context), and evaluating that formula with the core as the subject.

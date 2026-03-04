@@ -1,11 +1,21 @@
 # Nockchain
 
-**Nockchain is programmable sound money that scales.**
+Status: Active
+Owner: Nockchain Maintainers
+Last Reviewed: 2026-02-19
+Canonical/Legacy: Canonical (quickstart lane; protocol authority routes through [`PROTOCOL.md`](./PROTOCOL.md))
 
-Nockchain is a ZK-Proof of Work L1 that combines sound money incentives with modern research into data availability, app-rollups, and intent-based composability.
+**Nockchain is programmable gold that scales.**
+
+Nockchain is a ZK-Proof of Work blockchain that combines sound money incentives with modern research into data availability, app-rollups, and intent-based composability.
 
 
 *Nockchain is entirely experimental and many parts are unaudited. We make no representations or guarantees as to the behavior of this software.*
+
+> [!IMPORTANT]
+> For docs read order, trust policy, and canonical sources, start with [`START_HERE.md`](./START_HERE.md).
+> Consensus/protocol authority is indexed in [`PROTOCOL.md`](./PROTOCOL.md), with canonical upgrade source files in [`changelog/protocol/`](./changelog/protocol/).
+> This README remains a quickstart for setup and operations.
 
 
 ## Setup
@@ -86,10 +96,11 @@ This will print a new public/private key pair + chain code to the console, as we
 To track a watch-only address or pubkey without importing private material:
 
 ```
-nockchain-wallet watch-address <base58-pkh-or-pubkey>
+nockchain-wallet watch address <base58-pkh-or-pubkey>
 ```
 
 The wallet normalizes the identifier so you can supply either a v1 payee hash or a schnorr pubkey.
+Once added, watch-only addresses are synced automatically alongside your signing keys, so their balances appear in all sync-heavy commands without additional flags.
 
 Use `.env_example` as a template and copy your pkh to the `.env` file.
 

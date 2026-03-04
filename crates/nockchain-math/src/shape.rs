@@ -1,7 +1,6 @@
-use nockapp::Noun;
 use nockvm::jets::list::util::flop;
 use nockvm::jets::JetErr;
-use nockvm::noun::{NounAllocator, D, T};
+use nockvm::noun::{Noun, NounAllocator, D, T};
 use noun_serde::NounEncode;
 
 pub fn dyck<A: NounAllocator>(stack: &mut A, t: Noun) -> Result<Noun, JetErr> {

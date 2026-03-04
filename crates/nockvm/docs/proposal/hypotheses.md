@@ -1,5 +1,8 @@
 # Hypotheses tested by New Mars
 
+> Historical note. This proposal captures research hypotheses, not current protocol or runtime authority.
+> Authoritative docs: [`START_HERE.md`](../../../../START_HERE.md), [`crates/nockvm/README.md`](../../README.md).
+
 ## Stack-only allocation for computation
 **Hypotheses:**
 *Stack allocations, with nouns for return copied up the stack ("lexical memory management")

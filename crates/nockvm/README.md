@@ -1,7 +1,14 @@
-# Sword
+# NockVM
 
-A modern Nock runtime with automatic persistence.
+Status: Experimental
+Owner: Nockchain Runtime Maintainers
+Last Reviewed: 2026-02-19
+Canonical/Legacy: Legacy (crate-level runtime reference; canonical docs spine starts at [`START_HERE.md`](../../START_HERE.md))
 
-## Installation
+*Trust posture: NockVM is experimental. Treat this README as contextual guidance, not canonical protocol or architecture policy.*
 
-See the "Run" section of [DEVELOPERS.md](DEVELOPERS.md#run).
+An experimental Nock runtime library plus historical New Mars/Ares design material.
+
+## Build And Tests
+
+See [DEVELOPERS.md](DEVELOPERS.md) for crate-local build/test commands and historical development context.

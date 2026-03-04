@@ -1,6 +1,5 @@
 use thiserror::Error;
 use tokio::sync::mpsc::error::{SendError, TrySendError};
-use tracing::error;
 
 use super::driver::IOAction;
 use crate::nockapp::save::CheckpointError;
@@ -72,6 +71,16 @@ impl From<TrySendError<IOAction>> for NockAppError {
             TrySendError::Closed(act) => NockAppError::MPSCSendError(SendError(act)),
             TrySendError::Full(act) => NockAppError::MPSCFullError(act),
         }
+    }
+}
+impl From<std::str::Utf8Error> for NockAppError {
+    fn from(err: std::str::Utf8Error) -> NockAppError {
+        Self::OtherError(err.to_string())
+    }
+}
+impl From<noun_serde::NounDecodeError> for NockAppError {
+    fn from(err: noun_serde::NounDecodeError) -> Self {
+        Self::NounDecodeError(Box::new(err))
     }
 }
 impl From<tokio::sync::broadcast::error::RecvError> for NockAppError {

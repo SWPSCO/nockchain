@@ -1,9 +1,57 @@
 use argon2::{Algorithm, Argon2, AssociatedData, Params, Version};
-use nockapp::utils::bytes::Byts;
-use nockapp::utils::make_tas;
-use nockapp::{AtomExt, Noun};
+use ibig::UBig;
+use nockvm::ext::{make_tas, AtomExt};
 use nockvm::jets::cold::{Nounable, NounableResult};
-use nockvm::noun::{NounAllocator, Slots, D, T};
+use nockvm::noun::{Atom, Noun, NounAllocator, Slots, D, T};
+
+/// Wrapper for the `$byts` Hoon cell `[wid=@ dat=@]`.
+/// `wid` records the bit-width, but the Argon2 jet only needs the big-endian payload,
+/// so we store just the bytes here.
+///
+/// Note that the conversion does not perfectly roundtrip because leading zeroes
+/// are discarded in the rust type.
+#[derive(Debug, Clone)]
+pub struct Byts(pub Vec<u8>);
+
+impl Byts {
+    pub fn new(bytes: Vec<u8>) -> Self {
+        Self(bytes)
+    }
+}
+
+impl Nounable for Byts {
+    type Target = Self;
+    fn into_noun<A: NounAllocator>(self, stack: &mut A) -> Noun {
+        let big = UBig::from_be_bytes(&self.0);
+        let wid = D(self.0.len() as u64);
+        let dat = Atom::from_ubig(stack, &big).as_noun();
+        T(stack, &[wid, dat])
+    }
+    fn from_noun<A: NounAllocator>(_stack: &mut A, noun: &Noun) -> NounableResult<Self::Target> {
+        let size = noun.slot(2)?;
+        let dat = noun.slot(3)?.as_atom()?;
+
+        let wid = size.as_atom()?.as_u64()? as usize;
+        let mut res = vec![0; wid];
+
+        let bytes_be = dat.to_be_bytes();
+
+        // Iterate over the bytes in reverse order
+        // Start copying at the first non zero value encountered
+        let mut start_copying = false;
+        let mut copy_index = 0;
+        for byte in bytes_be.iter() {
+            if *byte != 0 {
+                start_copying = true;
+            }
+            if start_copying {
+                res[copy_index] = *byte;
+                copy_index += 1;
+            }
+        }
+        Ok(Byts(res))
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Argon2Args {

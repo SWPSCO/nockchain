@@ -1,5 +1,35 @@
 # Nockchain Wallet
 
+Status: Active
+Owner: Nockchain Maintainers
+Last Reviewed: 2026-02-19
+Canonical/Legacy: Canonical (Tier 1 scoped authority for wallet CLI behavior and operational usage; protocol authority remains in [`PROTOCOL.md`](../../PROTOCOL.md))
+
+## Canonical Scope
+
+This document is Tier 1 canonical for:
+- wallet CLI behavior and user-facing operational workflows.
+- key import/export/watch workflows and endpoint-selection behavior.
+- transaction-construction invocation patterns for supported CLI surfaces.
+
+This document is NOT canonical for:
+- protocol/consensus rule interpretation (use [`PROTOCOL.md`](../../PROTOCOL.md)).
+- node/runtime architecture policy (use [`ARCHITECTURE.md`](../../ARCHITECTURE.md)).
+
+## Failure Modes And Limits
+
+- CLI flags and command behavior can change as wallet internals evolve.
+- Examples can drift if CLI changes are not documented in lockstep.
+- This doc cannot adjudicate protocol disputes; where protocol semantics matter, Tier 0 protocol docs win.
+
+## Verification Contract
+
+When wallet CLI behavior or flags change, update this doc in the same change.
+
+Minimum validation:
+- `make -C open docs-check`
+- `cargo check -p nockchain-wallet`
+
 ## Setup
 
 ### Generate New Key Pair
@@ -30,14 +60,17 @@ nockchain-wallet import-keys --key "zprv..."
 # importing the seed phrase again with version 1.
 nockchain-wallet import-keys --seedphrase "your seed phrase here" --version <version | 1 or 0>
 
-# Import a watch-only address or pubkey
-nockchain-wallet watch-address <base58-pkh-or-pubkey>
+# Import watch-only identifiers
+nockchain-wallet watch address <base58-pkh-or-pubkey>
+nockchain-wallet watch pubkey <base58-pubkey>
+nockchain-wallet watch multisig --threshold <M> --participants "<pkh-a>,<pkh-b>,..."
 
 # Import a master public key from exported file
 nockchain-wallet import-master-pubkey keys.export
 ```
 
 The exported keys file contains all wallet keys as a `jam` file that can be imported on another instance.
+Once imported, watch-only identifiers are kept in sync automatically, so their balances show up in every sync-heavy command without extra flags.
 
 Can be used for:
 - Backing up your wallet
@@ -63,7 +96,7 @@ nockchain-wallet \
 - The wallet syncs its balance based on the pubkeys that are stored in it. Make sure your wallet is loaded with your keys before running sync-heavy commands such as `list-notes`, `list-notes-by-address`, `create-tx`, and `send-tx`. If you do not have pubkeys, import them with `import-keys` (see [Importing and Exporting Keys](#importing-and-exporting-keys)).
 - `--public-grpc-server-addr` accepts a bare `host:port` or a full URI (e.g. `http://host:port`).
 - If you omit the port, the wallet assumes **80** for `http://` and **443** for `https://` URLs.
-- By default, we do not sync notes attached to watch-only pubkeys. Pair sync-heavy commands with `--include-watch-only` when you want watch-only pubkeys included in balance updates.
+- Watch-only pubkeys and addresses are synced automatically alongside your signing keys, so watch-only balances appear in all sync-heavy commands without additional flags.
 
 #### Private API
 
@@ -140,12 +173,15 @@ nockchain-wallet list-notes-by-address <base58-address>
 
 Shows only the notes associated with the specified public key. Useful for filtering wallet contents by address or for multisig scenarios.
 
-### List Arbitrary Notes by Public Key (Watch-Only)
+### Watch-Only Tracking
 
-```bash
-nockchain-wallet watch-address <address>
-nockchain-wallet list-notes-by-address <address> --include-watch-only
-```
+Use `nockchain-wallet watch <subcommand>` to track external identifiers without importing private keys.
+
+- `watch address <base58>` – accepts either a schnorr pubkey (v0) or a pay-to-pubkey-hash (v1) string
+- `watch pubkey <base58-pubkey>` – shortcut when you know you’re tracking a raw schnorr key
+- `watch multisig --threshold <M> --participants "<pkh-a>,<pkh-b>,..."` – records multisig locks so their balances appear in sync results
+
+Once added, run `list-notes`, `list-notes-by-address`, or any other sync-heavy command to see the balances.
 
 Shows only the notes associated with the specified public key. Useful for filtering wallet contents by address or for multisig scenarios.
 
@@ -182,18 +218,16 @@ Displays the aggregate wallet balance, including the total number of notes and t
 We support transactions with any amount of input notes going to any number of recipients.
 
 ```bash
-# Send to a single recipient
+# Send to a single P2PKH recipient
 nockchain-wallet create-tx \
   --names "[first1 last1],[first2 last2]" \
-  --recipient "<pkh-b58>:<amount>" \
+  --recipient '{"kind":"p2pkh","address":"<p2pkh-b58>","amount":10000}' \
   --fee 10
 
-# Send to multiple recipients
+# Send to a multisig recipient
 nockchain-wallet create-tx \
   --names "[first1 last1],[first2 last2]" \
-  --recipient "<pkh-b58>:<amount>" \
-  --recipient "<pkh-b58>:<amount>" \
-  ...
+  --recipient '{"kind":"multisig","threshold":2,"addresses":["<pkh-a>","<pkh-b>","<pkh-c>"],"amount":9000}' \
   --fee 10
 ```
 
@@ -203,6 +237,84 @@ Gifts and fees are denominated in nicks (65536 nicks = 1 nock).
 
 - The `names` argument is a list of `[first-name last-name]` pairs specifying funding notes
 - The `fee` argument is the transaction fee to pay (in nicks, 65536 nicks to 1 nock)
+- Provide multiple `--recipient` flags to fan out to several outputs
+- Each `--recipient` is either a JSON object (preferred) or a legacy `<p2pkh>:<amount>` string
+- `address`/`addresses` fields expect base58-encoded pay-to-pubkey-hash values
+- Provide `--sign-key <index[:hardened]>` multiple times to explicitly choose signing keys. If omitted, the wallet uses the master key or the `--index/--hardened` pair.
+
+#### Recipient JSON Format
+
+`--recipient` accepts JSON objects in addition to the legacy `<p2pkh>:<amount>` syntax (legacy supports simple 1-of-1 P2PKH locks only). Wrap JSON in single quotes (or escape the quotes) when invoking the CLI. The supported shapes are:
+
+```json
+{"kind":"p2pkh","address":"<base58-pkh>","amount":10000}
+{"kind":"multisig","threshold":2,"addresses":["<pkh-a>","<pkh-b>","<pkh-c>"],"amount":9000}
+{"kind":"bridge-deposit","evm-address":"0x0123abcd...","amount":500000000}
+```
+
+- `kind` must be `p2pkh`, `multisig`, or `bridge-deposit`
+- `amount` is specified in nicks
+- Multisig objects also require a `threshold` (m) and at least one `addresses` entry
+- Bridge deposits route funds to the Base bridge; `evm-address` expects a 20-byte hex string (40 hex chars, case-insensitive) with or without the `0x` prefix. Only one `%bridge-deposit` output is allowed per transaction, and the bridge enforces a protocol-level minimum gift size.
+
+Provide multiple `--recipient` flags to fan out to several recipients in one transaction.
+
+### Multisig Recipients
+
+Multisig outputs are expressed via the JSON form. Supply each output as:
+
+```json
+{"kind":"multisig","threshold":<M>,"addresses":["<pkh-a>", ...],"amount":<nicks>}
+```
+
+- `threshold` defines the `m` value (must be ≥1 and ≤ number of addresses)
+- `addresses` is the list of base58 payee hashes that define the lock
+- `amount` is denominated in nicks
+
+### Bridge Deposits
+
+Send Nockchain assets to Base by targeting the on-chain bridge lock root:
+
+```bash
+nockchain-wallet create-tx \
+  --names "[first1 last1]" \
+  --recipient '{"kind":"bridge-deposit","evm-address":"0x0c8d9cf278d4f3e23b00ea0a16bba2d05c07a7b6","amount":100000000}' \
+  --fee 60000000
+```
+
+- The `evm-address` is the Base/ETH recipient; provide exactly 20 bytes of hex (`0x` prefix optional).
+- Only a single bridge deposit output is allowed per transaction.
+- The bridge kernel enforces a minimum deposit amount; treat [`PROTOCOL.md`](../../PROTOCOL.md) as protocol authority, and use [`crates/bridge/docs/README.md`](../bridge/docs/README.md) for current bridge operations.
+
+```bash
+nockchain-wallet create-tx \
+  --names "[first1 last1],[first2 last2]" \
+  --recipient '{"kind":"multisig","threshold":2,"addresses":["<pkh-a>","<pkh-b>","<pkh-c>"],"amount":750000000}' \
+  --fee 60000000
+```
+
+- `--sign-key` is optional and lets you pick which derived keys sign the bundle when the command runs. Each entry is `index:hardened` (for example, `5:true` signs with hardened child 5). If omitted, the active master key provides the initial signature.
+- `--refund-pkh` is optional; when omitted, change returns to the default refund target for the spent notes.
+
+### Signing Multisig Transactions
+
+Every multisig bundle is validated and saved to `./txs/<transaction-name>.tx`. Share this file with the remaining signers. Additional signatures are appended with:
+
+```bash
+nockchain-wallet sign-multisig-tx ./txs/<transaction-name>.tx --sign-keys "1:false"
+```
+
+`sign-multisig-tx` accepts the same `index:hardened` pairs (or defaults to the active master key). Use `show-tx` to inspect the current signature set before broadcasting:
+
+```bash
+nockchain-wallet show-tx ./txs/<transaction-name>.tx
+```
+
+Once enough signatures are collected, broadcast the transaction with:
+
+```bash
+nockchain-wallet send-tx ./txs/<transaction-name>.tx
+```
 
 ### Make Transaction from Transaction File
 

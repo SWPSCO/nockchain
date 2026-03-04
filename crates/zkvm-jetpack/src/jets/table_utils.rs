@@ -1,5 +1,5 @@
-use nockapp::Noun;
 use nockvm::jets::JetErr;
+use nockvm::noun::Noun;
 
 use crate::form::belt::Belt;
 use crate::form::felt::*;

@@ -1,27 +1,54 @@
 # NockApp
 
+Status: Active
+Owner: Nockchain Maintainers
+Last Reviewed: 2026-02-19
+Canonical/Legacy: Canonical (Tier 1 scoped authority for NockApp runtime interface and developer usage; protocol authority remains in [`PROTOCOL.md`](../../PROTOCOL.md))
+
 ***DEVELOPER ALPHA***
 
 <img align="right" src="https://zorp.io/img/nockapp.png" height="150px" alt="NockApp">
 
 NockApps are pure-functional state machines with automatic persistence and modular IO.
 
-The NockApp framework provides two modules, Crown and Sword:
-1. Crown provides a minimal Rust interface to a Nock kernel.
-2. [Sword](https://github.com/zorp-corp/nockvm) is a modern Nock runtime that achieves durable execution.
+The NockApp framework is built around two core crates, `nockapp` and `nockvm`:
+1. `nockapp` provides a minimal Rust interface to a Nock kernel.
+2. [`nockvm`](https://github.com/zorp-corp/nockvm) is a modern Nock runtime that achieves durable execution.
+
+## Canonical Scope
+
+This document is Tier 1 canonical for:
+- `nockapp` runtime interface expectations (`Kernel`, `poke`, `peek`, effect handling).
+- Developer/operator usage guidance for this crate's runtime behavior.
+- Logging/runtime configuration knobs exposed by this crate.
+
+This document is NOT canonical for:
+- protocol/consensus rules (use [`PROTOCOL.md`](../../PROTOCOL.md)).
+- cross-crate architecture boundaries (use [`ARCHITECTURE.md`](../../ARCHITECTURE.md)).
+
+## Failure Modes And Limits
+
+- This crate is alpha-grade and interface details may evolve quickly.
+- Examples may lag implementation unless updated in the same PR as interface changes.
+- This doc cannot resolve protocol disputes; if runtime behavior appears to conflict with protocol semantics, protocol sources win.
+
+## Verification Contract
+
+When runtime-interface behavior changes in `nockapp`, update this doc in the same change.
+
+Minimum validation:
+- `make -C open docs-check`
+- `cargo check -p nockapp`
 
 <br>
 
 ## Get Started
 
-To test compiling a Nock kernel using the `hoonc` command-line Hoon compiler, run the following commands:
+To test compiling a Nock kernel using the `hoonc` command-line Hoon compiler, run the following commands from the repository root:
 
 ```
-cargo build
-cd apps/hoonc
-cargo run --release bootstrap/kernel.hoon ../hoon-deps
-yes | mv out.jam bootstrap/hoonc.jam
-cargo run --release bootstrap/kernel.hoon ../hoon-deps
+make install-hoonc
+hoonc hoon/apps/dumbnet/outer.hoon hoon
 ```
 
 For large builds, the rust stack might overflow. To get around this, increase the stack size by setting: `RUST_MIN_STACK=838860`.
@@ -37,11 +64,11 @@ For compiling Hoon to Nock, we're also including a pre-release of `hoonc`: a Noc
 ### Basic Usage
 
 ```bash
-# Run with default settings (production mode)
-cargo run
+# nockapp is a library crate, configure logging on the binary that embeds it
+RUST_LOG=info <nockapp-based-binary> <args>
 
 # Use minimal log format
-MINIMAL_LOG_FORMAT=true cargo run
+MINIMAL_LOG_FORMAT=true <nockapp-based-binary> <args>
 ```
 
 ### TLDR
@@ -62,11 +89,11 @@ The following environment variables can be used to configure logging:
 
 ```bash
 # Set log level
-RUST_LOG="nockapp::kernel=trace" cargo run
+RUST_LOG="nockapp::kernel=trace" <nockapp-based-binary> <args>
 
 # Enable minimal log format
-MINIMAL_LOG_FORMAT=true cargo run
+MINIMAL_LOG_FORMAT=true <nockapp-based-binary> <args>
 
 # Combine environment variables
-RUST_LOG="nockapp::kernel=trace" MINIMAL_LOG_FORMAT=true cargo run
+RUST_LOG="nockapp::kernel=trace" MINIMAL_LOG_FORMAT=true <nockapp-based-binary> <args>
 ```

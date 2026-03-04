@@ -1,0 +1,125 @@
+stages:
+  - docs
+  - kernels
+  - test
+  - sync
+
+workflow:
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^ci\/open-sync-/'
+    - if: '$CI_COMMIT_BRANCH == "open"'
+    - if: '$CI_MERGE_REQUEST_ID'
+    - when: never
+
+default:
+  tags:
+    - hetzner
+
+variables:
+  RUST_LOG: "warn,slogger=off"
+  GIT_CLEAN_FLAGS: "-ffdx -e .bazel/"
+
+docs-check:
+  stage: docs
+  needs: []
+  rules:
+    - if: '$CI_MERGE_REQUEST_ID'
+      changes:
+        - "**/*.md"
+        - "scripts/docs/**/*"
+        - "Makefile"
+        - ".gitlab-ci.yml"
+    - if: '$CI_COMMIT_BRANCH == "open"'
+      changes:
+        - "**/*.md"
+        - "scripts/docs/**/*"
+        - "Makefile"
+        - ".gitlab-ci.yml"
+    - if: '$CI_COMMIT_BRANCH =~ /^ci\/open-sync-/'
+      changes:
+        - "**/*.md"
+        - "scripts/docs/**/*"
+        - "Makefile"
+        - ".gitlab-ci.yml"
+    - when: never
+  script:
+    - |
+      nix develop -c bash -c '
+        set -euo pipefail
+        make docs-check
+      '
+
+build-kernels:
+  stage: kernels
+  script:
+    - |
+      nix develop -c bash -c '
+        set -euo pipefail
+        make update-hoonc
+        make assets/dumb.jam
+        make assets/miner.jam
+        make assets/peek.jam
+        make assets/wal.jam
+        make assets/bridge.jam
+      '
+  artifacts:
+    paths:
+      - assets/*.jam
+    expire_in: 1 day
+
+cargo-test:
+  stage: test
+  needs:
+    - job: build-kernels
+      artifacts: true
+  script:
+    - |
+      nix develop -c bash -c '
+        set -euo pipefail
+        export PATH="$HOME/.local/bin:$PATH"
+        # Install Solidity dependencies for the bridge build script
+        make -C crates/bridge/contracts deps
+        cargo fmt --all --check
+        cargo test --release
+      '
+
+sync-to-staging:
+  stage: sync
+  needs:
+    - job: cargo-test
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "open" && $CI_PIPELINE_SOURCE == "push"'
+    - if: '$CI_COMMIT_BRANCH == "open" && $FORCE_SYNC_TO_STAGING == "1"'
+    - if: '$CI_COMMIT_BRANCH == "open" && $CI_PIPELINE_SOURCE == "web"'
+      when: manual
+    - when: never
+  script:
+    - |
+      nix develop -c bash -c '
+        set -euo pipefail
+
+        # Guardrails for accidental private-code export.
+        if git ls-files | rg -q "^closed/"; then
+          echo "closed/ paths detected; refusing to sync to staging" >&2
+          exit 1
+        fi
+
+        if git ls-files | rg -q "^open/"; then
+          echo "open/ subtree detected in open branch checkout; refusing to sync" >&2
+          exit 1
+        fi
+
+        if [ -z "${GITHUB_NOCKCHAIN_STAGING_TOKEN:-}" ]; then
+          echo "GITHUB_NOCKCHAIN_STAGING_TOKEN is required for sync-to-staging" >&2
+          exit 1
+        fi
+
+        cargo generate-lockfile
+
+        echo "https://bitemyapp:${GITHUB_NOCKCHAIN_STAGING_TOKEN}@github.com" > ~/.git-credentials
+        git config --global credential.helper store
+        git config --global user.name "Zorp CI"
+        git config --global user.email "ci@zorp.corp"
+
+        bash ./tools/sync_to_staging/sync_to_staging.sh
+      '

@@ -1,5 +1,8 @@
 # Compiling Nock to LLVM
 
+> Historical note. This document captures LLVM codegen design notes, not current protocol or runtime authority.
+> Authoritative docs: [`START_HERE.md`](../../../START_HERE.md), [`crates/nockvm/README.md`](../README.md).
+
 Nock formulae are nouns, which are binary trees whose leaves are natural numbers.
 The LLVM IR is a mostly sequential language comprised of operations arranged into basic blocks and functions.
 
@@ -26,66 +29,66 @@ We denote the NockIR for a nock formula as `ir[x]` where `x` is a formula.
 
 NockIR provides the following instructions:
 
-| Instruction | Operation
-|-------------|----------------------------------------------------------------
-| `axe[x]`    | `res := /[x sub]`                                              
-| `cel[s]`    | `res := [frame[s] res]`                                        
-| `puh[x]`    | push a frame with x slots                                      
-| `pop`       | pop a frame                                                    
-| `put[s]`    | `frame[s] := res`                                              
-| `get[s]`    | `res := frame[s]`                                              
-| `sub`       | `sub := res`                                                   
-| `noc`       | `sub := /[2 res]; res := /[3 res]`                             
-| `sav[s]`    | `frame[s] := sub`                                              
-| `reo[s]`    | `sub := frame[s]`                                              
-| `con[x]`    | `res := x`                                                     
-| `clq`       | if res is a cell, `res := 0` else `res := 1`                   
-| `inc`       | `res := res + 1` (crash if cell)                               
-| `eqq[s]`    | if `frame[s] == res` then `res :=0` else `res := 1`            
-| `edt[x]`    | `res := #[x res sub]`                                          
-| `ext`       | `sub := [res sub]`                                             
-| `lnt`       | `pc := ir[res]`                                                
-| `lnk`       | `frame[0] := pc; pc := ir[res]`                                
-| `don`       | `pc = frame[0]`                                                
-| `br0[x,y]`  | if `res` is 0, `pc = x`, if res is 1, `pc = y`, crash otherwise
-| `spy`       | External jump to a runtime-provided function producing a noun. 
-| `hns[b]`    | Look up a static hint in the hint table, jump if entry         
-| `hnd[b]`    | Look up a dynamic hint from res in the table, jump if entry.   
+| Instruction | Operation                                                       |
+| ----------- | --------------------------------------------------------------- |
+| `axe[x]`    | `res := /[x sub]`                                               |
+| `cel[s]`    | `res := [frame[s] res]`                                         |
+| `puh[x]`    | push a frame with x slots                                       |
+| `pop`       | pop a frame                                                     |
+| `put[s]`    | `frame[s] := res`                                               |
+| `get[s]`    | `res := frame[s]`                                               |
+| `sub`       | `sub := res`                                                    |
+| `noc`       | `sub := /[2 res]; res := /[3 res]`                              |
+| `sav[s]`    | `frame[s] := sub`                                               |
+| `reo[s]`    | `sub := frame[s]`                                               |
+| `con[x]`    | `res := x`                                                      |
+| `clq`       | if res is a cell, `res := 0` else `res := 1`                    |
+| `inc`       | `res := res + 1` (crash if cell)                                |
+| `eqq[s]`    | if `frame[s] == res` then `res :=0` else `res := 1`             |
+| `edt[x]`    | `res := #[x res sub]`                                           |
+| `ext`       | `sub := [res sub]`                                              |
+| `lnt`       | `pc := ir[res]`                                                 |
+| `lnk`       | `frame[0] := pc; pc := ir[res]`                                 |
+| `don`       | `pc = frame[0]`                                                 |
+| `br0[x,y]`  | if `res` is 0, `pc = x`, if res is 1, `pc = y`, crash otherwise |
+| `spy`       | External jump to a runtime-provided function producing a noun.  |
+| `hns[b]`    | Look up a static hint in the hint table, jump if entry          |
+| `hnd[b]`    | Look up a dynamic hint from res in the table, jump if entry.    |
 
 The translation of Nock to NockIR takes the Nock formula plus two extra input bits, both of which are 0 if unspecified:
 
-| Code generation         | Generated code
-|-------------------------|------------------------------------------------------------------------------
-| `ir[0 0 [[b c] d]]`     | `puh[1]; ir[1 1 [b c]]; put[0]; ir[0 1 d]; cel[0]; pop; don`                 
-| `ir[s 1 [[b c] d]]`     | `puh[1]; ir[1 1 [b c]]; put[0]; ir[s 1 d]; cel[0]; pop`                      
-| `ir[0 0 [0 b]]`         | `axe[b]; don`                                                                
-| `ir[s 1 [0 b]]`         | `axe[b]`                                                                     
-| `ir[0 0 [1 x]]`         | `con[x]; don`                                                                
-| `ir[s 1 [1 x]]`         | `con[x]; don`                                                                
-| `ir[0 0 [2 b c]]`       | `puh[1]; ir[1 1 c]; put[0]; ir[0 1 b]; cel[0]; pop; noc; lnt`                
-| `ir[0 1 [2 b c]]`       | `puh[2]; ir[1 1 c]; put[1]; ir[0 1 b]; cel[1]; noc; lnk; pop`                
-| `ir[1 1 [2 b c]]`       | `puh[2]; ir[1 1 c]; put[1]; ir[1 1 b]; cel[1]; sav[1]; noc; lnk; reo[1]; pop`
-| `ir[0 0 [3 b]]`         | `ir[0 1 b]; clq; don`                                                        
-| `ir[s 1 [3 b]]`         | `ir[s 1 b]; clq`                                                             
-| `ir[0 0 [4 b]]`         | `ir[0 1 b]; inc; don`                                                        
-| `ir[s 1 [4 b]]`         | `ir[s 1 b]; inc;`                                                            
-| `ir[0 0 [5 b c]]`       | `puh[1]; ir[1 1 b]; put[0]; ir[0 1 c]; eqq[0]; pop; don`                     
-| `ir[s 1 [5 b c]]`       | `puh[1]; ir[1 1 b]; put[0]; ir[s 1 c]; eqq[0]; pop`                          
-| `ir[s t [6 b c d]]`     | `ir[1 1 b]; br0[ir[s t c] ir[s t d]]`                                        
-| `ir[0 t [7 b c]]`       | `ir[0 1 b]; sub; ir[0 t c]`                                                  
-| `ir[1 1 [7 b c]]`       | `puh[1]; ir[0 1 b]; sav[0]; sub; ir[0 1 c]; reo[0]; pop`                     
-| `ir[0 t [8 b c]]`       | `ir[1 1 b]; ext; ir[0 t c]`                                                  
-| `ir[1 1 [8 b c]]`       | `puh[1]; ir[0 1 b]; sav[0]; ext; ir[0 1 c]; reo[0]; pop`                      
-| `ir[0 0 [9 b c]]`       | `ir[0 1 c]; sub; axe[b]; lnt`                                                
-| `ir[0 1 [9 b c]]`       | `puh[1]; ir[0 1 c]; sub; axe[b]; lnk; pop`                                   
-| `ir[1 1 [9 b c]]`       | `puh[2]; sav[1]; ir[0 1 c]; sub; axe[b]; lnk; reo[1]; pop`                   
-| `ir[0 0 [10 [b c] d]]`  | `puh[1]; ir[1 1 d]; put[0]; ir[0 1 c]; reo[0]; edt[b]; pop; don`             
-| `ir[0 1 [10 [b c] d]]`  | `puh[1]; ir[1 1 d]; put[0]; ir[0 1 c]; reo[0]; edt[b]; pop;`                 
-| `ir[1 1 [10 [b c] d]]`  | `puh[2]; sav[1]; ir[0 1 d]; put[0]; reo[1]; ir[0 1 c]; reo[0]; edt[b]; pop`
-| `ir[s t [11 [b c] d]]`  | `ir[1 1 b]; hnd[b]; ir[s t d]`                                               
-| `ir[s t [11 b c]]`      | `hns[b]; ir[s t c]`                                                          
-| `ir[0 0 [12 b c]]`      | `puh[1]; ir[1 1 b]; put[0]; ir[0 1 c]; cel[0]; spy; pop; don`  
-| `ir[s 1 [12 b c]]       | `puh[1]; ir[1 1 b]; put[0]; ir[s 1 c]; cel[0]; spy; pop`              
+| Code generation        | Generated code                                                                |
+| ---------------------- | ----------------------------------------------------------------------------- |
+| `ir[0 0 [[b c] d]]`    | `puh[1]; ir[1 1 [b c]]; put[0]; ir[0 1 d]; cel[0]; pop; don`                  |
+| `ir[s 1 [[b c] d]]`    | `puh[1]; ir[1 1 [b c]]; put[0]; ir[s 1 d]; cel[0]; pop`                       |
+| `ir[0 0 [0 b]]`        | `axe[b]; don`                                                                 |
+| `ir[s 1 [0 b]]`        | `axe[b]`                                                                      |
+| `ir[0 0 [1 x]]`        | `con[x]; don`                                                                 |
+| `ir[s 1 [1 x]]`        | `con[x]; don`                                                                 |
+| `ir[0 0 [2 b c]]`      | `puh[1]; ir[1 1 c]; put[0]; ir[0 1 b]; cel[0]; pop; noc; lnt`                 |
+| `ir[0 1 [2 b c]]`      | `puh[2]; ir[1 1 c]; put[1]; ir[0 1 b]; cel[1]; noc; lnk; pop`                 |
+| `ir[1 1 [2 b c]]`      | `puh[2]; ir[1 1 c]; put[1]; ir[1 1 b]; cel[1]; sav[1]; noc; lnk; reo[1]; pop` |
+| `ir[0 0 [3 b]]`        | `ir[0 1 b]; clq; don`                                                         |
+| `ir[s 1 [3 b]]`        | `ir[s 1 b]; clq`                                                              |
+| `ir[0 0 [4 b]]`        | `ir[0 1 b]; inc; don`                                                         |
+| `ir[s 1 [4 b]]`        | `ir[s 1 b]; inc;`                                                             |
+| `ir[0 0 [5 b c]]`      | `puh[1]; ir[1 1 b]; put[0]; ir[0 1 c]; eqq[0]; pop; don`                      |
+| `ir[s 1 [5 b c]]`      | `puh[1]; ir[1 1 b]; put[0]; ir[s 1 c]; eqq[0]; pop`                           |
+| `ir[s t [6 b c d]]`    | `ir[1 1 b]; br0[ir[s t c] ir[s t d]]`                                         |
+| `ir[0 t [7 b c]]`      | `ir[0 1 b]; sub; ir[0 t c]`                                                   |
+| `ir[1 1 [7 b c]]`      | `puh[1]; ir[0 1 b]; sav[0]; sub; ir[0 1 c]; reo[0]; pop`                      |
+| `ir[0 t [8 b c]]`      | `ir[1 1 b]; ext; ir[0 t c]`                                                   |
+| `ir[1 1 [8 b c]]`      | `puh[1]; ir[0 1 b]; sav[0]; ext; ir[0 1 c]; reo[0]; pop`                      |
+| `ir[0 0 [9 b c]]`      | `ir[0 1 c]; sub; axe[b]; lnt`                                                 |
+| `ir[0 1 [9 b c]]`      | `puh[1]; ir[0 1 c]; sub; axe[b]; lnk; pop`                                    |
+| `ir[1 1 [9 b c]]`      | `puh[2]; sav[1]; ir[0 1 c]; sub; axe[b]; lnk; reo[1]; pop`                    |
+| `ir[0 0 [10 [b c] d]]` | `puh[1]; ir[1 1 d]; put[0]; ir[0 1 c]; reo[0]; edt[b]; pop; don`              |
+| `ir[0 1 [10 [b c] d]]` | `puh[1]; ir[1 1 d]; put[0]; ir[0 1 c]; reo[0]; edt[b]; pop;`                  |
+| `ir[1 1 [10 [b c] d]]` | `puh[2]; sav[1]; ir[0 1 d]; put[0]; reo[1]; ir[0 1 c]; reo[0]; edt[b]; pop`   |
+| `ir[s t [11 [b c] d]]` | `ir[1 1 b]; hnd[b]; ir[s t d]`                                                |
+| `ir[s t [11 b c]]`     | `hns[b]; ir[s t c]`                                                           |
+| `ir[0 0 [12 b c]]`     | `puh[1]; ir[1 1 b]; put[0]; ir[0 1 c]; cel[0]; spy; pop; don`                 |
+| `ir[s 1 [12 b c]]      | `puh[1]; ir[1 1 b]; put[0]; ir[s 1 c]; cel[0]; spy; pop`                      |
 
 ## From NockIR to LLVM IR
 

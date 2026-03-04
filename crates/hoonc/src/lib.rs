@@ -3,13 +3,14 @@ use std::ffi::OsStr;
 use std::io::Write;
 use std::path::PathBuf;
 
-use clap::{arg, command, ColorChoice, Parser};
+use clap::{ColorChoice, Parser};
 use nockapp::driver::Operation;
 use nockapp::kernel::boot::{self, default_boot_cli, Cli as BootCli};
 use nockapp::noun::slab::{Jammer, NockJammer, NounSlab};
 use nockapp::one_punch::OnePunchWire;
 use nockapp::wire::Wire;
-use nockapp::{system_data_dir, AtomExt, Noun, NounExt};
+use nockapp::{system_data_dir, AtomExt, Noun};
+use nockvm::ext::NounExt;
 use nockvm::interpreter::{self, Context};
 use nockvm::noun::{Atom, D, T};
 use nockvm_macros::tas;
@@ -243,12 +244,13 @@ async fn initialize_hoonc_inner<J: Jammer + Send + 'static>(
         && boot_cli.state_jam.is_none()
         && (boot_cli.new || !has_existing_checkpoint);
 
-    let mut prewarm_state_file: Option<NamedTempFile> = None;
+    // Keep the prewarm tempfile alive for the duration of this function when used.
+    let mut _prewarm_state_file: Option<NamedTempFile> = None;
     if should_use_prewarm {
         let mut tmp = NamedTempFile::new()?;
         tmp.write_all(PREWARM_STATE_JAM)?;
         boot_cli.state_jam = Some(tmp.path().to_string_lossy().into_owned());
-        prewarm_state_file = Some(tmp);
+        _prewarm_state_file = Some(tmp);
     }
     let mut nockapp =
         boot::setup::<J>(KERNEL_JAM, boot_cli.clone(), &[], "hoonc", Some(data_dir)).await?;
@@ -377,20 +379,28 @@ pub async fn initialize_hoonc_(
     initialize_hoonc_with_jammer::<NockJammer>(entry, deps_dir, arbitrary, out, boot_cli).await
 }
 
-pub fn is_valid_file_or_dir(entry: &DirEntry) -> bool {
-    let is_dir = entry
-        .metadata()
-        .unwrap_or_else(|_| {
-            panic!(
-                "Panicked at {}:{} (git sha: {:?})",
-                file!(),
-                line!(),
-                option_env!("GIT_SHA")
-            )
-        })
-        .is_dir();
+const BLACKLISTED_DIRS: &[&str] = &["packages", "node_modules", ".git", "target"];
 
-    let is_valid = entry
+pub fn is_valid_file_or_dir(entry: &DirEntry) -> bool {
+    let metadata = entry.metadata().unwrap_or_else(|_| {
+        panic!(
+            "Panicked at {}:{} (git sha: {:?})",
+            file!(),
+            line!(),
+            option_env!("GIT_SHA")
+        )
+    });
+
+    let is_dir = metadata.is_dir();
+    let file_name = entry.file_name().to_str().unwrap_or("");
+
+    // Skip blacklisted directories
+    if is_dir && BLACKLISTED_DIRS.contains(&file_name) {
+        return false;
+    }
+
+    // Whitelist valid file extensions
+    let is_valid_file = entry
         .file_name()
         .to_str()
         .map(|s| {
@@ -398,10 +408,16 @@ pub fn is_valid_file_or_dir(entry: &DirEntry) -> bool {
                 || s.ends_with(".hoon")
                 || s.ends_with(".txt")
                 || s.ends_with(".jam")
+                || s.ends_with(".html")
+                || s.ends_with(".css")
+                || s.ends_with(".js")
+                || s.ends_with(".jpg")
+                || s.ends_with(".png")
+                || s.ends_with(".gif")
         })
         .unwrap_or(false);
 
-    is_dir || is_valid
+    is_dir || is_valid_file
 }
 
 #[instrument]

@@ -1,12 +1,11 @@
 use std::collections::VecDeque;
 
-use nockapp::Noun;
 use nockvm::hamt::MutHamt;
 use nockvm::interpreter::Context;
 use nockvm::jets::util::{slot, BAIL_FAIL};
 use nockvm::jets::JetErr;
 use nockvm::mem::NockStack;
-use nockvm::noun::{Atom, IndirectAtom, D, T};
+use nockvm::noun::{Atom, IndirectAtom, Noun, D, T};
 use nockvm_macros::tas;
 use tracing::debug;
 
