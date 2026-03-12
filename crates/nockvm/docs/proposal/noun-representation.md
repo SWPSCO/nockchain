@@ -1,5 +1,8 @@
 # Noun Representation
 
+> Historical note. This document describes an exploratory representation model and is not current protocol or runtime authority.
+> Authoritative docs: [`START_HERE.md`](../../../../START_HERE.md), [`crates/nockvm/README.md`](../../README.md).
+
 A noun is represented as a word, which may be a pointer or reference to other memory.
 
 Semantically, nouns are either atoms or cells, where a cell is an ordered pair of nouns.
@@ -156,4 +159,3 @@ References are never stored as hashes. Instead, they are stored as indirect atom
 ### Noun ejection
 
 ### Paging and snapshotting
-

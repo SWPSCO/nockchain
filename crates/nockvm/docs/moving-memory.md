@@ -1,5 +1,8 @@
 # Zero-cost Memory Moves in the New Mars PMA
 
+> Historical note. This document captures exploratory PMA memory-move ideas, not current protocol or runtime authority.
+> Authoritative docs: [`START_HERE.md`](../../../START_HERE.md), [`crates/nockvm/README.md`](../README.md).
+
 The New Mars Persistent Memory Arena (PMA) maintains a file-backed memory arena where pages to be mutated are copied to new blocks in the file prior to mutation. Both reads and writes are memory reads and writes: data is written to memory in the standard way and is only written to disk as part of a page eviction or when `msync()` is called to ensure the page is durable.
 
 One possible use of this mechanism is to operate a "2stackz" allocation and control stack within an otherwised unused region of virtual memory within the PMA. Stack push, stack pop, and allocate operations use the lower level operations of the PMA to allocate disk regions for pages, map these regions, and store the mapping in a persistent page directory. None of these operations entails any synchronous write to disk. 

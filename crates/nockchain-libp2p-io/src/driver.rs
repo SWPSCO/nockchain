@@ -28,7 +28,8 @@ use nockapp::utils::error::{CrownError, ExternalError};
 use nockapp::utils::make_tas;
 use nockapp::utils::scry::*;
 use nockapp::wire::{Wire, WireRepr};
-use nockapp::{AtomExt, NockAppError, NounExt};
+use nockapp::{AtomExt, NockAppError};
+use nockvm::ext::NounExt;
 use nockvm::noun::{Atom, Noun, D, T};
 use nockvm_macros::tas;
 use rand::rng;
@@ -290,16 +291,13 @@ pub fn make_libp2p_driver(
                                send_back_addr, local_addr, error);
 
                                // When connection limits are reached, randomly prune inbound connections
-                               match error {
-                                   ListenError::Denied { cause } => {
-                                       metrics.incoming_connections_blocked_by_limits.increment();
-                                       if let Some(prune_factor) = prune_inbound_size {
-                                           if let Ok(_exceeded) = cause.downcast::<libp2p::connection_limits::Exceeded>() {
-                                               driver_state.lock().await.prune_inbound_connections(metrics.clone(), &mut swarm, prune_factor);
-                                           }
+                               if let ListenError::Denied { cause } = error {
+                                   metrics.incoming_connections_blocked_by_limits.increment();
+                                   if let Some(prune_factor) = prune_inbound_size {
+                                       if let Ok(_exceeded) = cause.downcast::<libp2p::connection_limits::Exceeded>() {
+                                           driver_state.lock().await.prune_inbound_connections(metrics.clone(), &mut swarm, prune_factor);
                                        }
                                    }
-                                   _ => {}
                                }
                             },
                             SwarmEvent::Behaviour(NockchainEvent::RequestResponse(Message { connection_id , peer, message })) => {
@@ -580,7 +578,10 @@ async fn handle_effect(
                 request_peers.shuffle(&mut rng);
                 request_peers.into_iter().take(2).collect()
             } else {
-                target_peers.clone()
+                let mut rng = rng();
+                let mut request_peers = target_peers.clone();
+                request_peers.shuffle(&mut rng);
+                request_peers.into_iter().take(8).collect()
             };
             debug!("Sending request to {} peers", request_peers.len());
             for peer_id in request_peers {
@@ -600,14 +601,12 @@ async fn handle_effect(
         EffectType::LiarPeer => {
             let effect_cell = unsafe { noun_slab.root().as_cell()? };
             let liar_peer_cell = effect_cell.tail().as_cell().map_err(|_| {
-                NockAppError::IoError(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                NockAppError::IoError(std::io::Error::other(
                     "Expected peer ID cell in liar-peer effect",
                 ))
             })?;
             let peer_id_atom = liar_peer_cell.head().as_atom().map_err(|_| {
-                NockAppError::IoError(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                NockAppError::IoError(std::io::Error::other(
                     "Expected peer ID atom in liar-peer effect",
                 ))
             })?;
@@ -617,17 +616,11 @@ async fn handle_effect(
                 .expect("failed to strip null bytes");
 
             let peer_id_str = String::from_utf8(bytes).map_err(|_| {
-                NockAppError::IoError(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "Invalid UTF-8 in peer ID",
-                ))
+                NockAppError::IoError(std::io::Error::other("Invalid UTF-8 in peer ID"))
             })?;
 
             let peer_id = PeerId::from_str(&peer_id_str).map_err(|_| {
-                NockAppError::IoError(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "Invalid peer ID format",
-                ))
+                NockAppError::IoError(std::io::Error::other("Invalid peer ID format"))
             })?;
 
             swarm_tx
@@ -640,8 +633,7 @@ async fn handle_effect(
         EffectType::LiarBlockId => {
             let effect_cell = unsafe { noun_slab.root().as_cell()? };
             let liar_block_cell = effect_cell.tail().as_cell().map_err(|_| {
-                NockAppError::IoError(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                NockAppError::IoError(std::io::Error::other(
                     "Expected block ID cell in liar-block-id effect",
                 ))
             })?;
@@ -691,8 +683,7 @@ async fn handle_effect(
                 let mut state_guard = driver_state.lock().await;
                 state_guard.remove_block_id(block_id)?;
             } else {
-                return Err(NockAppError::IoError(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                return Err(NockAppError::IoError(std::io::Error::other(
                     "Invalid track action",
                 )));
             }
@@ -1580,6 +1571,7 @@ fn record_crown_error_metric(error: &CrownError<ExternalError>, metrics: &Nockch
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use std::sync::LazyLock;
 
@@ -1590,7 +1582,7 @@ mod tests {
 
     use super::*;
 
-    pub static LIBP2P_CONFIG: LazyLock<LibP2PConfig> = LazyLock::new(|| LibP2PConfig::default());
+    pub static LIBP2P_CONFIG: LazyLock<LibP2PConfig> = LazyLock::new(LibP2PConfig::default);
 
     #[test]
     #[cfg_attr(miri, ignore)] // ibig has a memory leak so miri fails this test
@@ -1683,7 +1675,7 @@ mod tests {
             let mut slab: NounSlab = NounSlab::new();
             slab.set_root(D(123));
             let result = NockchainDataRequest::from_noun(*unsafe { slab.root() })
-                .and_then(|r| request_to_scry_slab(r));
+                .and_then(request_to_scry_slab);
             assert!(result.is_err());
         }
 
@@ -1805,8 +1797,8 @@ mod tests {
             );
             slab.set_root(invalid_request);
 
-            let result = NockchainDataRequest::from_noun(invalid_request)
-                .and_then(|r| request_to_scry_slab(r));
+            let result =
+                NockchainDataRequest::from_noun(invalid_request).and_then(request_to_scry_slab);
             assert!(result.is_err());
             drop(slab);
         }

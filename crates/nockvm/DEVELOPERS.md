@@ -1,20 +1,28 @@
-# Developing Sword
+# Developing NockVM
+
+Status: Experimental
+Owner: Nockchain Runtime Maintainers
+Last Reviewed: 2026-02-19
+Canonical/Legacy: Legacy (historical and R&D developer guidance; verify canonical lanes via [`START_HERE.md`](../../START_HERE.md))
+
+*Trust posture: this guide includes experimental and historical material, verify commands and pill assumptions against current code and tooling.*
 
 ## Rust
 
 ### Build
 
-To build Sword, make sure Rust is installed, then run:
+To build NockVM, make sure Rust is installed, then run:
 
 ```bash
+cd crates/nockvm/rust/nockvm
 cargo build
 ```
 
-to build the Sword executable. This will place the built executable at `target/debug/nockvm` under the `rust/nockvm` directory.
+This builds the `nockvm` library crate. The crate does not currently define a standalone `target/debug/nockvm` executable.
 
 #### Pills
 
-Sword development and testing, unlike regular development and ship operation, currently requires careful control over what pill is used to launch a ship. Currently, there are several pills available in `resources/pills/`:
+NockVM development and testing, unlike regular development and ship operation, historically required careful control over what pill is used to launch a ship. Pills currently present in `resources/pills/` include:
 - **baby.pill**: an extremely minimal Arvo-shaped core and Hoon standard library (`~wicdev-wisryt` [streamed a
 video of its development](https://youtu.be/fOVhCx1a-9A))
 - **toddler.pill**: a slightly more complex Arvo and Hoon than `baby`, which runs slow recursive operations for testing jets
@@ -22,26 +30,27 @@ video of its development](https://youtu.be/fOVhCx1a-9A))
 - **full.pill**: the complete Urbit `v2.11` pill
 - **slim.pill**: a slimmed down version of the Urbit `v2.11` pill that has had every desk and agent not necessary for booting to dojo removed
 
-More information on the pills used by Sword can be found [here](https://github.com/zorp-corp/nockvm/blob/status/docs/pills.md).
+More pill background lives in [docs/pills.md](docs/pills.md) (legacy context, not canonical protocol guidance).
 
 ### Test
 
-The command to run the Sword suite of unit tests is:
+The command to run the NockVM suite of unit tests is:
 
 ```bash
+cd crates/nockvm/rust/nockvm
 cargo test --verbose -- --test-threads=1
 ```
 
-The tests must be run with `-- --test-threads=1` because Rust does not have any way to specify test setup / teardown functions, nor does it have any way to
-specify ordered test dependencies. Therefore, the only way to ensure that tests that share resources don't clobber each other **and** that tests setup / teardown in the right order is to force all unit tests to be single-threaded.
+Historically, many tests in this crate were run with `-- --test-threads=1` to avoid shared-resource interference.
 
 ### Style
 
-Sword uses the default Rust formatting and style. The CI jobs are configured to reject any code which produces linter or style warnings. Therefore, as a final step before uploading code changes to GitHub, it's recommended to run the following commands:
+NockVM uses the default Rust formatting and style. The CI jobs are configured to reject any code which produces linter or style warnings. Therefore, as a final step before uploading code changes to GitHub, it's recommended to run the following commands:
 
 ```bash
+cd crates/nockvm/rust/nockvm
 cargo fmt
-cargo clippy --all-targets --no-deps -- -D warnings -A clippy::missing_safety_doc
+cargo clippy --all --benches --tests --examples --all-features
 ```
 
 This will auto-format your code and check for linter warnings.
@@ -54,11 +63,11 @@ To watch rust and check for errors, run
 cargo watch --clear
 ```
 
-Until terminated with ctrl-c, this will rebuild Sword library on any change to the underlying source files and report any warnings and errors. It will *not* produce the executable. You must run the build command above to rebuild the executable.
+Until terminated with ctrl-c, this rebuilds the NockVM library on source changes and reports warnings and errors.
 
 ## Hoon
 
-The Nock analysis and lowering for Sword is written in Hoon, and lives at `hoon/codegen.` It is meant to be jammed and included in the Sword binary. (See [`src/load.rs`](rust/nockvm/src/load.rs) in the Rust sources for details.)
+The Nock analysis and lowering for NockVM is written in Hoon, and lives at `hoon/codegen.` Historically this was jammed and embedded into runtime binaries during New Mars/Ares experimentation.
 
 If the hoon source has been synced to a desk, e.g. `sandbox`, on a fakezod, then the build generator can be invoked as:
 
@@ -66,6 +75,6 @@ If the hoon source has been synced to a desk, e.g. `sandbox`, on a fakezod, then
 .cg/jam +sandbox!cg-make
 ```
 
-This will build the Hoon standard library and the Sword Nock analysis as a "trap" meant to be run by Sword. The jammed output can be found at `<fakezod-pier>/.urb/put/cg.jam`, and should be copied to the `rust/nockvm/bin` directory, from whence the rust build will include it in the executable.
+This builds the Hoon standard library and the NockVM Nock analysis as a "trap" meant to be run by NockVM. The jammed output can be found at `<fakezod-pier>/.urb/put/cg.jam` for manual experiments.
 
 Instructions on testing the analysis in a fakezod are forthcoming.

@@ -1,4 +1,6 @@
 #![feature(slice_pattern)]
+// Allow unwrap in test code - standard practice for test assertions
+#![cfg_attr(test, allow(clippy::unwrap_used))]
 
 //! # Crown
 //!
@@ -25,7 +27,7 @@ pub use bytes::*;
 pub use drivers::*;
 pub use nockapp::*;
 pub use nockvm::noun::Noun;
-pub use noun::{AtomExt, JammedNoun, NounExt};
+pub use noun::{AtomExt, IndirectAtomExt, JammedNoun, NounExt};
 pub use utils::bytes::{ToBytes, ToBytesExt};
 pub use utils::error::{CrownError, Result};
 

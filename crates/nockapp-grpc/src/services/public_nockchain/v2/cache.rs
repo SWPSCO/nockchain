@@ -16,7 +16,7 @@ use crate::v2::pagination::{
 };
 
 pub const MAX_PAGE_BYTES: u64 = 3 * 1024 * 1024;
-pub const MAX_PAGE_SIZE: usize = 1000;
+pub const MAX_PAGE_SIZE: usize = 1_024;
 pub const DEFAULT_PAGE_BYTES: u64 = 1024 * 1024;
 pub const DEFAULT_PAGE_SIZE: usize = 600;
 const PER_ENTRY_OVERHEAD: usize = 8;

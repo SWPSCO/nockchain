@@ -1,6 +1,7 @@
 use libp2p::PeerId;
 use nockapp::noun::slab::NounSlab;
-use nockapp::{NockAppError, NounExt};
+use nockapp::NockAppError;
+use nockvm::ext::NounExt;
 use nockvm::noun::{Noun, D};
 use nockvm_macros::tas;
 use serde_bytes::ByteBuf;
@@ -60,9 +61,9 @@ impl NockchainFact {
     }
     pub fn fact_poke(&self) -> &NounSlab {
         match self {
-            Self::HeardBlock(_, slab) => &slab,
-            Self::HeardTx(_, slab) => &slab,
-            Self::HeardElders(_, _, slab) => &slab,
+            Self::HeardBlock(_, slab) => slab,
+            Self::HeardTx(_, slab) => slab,
+            Self::HeardElders(_, _, slab) => slab,
         }
     }
 }
@@ -75,12 +76,13 @@ fn block_id_from_page(page: Noun) -> Result<Noun, NockAppError> {
         Ok(version_atom) => {
             let version = version_atom.as_u64()?;
             if version == 1 {
-                return Ok(page_cell.tail().as_cell()?.head());
+                Ok(page_cell.tail().as_cell()?.head())
+            } else {
+                Err(NockAppError::OtherError(format!(
+                    "Unsupported page version {}",
+                    version
+                )))
             }
-            return Err(NockAppError::OtherError(format!(
-                "Unsupported page version {}",
-                version
-            )));
         }
         Err(_) => Ok(page_cell.head()),
     }
@@ -94,12 +96,13 @@ fn tx_id_from_raw_tx(raw_tx: Noun) -> Result<Noun, NockAppError> {
         Ok(version_atom) => {
             let version = version_atom.as_u64()?;
             if version == 1 {
-                return Ok(raw_tx_cell.tail().as_cell()?.head());
+                Ok(raw_tx_cell.tail().as_cell()?.head())
+            } else {
+                Err(NockAppError::OtherError(format!(
+                    "Unsupported raw-tx version {}",
+                    version
+                )))
             }
-            return Err(NockAppError::OtherError(format!(
-                "Unsupported raw-tx version {}",
-                version
-            )));
         }
         Err(_) => Ok(raw_tx_cell.head()),
     }
@@ -166,16 +169,11 @@ impl NockchainDataRequest {
                 )))
             }
         })();
-        res.map_err(|_| {
-            NockAppError::IoError(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "bad request",
-            ))
-        })
+        res.map_err(|_| NockAppError::IoError(std::io::Error::other("bad request")))
     }
 }
 
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 /// Network struct (in serde/CBOR) for requests
 pub enum NockchainRequest {
     /// Request a block or TX from another node, carry PoW
@@ -274,7 +272,7 @@ impl NockchainRequest {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 /// Responses to Nockchain requests
 pub enum NockchainResponse {
     /// The requested block or raw-tx

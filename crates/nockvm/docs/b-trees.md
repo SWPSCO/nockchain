@@ -1,5 +1,8 @@
 # B+ Tree page directory for New Mars Persistent Memory Arena
 
+> Historical note. This is exploratory PMA design documentation, not current protocol or runtime authority.
+> Authoritative docs: [`START_HERE.md`](../../../START_HERE.md), [`crates/nockvm/README.md`](../README.md).
+
 ## Problem
 
 We need to be able to dynamically allocate intervals of memory which will be consistently and durably persisted to disk. This requires mapping memory pages to regions of a disk-backed file. Modifying a page requires that the data first be *copied* to a new region so that the original data is not corrupted if the process exits with the new data in an inconsistent state or not fully persisted to disk.

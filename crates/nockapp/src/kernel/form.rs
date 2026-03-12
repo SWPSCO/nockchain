@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#![allow(clippy::items_after_test_module)]
 use std::any::Any;
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -31,7 +32,7 @@ use crate::utils::{
     create_context, current_da, NOCK_STACK_SIZE, NOCK_STACK_SIZE_HUGE, NOCK_STACK_SIZE_LARGE,
     NOCK_STACK_SIZE_MEDIUM, NOCK_STACK_SIZE_SMALL, NOCK_STACK_SIZE_TINY,
 };
-use crate::{AtomExt, CrownError, NounExt, Result, ToBytesExt};
+use crate::{AtomExt, CrownError, IndirectAtomExt, NounExt, Result, ToBytesExt};
 
 pub(crate) const STATE_AXIS: u64 = 6;
 const LOAD_AXIS: u64 = 4;
@@ -1152,12 +1153,12 @@ impl Serf {
         let bytes = random_bytes.as_bytes()?;
         let eny: Atom = Atom::from_bytes(&mut self.context.stack, &bytes);
         let our = <nockvm::noun::Atom as AtomExt>::from_value(&mut self.context.stack, 0)?; // Using 0 as default value
-        let now: Atom = unsafe {
-            let mut t_vec: Vec<u8> = vec![];
-            t_vec.write_u128::<LittleEndian>(current_da().0)?;
-            IndirectAtom::new_raw_bytes(&mut self.context.stack, 16, t_vec.as_slice().as_ptr())
-                .normalize_as_atom()
-        };
+        let mut t_vec: Vec<u8> = vec![];
+        t_vec.write_u128::<LittleEndian>(current_da().0)?;
+        let now: Atom = <IndirectAtom as IndirectAtomExt>::from_bytes(
+            &mut self.context.stack,
+            t_vec.as_slice(),
+        );
 
         let event_num = D(self.event_num.load(Ordering::SeqCst) + 1);
         let base_wire_noun = wire_to_noun(&mut self.context.stack, &wire);

@@ -1,5 +1,19 @@
 # New Mars persistence
-## Rationale
+
+Status: Historical
+Owner: Nockchain Runtime Maintainers
+Last Reviewed: 2026-02-19
+Canonical/Legacy: Legacy (historical design notebook for the New Mars persistent-memory-arena direction)
+
+*Trust posture: this document is preserved for design context. It is not a statement of current nockvm runtime behavior.*
+
+## Current Reality Check (2026-02-19)
+
+- The current `rust/nockvm` runtime memory allocator is in-process stack memory (`MmapMut::map_anon` / malloc paths in `rust/nockvm/src/mem.rs`), not a file-backed PMA.
+- The file-backed PMA path described below is not present in the current crate; code comments note PMA removal in favor of checkpointing (`rust/nockvm/src/hamt.rs`).
+- The remainder of this document uses historical present tense and should be read as a proposal archive.
+
+## Historical Rationale
 
 New Mars requires a persistence layer. Nouns which are allocated in the top frame of a 2stackz memory manager can only be freed by resetting the stack. This loses all nouns. Therefore, for nouns which persist between computations, another arena is needed.
 
@@ -9,7 +23,7 @@ Since this memory will never be used to directly allocate a noun, we do not need
 
 This implies that any noun used as an input to a computation run in a stack arena must be maintained as a root until that computation completes. For instance: an Arvo core stored in persistent memory is used as input to an event computation. This core is maintained as a root in the persistent arena until the computation has completed.
 
-## Copy-on-Write File-Backed Memory Arena
+## Copy-on-Write File-Backed Memory Arena (proposal)
 
 As the [Varnish](https://varnish-cache.org/docs/trunk/phk/notes.html) notes point out: a userspace program ought not to go to great lengths to juggle disk vs memory residency for persistent data. This is something the (terran) operating system already puts large amounts of work into. It is not necessary to work very hard to manage eviction and restoration of immutable data. At the greatest extent of effort, judicious use of `madvise` calls can reduce block storage wait times.
 
@@ -100,4 +114,3 @@ Contention for this lock is not likely to be high, and this will eliminate a gre
 
 Commit frequency of the Arvo snapshot arena is a potentially tunable value, with performance implications.
 Committing more often incurs more disk IO, saving nouns that will potentially soon be discarded (Ames queues, for instance). However, under memory pressure, it makes paging more performant, as the proportion of dirty pages which must be *written* to disk to evict is smaller. Already-committed pages can simply be evicted from memory and re-read from disk when a read fault occurs. Committing less often requires writes as part of eviction, but reduces disk IO. It is desirable as long as memory pressure as low, and highly desirable for block storage where write-wearing is a concern.
-

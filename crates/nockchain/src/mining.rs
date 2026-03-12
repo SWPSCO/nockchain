@@ -1,16 +1,17 @@
 use std::str::FromStr;
 
-use kernels::miner::KERNEL;
+use kernels_open_miner::KERNEL;
 use nockapp::kernel::form::SerfThread;
 use nockapp::nockapp::driver::{IODriverFn, NockAppHandle, PokeResult};
 use nockapp::nockapp::wire::Wire;
 use nockapp::nockapp::NockAppError;
 use nockapp::noun::slab::NounSlab;
-use nockapp::noun::{AtomExt, NounExt};
+use nockapp::noun::AtomExt;
 use nockapp::save::SaveableCheckpoint;
 use nockapp::utils::NOCK_STACK_SIZE_TINY;
 use nockapp::CrownError;
 use nockchain_libp2p_io::tip5_util::tip5_hash_to_base58;
+use nockvm::ext::NounExt;
 use nockvm::interpreter::NockCancelToken;
 use nockvm::noun::{Atom, D, NO, T, YES};
 use nockvm_macros::tas;
@@ -110,7 +111,7 @@ struct MiningData {
 }
 
 pub fn create_mining_driver(
-    mining_config: Option<Vec<MiningKeyConfig>>,
+    _mining_config: Option<Vec<MiningKeyConfig>>,
     mining_pkh_config: Option<Vec<MiningPkhConfig>>,
     mine: bool,
     num_threads: u64,
@@ -124,7 +125,7 @@ pub fn create_mining_driver(
                 share: 1,
                 m: 1,
                 // hardcoded key to satisfy pass-through for v0 pubkey mining infra
-                keys: vec!["2qwq9dQRZfpFx8BDicghpMRnYGKZsZGxxhh9m362pzpM9aeo276pR1yHZPS41y3CW3vPKxeYM8p8fzZS8GXmDGzmNNCnVNekjrSYogqfEFMqwhHh5iCjaKPaDTwhupWqiXj6".to_string()],
+                keys: vec!["2cPnE4Z9RevhTv9is9Hmc1amFubEFbUxzCV2Fxb9GxevJstV5VG92oYt6Sai3d3NjLFcsuVXSLx9hikMbD1agv9M267TVw3hV9MCpMfEnGo5LYtjJ7jPyHg8SERPjJRCWTgZ".to_string()],
             });
 
             let Some(pkh_configs) = mining_pkh_config else {
@@ -415,13 +416,13 @@ async fn start_mining_attempt(
     id: u64,
 ) {
     let nonce = nonce.unwrap_or_else(|| {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut nonce_slab = NounSlab::new();
-        let mut nonce_cell = Atom::from_value(&mut nonce_slab, rng.gen::<u64>() % PRIME)
+        let mut nonce_cell = Atom::from_value(&mut nonce_slab, rng.random::<u64>() % PRIME)
             .expect("Failed to create nonce atom")
             .as_noun();
         for _ in 1..5 {
-            let nonce_atom = Atom::from_value(&mut nonce_slab, rng.gen::<u64>() % PRIME)
+            let nonce_atom = Atom::from_value(&mut nonce_slab, rng.random::<u64>() % PRIME)
                 .expect("Failed to create nonce atom")
                 .as_noun();
             nonce_cell = T(&mut nonce_slab, &[nonce_atom, nonce_cell]);

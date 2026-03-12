@@ -1,5 +1,8 @@
 # New Mars: Codegen Bootstrapping
 
+> Historical note. This document captures bootstrap design ideas, not current protocol or runtime authority.
+> Authoritative docs: [`START_HERE.md`](../../../START_HERE.md), [`crates/nockvm/README.md`](../README.md).
+
 New Mars provides an implementation of generating low-level, linear bytecode or machine code from Nock. This strategy is specified in Hoon, which is compiled to Nock. Thus, in order to generate low level code for Nock, we must execute Nock.
 
 Further, we should have a way of upgrading the Nock code for code generation without baking a machine code, bytecode, or Nock blob into the New Mars runtime.
@@ -14,28 +17,28 @@ The quickest path to making use of linearization is a bytecode. The current vere
 
 The easiest approach to a bytecode is to make a compact and rapidly dispatchable encoding of the Nock linearizer output, which must encode the following instructions:
 
-| Instruction | Description                          | Op | Hex |
-|-------------|--------------------------------------|----|-----|
-| `imm`       | Write an immediate noun to an SSA    |  1 |   1 |
-| `mov`       | Copy one SSA to another              |  2 |   2 |
-| `inc`       | Checked increment                    |  3 |   3 |
-| `unc`       | Unchecked increment                  |  4 |   4 |
-| `con`       | Create a cell                        |  5 |   5 |
-| `hed`       | Checked head of a cell               |  6 |   6 |
-| `tal`       | Checked tail of a cell               |  7 |   7 |
-| `hud`       | Unchecked head of a cell             |  8 |   8 |
-| `tul`       | Unchecked tail of a cell             |  9 |   9 |
-| `clq`       | Branch on whether a noun is a cell   | 10 |   A |
-| `eqq`       | Branch on whether nouns are equal    | 11 |   B |
-| `brn`       | Branch on a loobean                  | 12 |   C |
-| `hop`       | Direct jump internally in an arm     | 13 |   D |
-| `cal`       | Call an arm in non-tail position     | 14 |   E |
-| `lnk`       | Evaluate an arm in non-tail position | 15 |   F |
-| `jmp`       | Call an arm in tail position         | 16 |  10 |
-| `lnt`       | Evaluate an arm in tail position     | 17 |  11 |
-| `spy`       | Execute a scry                       | 18 |  12 |
-| `hnt`       | Provide a hint                       | 19 |  13 |
-| `bom`       | Crash                                | 20 |  14 |
+| Instruction | Description                          | Op  | Hex |
+| ----------- | ------------------------------------ | --- | --- |
+| `imm`       | Write an immediate noun to an SSA    | 1   | 1   |
+| `mov`       | Copy one SSA to another              | 2   | 2   |
+| `inc`       | Checked increment                    | 3   | 3   |
+| `unc`       | Unchecked increment                  | 4   | 4   |
+| `con`       | Create a cell                        | 5   | 5   |
+| `hed`       | Checked head of a cell               | 6   | 6   |
+| `tal`       | Checked tail of a cell               | 7   | 7   |
+| `hud`       | Unchecked head of a cell             | 8   | 8   |
+| `tul`       | Unchecked tail of a cell             | 9   | 9   |
+| `clq`       | Branch on whether a noun is a cell   | 10  | A   |
+| `eqq`       | Branch on whether nouns are equal    | 11  | B   |
+| `brn`       | Branch on a loobean                  | 12  | C   |
+| `hop`       | Direct jump internally in an arm     | 13  | D   |
+| `cal`       | Call an arm in non-tail position     | 14  | E   |
+| `lnk`       | Evaluate an arm in non-tail position | 15  | F   |
+| `jmp`       | Call an arm in tail position         | 16  | 10  |
+| `lnt`       | Evaluate an arm in tail position     | 17  | 11  |
+| `spy`       | Execute a scry                       | 18  | 12  |
+| `hnt`       | Provide a hint                       | 19  | 13  |
+| `bom`       | Crash                                | 20  | 14  |
 
 Thus we need 5 bits to encode instructions. The linearized nock IR is registerized in SSA form, meaning we need to either maintain a dynamic mapping of SSA registers to values or perform register allocation. To avoid having to encode arbitrary-length integers for registers, we choose the latter option.
 
@@ -73,4 +76,3 @@ The `mov` instruction should also be shifted immediately prior to its first use.
 ### Optimization: Definition copying
 
 If a spilled variable is a memory load or immediate, then a load instruction should not be written for the spill. Instead, the defining instruction should be copied to the locations where the spill would have been loaded from the stack slot. This would most easily be implemented by notating such SSAs with their defining instruction. For memory load instructions, this is only practical if we are still within the liverange of the register for the cell targeted by the load. Otherwise, we must allocate a register at precisely the point where we need to spill because of register pressure. Other encountered uses of the SSA, preceding the spill, may be able to extend the liverange of the cell if there are available dead registers at that point.
-

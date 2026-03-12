@@ -1,8 +1,7 @@
-use nockapp::Noun;
 use nockvm::interpreter::Context;
 use nockvm::jets::util::{slot, BAIL_EXIT, BAIL_FAIL};
 use nockvm::jets::JetErr;
-use nockvm::noun::{Atom, IndirectAtom, D, T};
+use nockvm::noun::{Atom, IndirectAtom, Noun, D, T};
 use nockvm_macros::tas;
 use tracing::debug;
 
@@ -446,7 +445,7 @@ fn get_opcode(row: &[u64]) -> Result<u64, JetErr> {
     } else if grab_belt(row, OP9_IDX).0 == 1 {
         Ok(9)
     } else {
-        return Err(BAIL_EXIT);
+        Err(BAIL_EXIT)
     }
 }
 

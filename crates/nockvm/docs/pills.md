@@ -1,5 +1,8 @@
 # Making your own pill to run with Ares
 
+> Historical note. This is a legacy pill-building workflow note and may not match current toolchains.
+> Authoritative docs: [`START_HERE.md`](../../../START_HERE.md), [`crates/nockvm/README.md`](../README.md).
+
 Ares development and testing, unlike regular development and ship operation, currently requires careful control over what pill is used to launch a ship. This document details how pills are created for the purposes of development and testing.
 
 ## Example: `baby.pill`

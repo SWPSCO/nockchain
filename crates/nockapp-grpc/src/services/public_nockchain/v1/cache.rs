@@ -11,8 +11,9 @@ use crate::pb::common::v1::{ErrorCode, ErrorStatus};
 use crate::pb::public::v1::{wallet_get_balance_response, WalletGetBalanceResponse};
 use crate::v1::pagination::{encode_cursor, name_key, PageCursor, PageKey};
 
+// Max for gRPC is 4 MiB anyway, so we leave some slack here for the envelope.
 pub const MAX_PAGE_BYTES: u64 = 3 * 1024 * 1024;
-pub const MAX_PAGE_SIZE: usize = 1000;
+pub const MAX_PAGE_SIZE: usize = 4096;
 pub const DEFAULT_PAGE_BYTES: u64 = 1024 * 1024;
 pub const DEFAULT_PAGE_SIZE: usize = 600;
 const PER_ENTRY_OVERHEAD: usize = 8;

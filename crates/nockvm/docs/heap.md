@@ -1,5 +1,8 @@
 # Heaps and persistence
 
+> Historical note. This is archived heap/persistence design context, not current protocol or runtime authority.
+> Authoritative docs: [`START_HERE.md`](../../../START_HERE.md), [`crates/nockvm/README.md`](../README.md).
+
 However, there are several reasons why we may wish to copy a noun off the stack and reference it during a computation.
 Copying a large noun of the stack and maintaining a reference instead prevents repeated copying up the stack.
 Fixing a location for a noun enables pointer equality to short-circuit equality checks.

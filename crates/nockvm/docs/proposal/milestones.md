@@ -1,5 +1,8 @@
 # New Mars project milestones
 
+> Historical note. This roadmap is archived project planning context, not current protocol or runtime authority.
+> Authoritative docs: [`START_HERE.md`](../../../../START_HERE.md), [`crates/nockvm/README.md`](../../README.md).
+
 The two major research (rather than implementation) goals of the New Mars project are:
 
 1. The effectiveness of an on-stack bump allocator and delimited copying collector as a memory manager for Nock computational memory.
@@ -57,4 +60,3 @@ Project time to this point has been spent:
 The memory management implementation is complete but untested. The implementation of the tree-walking interpreter will permit us to test and harden this implementation.
 
 The subject knowledge analysis is a still theoretical result, but a result nonetheless, which convincingly and constructively establishes that linearization and monomorphization of Nock for code generation is possible in a reasonably efficient manner.
-

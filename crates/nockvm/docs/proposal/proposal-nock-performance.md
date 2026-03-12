@@ -1,5 +1,8 @@
 # Introduction
 
+> Historical note. This is an archived performance proposal, not current protocol or runtime authority.
+> Authoritative docs: [`START_HERE.md`](../../../../START_HERE.md), [`crates/nockvm/README.md`](../../README.md).
+
 The current Nock implementation is a limitation on the performance of Urbit. When performance of code is not limited by
 algorithmic concerns, generally the only approach to increasing performance is to jet the code in question. For code such
 as arithmetic, encryption, or bitwise operations this is the correct approach. For code with more complex control flow or

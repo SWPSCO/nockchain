@@ -113,12 +113,22 @@ pub fn evaluate_deep_jet(context: &mut Context, subject: Noun) -> Result<Noun, J
     };
     let trace_elems: Vec<Belt> = HoonList::try_from(trace_elems)?
         .into_iter()
-        .map(|x| x.as_atom().unwrap().as_u64().unwrap())
+        .map(|x| {
+            x.as_atom()
+                .expect("trace_elems element should be an atom")
+                .as_u64()
+                .expect("trace_elems element should be a u64")
+        })
         .map(Belt)
         .collect();
     let comp_elems: Vec<Belt> = HoonList::try_from(comp_elems)?
         .into_iter()
-        .map(|x| x.as_atom().unwrap().as_u64().unwrap())
+        .map(|x| {
+            x.as_atom()
+                .expect("comp_elems element should be an atom")
+                .as_u64()
+                .expect("comp_elems element should be a u64")
+        })
         .map(Belt)
         .collect();
     let num_comp_pieces = num_comp_pieces.as_atom()?.as_u64()?;
@@ -128,11 +138,21 @@ pub fn evaluate_deep_jet(context: &mut Context, subject: Noun) -> Result<Noun, J
     };
     let heights: Vec<u64> = HoonList::try_from(heights)?
         .into_iter()
-        .map(|x| x.as_atom().unwrap().as_u64().unwrap())
+        .map(|x| {
+            x.as_atom()
+                .expect("heights element should be an atom")
+                .as_u64()
+                .expect("heights element should be a u64")
+        })
         .collect();
     let full_widths: Vec<u64> = HoonList::try_from(full_widths)?
         .into_iter()
-        .map(|x| x.as_atom().unwrap().as_u64().unwrap())
+        .map(|x| {
+            x.as_atom()
+                .expect("full_widths element should be an atom")
+                .as_u64()
+                .expect("full_widths element should be a u64")
+        })
         .collect();
     let omega = omega.as_felt()?;
     let index = index.as_atom()?.as_u64()?;
@@ -141,7 +161,7 @@ pub fn evaluate_deep_jet(context: &mut Context, subject: Noun) -> Result<Noun, J
 
     //  TODO use g defined wherever it is
     let g = Felt::lift(Belt(7));
-    let omega_pow = fmul_(&fpow_(omega, index as u64), &g);
+    let omega_pow = fmul_(&fpow_(omega, index), &g);
 
     let mut acc = Felt::zero();
     let mut num = 0usize;
@@ -191,7 +211,7 @@ pub fn evaluate_deep_jet(context: &mut Context, subject: Noun) -> Result<Noun, J
     }
 
     // Process composition elements
-    let denom = fsub_(&omega_pow, &fpow_(deep_challenge, num_comp_pieces as u64));
+    let denom = fsub_(&omega_pow, &fpow_(deep_challenge, num_comp_pieces));
 
     (acc, _) = process_belt(
         &comp_elems,
@@ -223,8 +243,8 @@ fn process_belt(
     let mut acc = *acc_start;
     let mut num = start_num;
 
-    for i in 0..width {
-        let elem_val = Felt::lift(elems[i]);
+    for elem in elems.iter().take(width) {
+        let elem_val = Felt::lift(*elem);
         let eval_val = evals[num];
         let weight_val = weights[num];
 
@@ -284,7 +304,7 @@ impl Fops for Felt {
         if let Ok(r) = noun.as_felt() {
             Ok(*r)
         } else {
-            return Err(BAIL_FAIL);
+            Err(BAIL_FAIL)
         }
     }
 
