@@ -849,6 +849,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
+name = "approver"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "clap",
+ "kernels",
+ "nockapp",
+ "nockapp-grpc",
+ "nockvm",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "zkvm-jetpack",
+]
+
+[[package]]
 name = "arboard"
 version = "3.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4574,6 +4590,10 @@ dependencies = [
 
 [[package]]
 name = "kernels"
+version = "0.1.0"
+
+[[package]]
+name = "kernels-open-approver"
 version = "0.1.0"
 
 [[package]]

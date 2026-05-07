@@ -9,8 +9,11 @@ default = []
 bazel_build = []
 
 # Specific kernels
+approver = []
 dumb = []
 wallet = []
 miner = []
+nockchain-peek = []
+verifier = []
 
 [dependencies]

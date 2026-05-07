@@ -103,7 +103,7 @@ build-trivial: ensure-dirs
 	echo '%trivial' > hoon/trivial.hoon
 	hoonc --arbitrary hoon/trivial.hoon
 
-HOON_TARGETS=assets/dumb.jam assets/wal.jam assets/miner.jam assets/peek.jam assets/bridge.jam assets/verifier.jam
+HOON_TARGETS=assets/dumb.jam assets/wal.jam assets/miner.jam assets/peek.jam assets/bridge.jam assets/verifier.jam assets/approver.jam
 
 .PHONY: nuke-hoonc-data
 nuke-hoonc-data:
@@ -124,6 +124,10 @@ build-hoon: ensure-dirs update-hoonc $(HOON_TARGETS)
 
 .PHONY: build-verifier
 build-verifier: ensure-dirs update-hoonc assets/verifier.jam
+	$(call show_env_vars)
+
+.PHONY: build-approver
+build-approver: ensure-dirs update-hoonc assets/approver.jam
 	$(call show_env_vars)
 
 .PHONY: build-assets
@@ -173,3 +177,10 @@ assets/verifier.jam: ensure-dirs hoon/apps/verifier/verifier.hoon $(HOON_SRCS)
 	rm -f assets/verifier.jam
 	hoonc hoon/apps/verifier/verifier.hoon hoon
 	mv out.jam assets/verifier.jam
+
+## Build approver.jam
+assets/approver.jam: ensure-dirs hoon/apps/approver/approver.hoon $(HOON_SRCS)
+	$(call show_env_vars)
+	rm -f assets/approver.jam
+	hoonc hoon/apps/approver/approver.hoon hoon
+	mv out.jam assets/approver.jam
