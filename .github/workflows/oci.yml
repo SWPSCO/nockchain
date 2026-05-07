@@ -53,8 +53,9 @@ jobs:
         REQUESTED_UPSTREAM_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.upstream_commit || github.event.client_payload.upstream_commit || '' }}
         REQUESTED_IMAGE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.image_tag || github.event.client_payload.image_tag || '' }}
       run: |
-        upstream_ref="${REQUESTED_UPSTREAM_REF:-master}"
-        image_tag="$REQUESTED_IMAGE_TAG"
+        upstream_ref=$(printf '%s' "$REQUESTED_UPSTREAM_REF" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        image_tag=$(printf '%s' "$REQUESTED_IMAGE_TAG" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        upstream_ref="${upstream_ref:-master}"
 
         if [ -n "$image_tag" ] && ! echo "$image_tag" | grep -Eq '^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$'; then
           echo "Invalid Docker tag: $image_tag" >&2
