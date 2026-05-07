@@ -4,6 +4,15 @@ on:
   repository_dispatch:
     types: [build-master]
   workflow_dispatch:
+    inputs:
+      upstream_commit:
+        description: "Upstream nockchain commit/ref to build (defaults to master)"
+        required: false
+        type: string
+      image_tag:
+        description: "Optional extra Docker tag to push (tag name only)"
+        required: false
+        type: string
 
 jobs:
   vars:
@@ -38,13 +47,53 @@ jobs:
         username: ${{ secrets.DOCKER_USERNAME }}
         password: ${{ secrets.DOCKER_PASSWORD }}
         
-    - name: Get commit hash
+    - name: Resolve build inputs
       id: vars
+      env:
+        REQUESTED_UPSTREAM_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.upstream_commit || github.event.client_payload.upstream_commit || '' }}
+        REQUESTED_IMAGE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.image_tag || github.event.client_payload.image_tag || '' }}
       run: |
-        hash=$(curl -s https://api.github.com/repos/nockchain/nockchain/commits/master | jq -r '.sha')
+        upstream_ref="${REQUESTED_UPSTREAM_REF:-master}"
+        image_tag="$REQUESTED_IMAGE_TAG"
+
+        if [ -n "$image_tag" ] && ! echo "$image_tag" | grep -Eq '^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$'; then
+          echo "Invalid Docker tag: $image_tag" >&2
+          echo "Use only letters, numbers, underscores, periods, and dashes; tag must not start with a period or dash." >&2
+          exit 1
+        fi
+
+        if echo "$upstream_ref" | grep -Eq '^[0-9a-fA-F]{40}$'; then
+          hash="$upstream_ref"
+        else
+          hash=$(
+            git ls-remote https://github.com/nockchain/nockchain.git \
+              "$upstream_ref" \
+              "refs/heads/$upstream_ref" \
+              "refs/tags/$upstream_ref" |
+              awk '$2 ~ /\^\{\}$/ { peeled=$1 } NR == 1 { first=$1 } END { print peeled ? peeled : first }'
+          )
+          if [ -z "$hash" ]; then
+            hash=$(curl -fsSL "https://api.github.com/repos/nockchain/nockchain/commits/$upstream_ref" | jq -r '.sha // empty' || true)
+          fi
+        fi
+
+        if [ -z "$hash" ]; then
+          echo "Unable to resolve upstream ref: $upstream_ref" >&2
+          exit 1
+        fi
+
         echo "hash=$hash" >> $GITHUB_OUTPUT
         echo "timestamp=$(date +%s)" >> $GITHUB_OUTPUT
         echo "build_date=$(date)" >> $GITHUB_OUTPUT
+        {
+          echo "image_tags<<EOF"
+          echo "swpsco/nockchain:latest"
+          echo "swpsco/nockchain:$hash"
+          if [ -n "$image_tag" ]; then
+            echo "swpsco/nockchain:$image_tag"
+          fi
+          echo "EOF"
+        } >> $GITHUB_OUTPUT
         
     - name: Create Dockerfile
       run: |
@@ -60,6 +109,7 @@ jobs:
         ENV BUILD_USER=${BUILD_USER}
         ENV BUILD_TIMESTAMP=${BUILD_TIMESTAMP}
         ENV BUILD_DATE=${BUILD_DATE}
+        ARG UPSTREAM_COMMIT=master
         RUN apt-get update && apt-get install -y \
             build-essential \
             musl-tools \
@@ -71,7 +121,9 @@ jobs:
             unzip protoc-30.2-linux-x86_64.zip -d /usr/local && \
             rm protoc-30.2-linux-x86_64.zip
         WORKDIR /build
-        RUN git clone https://github.com/nockchain/nockchain.git .
+        RUN git clone https://github.com/nockchain/nockchain.git . && \
+            (git fetch --tags origin "${UPSTREAM_COMMIT}" || true) && \
+            git checkout "${UPSTREAM_COMMIT}"
         RUN rustup target add x86_64-unknown-linux-gnu
         RUN mkdir -p ~/.cargo && \
             echo '[net]' >> ~/.cargo/config.toml && \
@@ -93,12 +145,11 @@ jobs:
       with:
         context: .
         push: true
-        tags: |
-          swpsco/nockchain:latest
-          swpsco/nockchain:${{ steps.vars.outputs.hash }}
+        tags: ${{ steps.vars.outputs.image_tags }}
         build-args: |
           BUILD_HOST=SWPSCoCI
           BUILD_USER=SWPS
           BUILD_TIMESTAMP=${{ steps.vars.outputs.timestamp }}
           BUILD_DATE=${{ steps.vars.outputs.build_date }}
+          UPSTREAM_COMMIT=${{ steps.vars.outputs.hash }}
         no-cache: true
