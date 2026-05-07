@@ -719,7 +719,8 @@
     |=  target-bn=bignum:bn
     ^-  bignum:bn
     =/  target-atom=@  (merge:bn target-bn)
-    (chunk:bn (div max-target-atom +(target-atom)))
+    =/  raw=@  (div max-target-atom +(target-atom))
+    (chunk:bn ?:(=(0 raw) 1 raw))
   ::
   ++  to-page-summary
     |=  pag=form
@@ -767,6 +768,11 @@
     |=  lp=form
     ^-  page
     lp(pow (biff pow.lp |=(j=@ ((soft proof) (cue j)))))
+  ::
+  ++  to-page-no-pow
+    |=  lp=form
+    ^-  page
+    lp(pow ~)
   --
 ::
 ::  +page-msg: (list belt) that enforces that each elt is a belt

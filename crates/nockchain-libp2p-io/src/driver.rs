@@ -1509,6 +1509,17 @@ fn record_crown_error_metric(error: &CrownError<ExternalError>, metrics: &Nockch
         CrownError::SerfLoadError => {
             metrics.requests_crown_error_serf_load_error.increment();
         }
+        CrownError::SerfInitAllocationError(_) => {
+            metrics
+                .requests_crown_error_serf_init_allocation_error
+                .increment();
+        }
+        CrownError::SerfInitPanic(_) => {
+            metrics.requests_crown_error_serf_init_panic.increment();
+        }
+        CrownError::CheckpointKernelHashMismatch { .. } => {
+            metrics.requests_crown_error_serf_load_error.increment();
+        }
         CrownError::WorkBail => {
             metrics.requests_crown_error_work_bail.increment();
         }

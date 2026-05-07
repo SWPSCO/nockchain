@@ -13,12 +13,16 @@
 
 mod command;
 mod connection;
+mod create_tx;
 mod error;
 mod recipient;
+#[cfg(test)]
+mod tests;
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::Parser;
 #[cfg(test)]
@@ -30,6 +34,7 @@ use command::{
 };
 use kernels_open_wallet::KERNEL;
 use nockapp::driver::*;
+use nockapp::drivers::one_punch::OnePunchWire;
 use nockapp::kernel::boot::{self, NockStackSize};
 use nockapp::noun::slab::{NockJammer, NounSlab};
 use nockapp::utils::bytes::Byts;
@@ -43,15 +48,30 @@ use nockapp_grpc::pb::common::v1::Base58Hash as PbBase58Hash;
 use nockapp_grpc::pb::public::v2::transaction_accepted_response;
 use nockapp_grpc::{private_nockapp, public_nockchain};
 use nockchain_types::common::{Hash, SchnorrPubkey, TimelockRangeAbsolute, TimelockRangeRelative};
-use nockchain_types::{v0, v1};
+use nockchain_types::tx_engine::common::Name;
+use nockchain_types::tx_engine::v1::tx::{LockPrimitive, SpendCondition};
+use nockchain_types::{default_fakenet_blockchain_constants, v0, v1};
 use nockvm::jets::cold::Nounable;
 use nockvm::noun::{Atom, Cell, IndirectAtom, Noun, D, NO, SIG, T, YES};
 use noun_serde::prelude::*;
 use noun_serde::NounDecodeError;
-use recipient::{recipient_tokens_to_specs, RecipientSpec};
+#[cfg(test)]
+use recipient::BRIDGE_LOCK_ROOT_DEFAULT_B58;
+use recipient::{
+    planner_recipient_outputs, planner_refund_output_template, recipient_tokens_to_specs,
+    RecipientSpec,
+};
 use termimad::MadSkin;
 use tokio::fs as tokio_fs;
 use tracing::{error, info, warn};
+use wallet_tx_builder::adapter::{
+    normalize_balance_pages, NormalizeSnapshotError, NormalizedSnapshot, SnapshotConsistencyError,
+};
+use wallet_tx_builder::lock_resolver::LockMatcher;
+use wallet_tx_builder::planner::{plan_create_tx, PlanError};
+use wallet_tx_builder::types::{
+    CandidateVersionPolicy, ChainContext, PlanRequest, PlanningMode, SelectionMode, SelectionOrder,
+};
 use zkvm_jetpack::hot::produce_prover_hot_state;
 
 use crate::public_nockchain::v2::client::BalanceRequest;
@@ -85,6 +105,7 @@ async fn main() -> Result<(), NockAppError> {
     .map_err(|e| CrownError::Unknown(format!("Kernel setup failed: {}", e)))?;
 
     let mut wallet = Wallet::new(kernel);
+    let mut synced_snapshot_for_planner: Option<NormalizedSnapshot> = None;
 
     if cli.fakenet {
         wallet.set_fakenet().await?;
@@ -123,7 +144,7 @@ async fn main() -> Result<(), NockAppError> {
         _ => true,
     };
 
-    let poke = match &cli.command {
+    let mut poke = match &cli.command {
         Commands::Keygen => {
             let mut entropy = [0u8; 32];
             let mut salt = [0u8; 16];
@@ -292,32 +313,13 @@ async fn main() -> Result<(), NockAppError> {
             }
         }
         Commands::ListNotesByAddressCsv { address } => Wallet::list_notes_by_address_csv(address),
-        Commands::CreateTx {
-            names,
-            recipients,
-            fee,
-            allow_low_fee,
-            refund_pkh,
-            index,
-            hardened,
-            include_data,
-            sign_keys,
-            save_raw_tx,
-            note_selection_strategy,
-        } => {
-            let recipient_specs = recipient_tokens_to_specs(recipients.clone())?;
-            let signing_keys = Wallet::collect_signing_keys(*index, *hardened, sign_keys)?;
-            Wallet::create_tx(
-                names.clone(),
-                recipient_specs,
-                *fee,
-                *allow_low_fee,
-                refund_pkh.clone(),
-                signing_keys,
-                *include_data,
-                *save_raw_tx,
-                *note_selection_strategy,
-            )
+        Commands::CreateTx { .. } => {
+            // Planner-backed create-tx runs after sync once we have a fresh snapshot.
+            Wallet::show_balance()
+        }
+        Commands::MigrateV0Notes { .. } => {
+            // Planner-backed v0 migration runs after sync once we have a fresh snapshot.
+            Wallet::show_balance()
         }
         Commands::SignMultisigTx {
             transaction,
@@ -384,17 +386,101 @@ async fn main() -> Result<(), NockAppError> {
         };
 
         let connection_target = cli.connection.target();
-        let pokes =
+        let sync_result =
             connection::sync_wallet_balance(&mut wallet, &connection_target, pubkeys, first_names)
                 .await?;
 
-        for poke in pokes {
+        synced_snapshot_for_planner = sync_result.normalized_snapshot;
+
+        for poke in sync_result.pokes {
             let _ = wallet
                 .app
                 .poke(SystemWire.to_wire(), poke)
                 .await
                 .expect("poke should succeed");
         }
+    }
+
+    if let Commands::MigrateV0Notes { destination } = &cli.command {
+        let mut prepared = wallet
+            .prepare_migrate_v0_notes_per_signer(
+                synced_snapshot_for_planner.take(),
+                destination.clone(),
+            )
+            .await?;
+        if prepared.summary.created_count == 0 {
+            let markdown = Wallet::format_migrate_v0_notes_summary(&prepared.summary);
+            let skin = MadSkin::default_dark();
+            println!("{}", skin.term_text(&markdown));
+            return Err(NockAppError::OtherError(
+                "No v0 migration transactions were created".to_string(),
+            ));
+        }
+
+        let tx_dir = Path::new("txs");
+        let before = Wallet::snapshot_written_txs(tx_dir).await?;
+        let (noun, operation) = prepared.take_poke().ok_or_else(|| {
+            NockAppError::from(CrownError::Unknown(
+                "migrate-v0-notes prepared migration transactions but did not produce a batch create poke"
+                    .to_string(),
+            ))
+        })?;
+        wallet
+            .app
+            .add_io_driver(one_punch_driver(noun, operation))
+            .await;
+        wallet.app.add_io_driver(file_driver()).await;
+        wallet.app.add_io_driver(markdown_driver()).await;
+        wallet.app.add_io_driver(exit_driver()).await;
+
+        match wallet.app.run().await {
+            Ok(_) => {
+                let after = Wallet::snapshot_written_txs(tx_dir).await?;
+                let tx_paths = Wallet::detect_written_tx_paths(&before, &after)?;
+                let summary = prepared.finalize(tx_paths)?;
+                let markdown = Wallet::format_migrate_v0_notes_summary(&summary);
+                let skin = MadSkin::default_dark();
+                println!("{}", skin.term_text(&markdown));
+                info!("Command executed successfully");
+            }
+            Err(e) => {
+                error!("Command failed: {}", e);
+                return Err(e);
+            }
+        }
+        return Ok(());
+    }
+
+    if let Commands::CreateTx {
+        names,
+        recipients,
+        fee,
+        allow_low_fee,
+        refund_pkh,
+        index,
+        hardened,
+        include_data,
+        sign_keys,
+        save_raw_tx,
+        note_selection_strategy,
+    } = &cli.command
+    {
+        let recipient_specs = recipient_tokens_to_specs(recipients.clone())?;
+        let signing_keys = Wallet::collect_signing_keys(*index, *hardened, sign_keys)?;
+        poke = wallet
+            .create_tx_with_planner(
+                synced_snapshot_for_planner.take(),
+                names.clone(),
+                *fee,
+                recipient_specs,
+                *allow_low_fee,
+                refund_pkh.clone(),
+                signing_keys,
+                *include_data,
+                *save_raw_tx,
+                *note_selection_strategy,
+            )
+            .await?;
     }
 
     wallet
@@ -417,17 +503,7 @@ async fn main() -> Result<(), NockAppError> {
     }
 }
 
-#[allow(dead_code)]
-fn validate_label(s: &str) -> Result<String, String> {
-    if s.chars()
-        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-    {
-        Ok(s.to_string())
-    } else {
-        Err("Label must contain only lowercase letters, numbers, and hyphens".to_string())
-    }
-}
-
+/// Wallet runtime wrapper around the underlying nockapp kernel.
 pub struct Wallet {
     app: NockApp,
 }
@@ -450,17 +526,20 @@ impl Wallet {
         Wallet { app: nockapp }
     }
 
+    /// Applies the shared Rust fakenet constants so wallet state matches node fakenet defaults.
     async fn set_fakenet(&mut self) -> Result<(), NockAppError> {
-        let mut slab: NounSlab<NockJammer> = NounSlab::new();
-        let tag = String::from("fakenet").to_noun(&mut slab);
-        slab.modify(|_| vec![tag, SIG]);
-        let wire = SystemWire.to_wire();
-        let _ = self.app.poke(wire, slab).await?;
+        let mut slab = NounSlab::new();
+        let constants = default_fakenet_blockchain_constants();
+        let constants_noun = constants.to_noun(&mut slab);
+        let (poke, _) = Self::wallet("fakenet", &[constants_noun], Operation::Poke, &mut slab)?;
+        let wire = OnePunchWire::Poke.to_wire();
+        let _ = self.app.poke(wire, poke).await?;
         Ok(())
     }
 
+    /// Reads whether current wallet state was initialized in fakenet mode.
     async fn is_fakenet(&mut self) -> Result<bool, NockAppError> {
-        let mut slab: NounSlab<NockJammer> = NounSlab::new();
+        let mut slab = NounSlab::new();
         let tag = String::from("fakenet").to_noun(&mut slab);
         slab.modify(|_| vec![tag, SIG]);
         let result = self.app.peek(slab).await?;
@@ -513,7 +592,7 @@ impl Wallet {
     /// * `entropy` - The entropy to use for key generation.
     /// * `sal` - The salt to use for key generation.
     fn keygen(entropy: &[u8; 32], sal: &[u8; 16]) -> CommandNoun<NounSlab> {
-        let mut slab = NounSlab::new();
+        let mut slab: NounSlab<NockJammer> = NounSlab::new();
         let ent: Byts = Byts::new(entropy.to_vec());
         let ent_noun = ent.into_noun(&mut slab);
         let sal: Byts = Byts::new(sal.to_vec());
@@ -541,15 +620,15 @@ impl Wallet {
     //    )
     //}
 
-    // Derives a child key from current master key.
-    //
-    // # Arguments
-    //
-    // * `index` - The index of the child key to derive
-    // * `hardened` - Whether the child key should be hardened
-    // * `label` - Optional label for the child key
+    /// Derives a child key from the current master key path.
+    ///
+    /// # Arguments
+    ///
+    /// * `index` - The index of the child key to derive.
+    /// * `hardened` - Whether the child key should be hardened.
+    /// * `label` - Optional label persisted alongside the derived key.
     fn derive_child(index: u64, hardened: bool, label: &Option<String>) -> CommandNoun<NounSlab> {
-        let mut slab = NounSlab::new();
+        let mut slab: NounSlab<NockJammer> = NounSlab::new();
         let index_noun = D(index);
         let hardened_noun = if hardened { YES } else { NO };
         let label_noun = label.as_ref().map_or(SIG, |l| {
@@ -620,6 +699,7 @@ impl Wallet {
         )
     }
 
+    /// Signs an arbitrary message payload with the requested signing key.
     fn sign_message(
         message_bytes: &[u8],
         index: Option<u64>,
@@ -654,6 +734,7 @@ impl Wallet {
         )
     }
 
+    /// Verifies a signature over an arbitrary message payload.
     fn verify_message(
         message_bytes: &[u8],
         signature_jam: &[u8],
@@ -672,6 +753,7 @@ impl Wallet {
         )
     }
 
+    /// Signs a base58 tip5 hash directly without message prehashing.
     fn sign_hash(hash_b58: &str, index: Option<u64>, hardened: bool) -> CommandNoun<NounSlab> {
         let mut slab = NounSlab::new();
 
@@ -701,6 +783,7 @@ impl Wallet {
         )
     }
 
+    /// Verifies a signature over a base58 tip5 hash.
     fn verify_hash(
         hash_b58: &str,
         signature_jam: &[u8],
@@ -842,6 +925,7 @@ impl Wallet {
     }
 
     #[allow(dead_code)]
+    /// Builds a kernel timelock intent from optional absolute/relative ranges.
     fn timelock_intent_from_ranges(
         absolute: Option<TimelockRangeAbsolute>,
         relative: Option<TimelockRangeRelative>,
@@ -856,6 +940,7 @@ impl Wallet {
         }
     }
 
+    /// Parses `"[first last],[first last]"` note-name syntax used by create-tx.
     fn parse_note_names(raw: &str) -> Result<Vec<(String, String)>, NockAppError> {
         let mut names = Vec::new();
 
@@ -897,6 +982,7 @@ impl Wallet {
         Ok(names)
     }
 
+    /// Resolves effective sign-key list from explicit `--sign-key` or index/hardened fallback.
     fn collect_signing_keys(
         index: Option<u64>,
         hardened: bool,
@@ -914,6 +1000,7 @@ impl Wallet {
         }
     }
 
+    /// Parses one `index[:hardened]` sign-key token from CLI input.
     fn parse_sign_key_entry(entry: &str) -> Result<(u64, bool), NockAppError> {
         let trimmed = entry.trim();
         if trimmed.is_empty() {
@@ -927,183 +1014,7 @@ impl Wallet {
         Self::parse_sign_key_components(index_part, hardened_part)
     }
 
-    /// Creates a transaction. Use `--refund-pkh` when spending legacy v0 notes so the kernel
-    /// knows where to return change. When spending v1 notes the refund automatically
-    /// defaults back to the note owner, so `--refund-pkh` can be omitted.
-    fn create_tx(
-        names: String,
-        recipients: Vec<RecipientSpec>,
-        fee: u64,
-        allow_low_fee: bool,
-        refund_pkh: Option<String>,
-        sign_keys: Vec<(u64, bool)>,
-        include_data: bool,
-        save_raw_tx: bool,
-        note_selection: NoteSelectionStrategyCli,
-    ) -> CommandNoun<NounSlab> {
-        let mut slab = NounSlab::new();
-
-        let names_vec = Self::parse_note_names(&names)?;
-        let names_noun = names_vec
-            .into_iter()
-            .rev()
-            .fold(D(0), |acc, (first, last)| {
-                let first_noun = make_tas(&mut slab, &first).as_noun();
-                let last_noun = make_tas(&mut slab, &last).as_noun();
-                let name_pair = T(&mut slab, &[first_noun, last_noun]);
-                Cell::new(&mut slab, name_pair, acc).as_noun()
-            });
-
-        let fee_noun = D(fee);
-        let order_noun = recipients.to_noun(&mut slab);
-        let sign_key_noun = Wallet::encode_sign_keys(&mut slab, sign_keys);
-
-        let refund_noun = if let Some(refund) = refund_pkh {
-            let refund_hash = Hash::from_base58(&refund).map_err(|err| {
-                NockAppError::from(CrownError::Unknown(format!(
-                    "Invalid refund pubkey hash '{}': {}",
-                    refund, err
-                )))
-            })?;
-            let refund_atom = refund_hash.to_noun(&mut slab);
-            T(&mut slab, &[SIG, refund_atom])
-        } else {
-            SIG
-        };
-        let include_data_noun = include_data.to_noun(&mut slab);
-        let allow_low_fee_noun = allow_low_fee.to_noun(&mut slab);
-        let save_raw_tx_noun = save_raw_tx.to_noun(&mut slab);
-        let note_selection_noun = make_tas(&mut slab, note_selection.tas_label()).as_noun();
-
-        Self::wallet(
-            "create-tx",
-            &[
-                names_noun, order_noun, fee_noun, allow_low_fee_noun, sign_key_noun, refund_noun,
-                include_data_noun, save_raw_tx_noun, note_selection_noun,
-            ],
-            Operation::Poke,
-            &mut slab,
-        )
-    }
-
-    fn encode_sign_keys(slab: &mut NounSlab, keys: Vec<(u64, bool)>) -> Noun {
-        if keys.is_empty() {
-            SIG
-        } else {
-            Some(keys).to_noun(slab)
-        }
-    }
-
-    async fn update_balance_grpc_public(
-        client: &mut public_nockchain::PublicNockchainGrpcClient,
-        pubkeys: Vec<String>,
-        first_names: Vec<String>,
-    ) -> Result<Vec<NounSlab>, NockAppError> {
-        let mut results = Vec::new();
-
-        for first_name in first_names {
-            let mut slab = NounSlab::new(); // Define slab - adjust as needed
-            let response = client
-                .wallet_get_balance(&BalanceRequest::FirstName(first_name))
-                .await
-                .map_err(|e| {
-                    NockAppError::OtherError(format!("Failed to request current balance: {}", e))
-                })?;
-            let balance_update = v1::BalanceUpdate::try_from(response).map_err(|e| {
-                NockAppError::OtherError(format!("Failed to parse balance update: {}", e))
-            })?;
-            let wrapped_balance = Some(Some(balance_update));
-            let balance_noun = wrapped_balance.to_noun(&mut slab);
-            let head = make_tas(&mut slab, "update-balance-grpc").as_noun();
-            let full = T(&mut slab, &[head, balance_noun]);
-            slab.set_root(full);
-            results.push(slab);
-        }
-
-        for (_index, key) in pubkeys.iter().enumerate() {
-            let mut slab = NounSlab::new(); // Define slab - adjust as needed
-            let response = client
-                .wallet_get_balance(&BalanceRequest::Address(key.to_owned()))
-                .await
-                .map_err(|e| {
-                    NockAppError::OtherError(format!("Failed to request current balance: {}", e))
-                })?;
-            let balance_update = v1::BalanceUpdate::try_from(response).map_err(|e| {
-                NockAppError::OtherError(format!("Failed to parse balance update: {}", e))
-            })?;
-            let wrapped_balance = Some(Some(balance_update));
-            let balance_noun = wrapped_balance.to_noun(&mut slab);
-            let head = make_tas(&mut slab, "update-balance-grpc").as_noun();
-            let full = T(&mut slab, &[head, balance_noun]);
-            slab.set_root(full);
-            results.push(slab);
-        }
-
-        Ok(results)
-    }
-
-    async fn update_balance_grpc_private(
-        client: &mut private_nockapp::PrivateNockAppGrpcClient,
-        mut pubkeys: Vec<String>,
-        mut first_names: Vec<String>,
-    ) -> Result<Vec<NounSlab>, NockAppError> {
-        first_names.sort();
-        first_names.dedup();
-        pubkeys.sort();
-        pubkeys.dedup();
-
-        let mut request_index: i32 = 0;
-        let mut results = Vec::new();
-
-        for first_name in first_names {
-            let mut slab = NounSlab::new();
-
-            let mut path_slab = NounSlab::<NockJammer>::new();
-            let path_noun = vec!["balance-by-first-name".to_string(), first_name.clone()]
-                .to_noun(&mut path_slab);
-            path_slab.set_root(path_noun);
-            let path_bytes = path_slab.jam().to_vec();
-
-            let response = client.peek(request_index, path_bytes).await.map_err(|e| {
-                NockAppError::OtherError(format!(
-                    "Failed to peek balance for first name {first_name}: {e}"
-                ))
-            })?;
-            request_index = request_index.wrapping_add(1);
-
-            let balance = slab.cue_into(response.as_bytes()?)?;
-            let head = make_tas(&mut slab, "update-balance-grpc").as_noun();
-            let full = T(&mut slab, &[head, balance]);
-            slab.set_root(full);
-            results.push(slab);
-        }
-
-        for key in pubkeys {
-            let mut slab = NounSlab::new();
-            let mut path_slab = NounSlab::<NockJammer>::new();
-            let path_noun =
-                vec!["balance-by-pubkey".to_string(), key.clone()].to_noun(&mut path_slab);
-            path_slab.set_root(path_noun);
-            let path_bytes = path_slab.jam().to_vec();
-
-            let response = client.peek(request_index, path_bytes).await.map_err(|e| {
-                NockAppError::OtherError(format!("Failed to peek balance for pubkey {key}: {e}"))
-            })?;
-            request_index = request_index.wrapping_add(1);
-
-            let balance = slab.cue_into(response.as_bytes()?)?;
-            let head = make_tas(&mut slab, "update-balance-grpc").as_noun();
-            let full = T(&mut slab, &[head, balance]);
-            slab.set_root(full);
-            results.push(slab);
-        }
-
-        Ok(results)
-    }
-
     /// Lists all notes in the wallet.
-    ///
-    /// Retrieves and displays all notes from the wallet's balance, sorted by assets.
     fn list_notes() -> CommandNoun<NounSlab> {
         let mut slab = NounSlab::new();
         Self::wallet("list-notes", &[], Operation::Poke, &mut slab)
@@ -1285,6 +1196,7 @@ impl Wallet {
         Ok((index, hardened))
     }
 
+    /// Parses permissive bool-like hardened flags used by CLI sign-key input.
     fn parse_boolish(flag: &str) -> Result<bool, NockAppError> {
         match flag {
             "true" | "t" | "1" | "yes" | "y" => Ok(true),
@@ -1297,6 +1209,7 @@ impl Wallet {
         }
     }
 
+    /// Parses comma-separated `index:hardened` sign-key tuples from CLI input.
     fn parse_sign_keys(sign_keys_str: &str) -> Result<Vec<(u64, bool)>, NockAppError> {
         let mut sign_keys = Vec::new();
         for piece in sign_keys_str.split(',') {
@@ -1322,6 +1235,7 @@ impl Wallet {
         Ok(sign_keys)
     }
 
+    /// Parses comma-separated base58 pubkey hashes for multisig watch import.
     fn parse_pubkey_hashes(pubkeys_str: &str) -> Result<Vec<Hash>, NockAppError> {
         let pubkeys: Vec<Hash> = pubkeys_str
             .split(',')
@@ -1350,6 +1264,7 @@ impl Wallet {
         Ok(pubkeys)
     }
 
+    /// Signs a multisig transaction with provided key index/hardened tuples.
     fn sign_multisig_tx(
         transaction_path: &str,
         sign_keys_str: Option<&str>,
@@ -1387,6 +1302,7 @@ impl Wallet {
     }
 
     #[allow(dead_code)]
+    /// Displays a multisig transaction payload without signing.
     fn show_multisig_tx(transaction_path: &str) -> CommandNoun<NounSlab> {
         let mut slab = NounSlab::new();
 
@@ -1406,6 +1322,7 @@ impl Wallet {
     }
 }
 
+/// Returns wallet data directory path, creating it if missing.
 pub async fn wallet_data_dir() -> Result<PathBuf, NockAppError> {
     let wallet_data_dir = system_data_dir().join("wallet");
     if !wallet_data_dir.exists() {
@@ -1419,6 +1336,7 @@ pub async fn wallet_data_dir() -> Result<PathBuf, NockAppError> {
 }
 
 #[allow(dead_code)]
+/// Confirms dangerous upper-bound timelock usage with explicit user acknowledgement.
 fn confirm_upper_bound_warning() -> Result<(), NockAppError> {
     println!(
         "Warning: specifying an upper timelock bound will make the output unspendable after that height. Only use this feature if you know what you're doing."
@@ -1442,6 +1360,7 @@ fn confirm_upper_bound_warning() -> Result<(), NockAppError> {
     }
 }
 
+/// Normalizes watch input as either schnorr pubkey or hash base58 value.
 fn normalize_watch_address(value: String) -> Result<Option<String>, NockAppError> {
     if value.len() >= SchnorrPubkey::BYTES_BASE58 {
         match SchnorrPubkey::from_base58(&value) {
@@ -1469,6 +1388,7 @@ fn normalize_watch_address(value: String) -> Result<Option<String>, NockAppError
 }
 
 #[allow(dead_code)]
+/// Normalizes a first-name hash and filters invalid values.
 fn normalize_first_name(value: String) -> Result<Option<String>, NockAppError> {
     match Hash::from_base58(&value) {
         Ok(hash) => Ok(Some(hash.to_base58())),
@@ -1479,6 +1399,7 @@ fn normalize_first_name(value: String) -> Result<Option<String>, NockAppError> {
     }
 }
 
+/// Queries the public node for acceptance status of one transaction id.
 async fn run_transaction_accepted(
     connection: &connection::ConnectionCli,
     tx_id: &str,
@@ -1539,6 +1460,7 @@ async fn run_transaction_accepted(
     Ok(())
 }
 
+/// Renders a compact markdown summary for transaction acceptance status.
 fn format_transaction_accepted_markdown(tx_id: &str, accepted: bool) -> String {
     let status_line = if accepted {
         "- status: **accepted by node**"
@@ -1554,436 +1476,10 @@ fn format_transaction_accepted_markdown(tx_id: &str, accepted: bool) -> String {
     .join("\n")
 }
 
+/// Builds an atom from raw bytes using indirect atom allocation.
 pub fn from_bytes(stack: &mut NounSlab, bytes: &[u8]) -> Atom {
     unsafe {
         let mut tas_atom = IndirectAtom::new_raw_bytes(stack, bytes.len(), bytes.as_ptr());
         tas_atom.normalize_as_atom()
-    }
-}
-
-// TODO: all these tests need to also validate the results and not
-// just ensure that the wallet can be poked with the expected noun.
-#[allow(warnings)]
-#[cfg(test)]
-mod tests {
-    use std::sync::Once;
-
-    use nockapp::kernel::boot::{self, Cli as BootCli};
-    use nockapp::wire::SystemWire;
-    use nockapp::{exit_driver, AtomExt, Bytes};
-    use nockchain_math::belt::Belt;
-    use nockchain_types::tx_engine::common::{BlockHeight, BlockHeightDelta};
-    use nockchain_types::tx_engine::v0;
-    use tokio::sync::mpsc;
-
-    use super::*;
-
-    static INIT: Once = Once::new();
-
-    fn init_tracing() {
-        INIT.call_once(|| {
-            let cli = boot::default_boot_cli(true);
-            boot::init_default_tracing(&cli);
-        });
-    }
-
-    #[test]
-    fn timelock_cli_accepts_ascending_bound() {
-        let range: TimelockRangeCli = "1..5".parse().unwrap();
-        let absolute = range.absolute();
-        assert_eq!(absolute.min, Some(BlockHeight(Belt(1))));
-        assert_eq!(absolute.max, Some(BlockHeight(Belt(5))));
-    }
-
-    #[test]
-    fn timelock_cli_accepts_open_upper_bound() {
-        let range: TimelockRangeCli = "..5".parse().unwrap();
-        let absolute = range.absolute();
-        assert_eq!(absolute.min, None);
-        assert_eq!(absolute.max, Some(BlockHeight(Belt(5))));
-    }
-
-    #[test]
-    fn timelock_cli_accepts_open_lower_bound() {
-        let range: TimelockRangeCli = "7..".parse().unwrap();
-        let relative = range.relative();
-        assert_eq!(relative.min, Some(BlockHeightDelta(Belt(7))));
-        assert_eq!(relative.max, None);
-    }
-
-    #[test]
-    fn timelock_cli_rejects_descending_bounds() {
-        let err = TimelockRangeCli::from_bounds(Some(10), Some(5)).unwrap_err();
-        assert!(err.contains("min <= max"));
-    }
-
-    #[test]
-    fn timelock_cli_allows_fully_open_interval() {
-        let range: TimelockRangeCli = "..".parse().unwrap();
-        assert!(range.absolute().min.is_none() && range.absolute().max.is_none());
-        assert!(range.relative().min.is_none() && range.relative().max.is_none());
-        assert!(!range.has_upper_bound());
-    }
-
-    #[test]
-    fn timelock_intent_from_ranges_handles_none() {
-        assert!(Wallet::timelock_intent_from_ranges(None, None).is_none());
-        let open_range: TimelockRangeCli = "..".parse().unwrap();
-
-        let explicit_none = Wallet::timelock_intent_from_ranges(
-            Some(open_range.absolute()),
-            Some(open_range.relative()),
-        )
-        .expect("expected explicit timelock intent");
-
-        assert_eq!(
-            explicit_none,
-            v0::TimelockIntent {
-                absolute: TimelockRangeAbsolute::none(),
-                relative: TimelockRangeRelative::none(),
-            }
-        );
-    }
-
-    #[test]
-    fn timelock_intent_from_ranges_accepts_partial_specs() {
-        let absolute = TimelockRangeAbsolute::none();
-        let intent = Wallet::timelock_intent_from_ranges(Some(absolute.clone()), None)
-            .expect("absolute range should produce intent");
-        assert_eq!(intent.absolute, absolute);
-        assert_eq!(intent.relative, TimelockRangeRelative::none());
-    }
-
-    #[test]
-    fn parse_note_names_accepts_valid_pairs() {
-        let parsed = Wallet::parse_note_names("[foo bar],[baz qux]").expect("valid names");
-        assert_eq!(
-            parsed,
-            vec![("foo".to_string(), "bar".to_string()), ("baz".to_string(), "qux".to_string())]
-        );
-    }
-
-    #[test]
-    fn parse_note_names_rejects_invalid_format() {
-        let err = Wallet::parse_note_names("foo bar").expect_err("expected failure");
-        assert!(
-            err.to_string().contains("Invalid note name"),
-            "unexpected error message: {err}"
-        );
-    }
-
-    #[test]
-    fn collect_signing_keys_prefers_explicit_entries() {
-        let entries = vec!["0:true".to_string(), "1:false".to_string()];
-        let keys =
-            Wallet::collect_signing_keys(Some(5), false, &entries).expect("valid explicit keys");
-        assert_eq!(keys, vec![(0, true), (1, false)]);
-    }
-
-    #[test]
-    fn collect_signing_keys_falls_back_to_index() {
-        let keys = Wallet::collect_signing_keys(Some(3), true, &[]).expect("valid");
-        assert_eq!(keys, vec![(3, true)]);
-    }
-
-    #[test]
-    fn collect_signing_keys_defaults_to_master() {
-        let keys = Wallet::collect_signing_keys(None, false, &[]).expect("valid");
-        assert!(keys.is_empty());
-    }
-
-    #[tokio::test]
-    #[cfg_attr(miri, ignore)]
-    async fn test_keygen() -> Result<(), NockAppError> {
-        init_tracing();
-        let cli = BootCli::parse_from(&["--new"]);
-
-        let prover_hot_state = produce_prover_hot_state();
-        let nockapp = boot::setup(
-            KERNEL,
-            cli.clone(),
-            prover_hot_state.as_slice(),
-            "wallet",
-            None,
-        )
-        .await
-        .map_err(|e| CrownError::Unknown(e.to_string()))?;
-        let mut wallet = Wallet::new(nockapp);
-        let mut entropy = [0u8; 32];
-        let mut salt = [0u8; 16];
-        getrandom::fill(&mut entropy).map_err(|e| CrownError::Unknown(e.to_string()))?;
-        getrandom::fill(&mut salt).map_err(|e| CrownError::Unknown(e.to_string()))?;
-        let (noun, op) = Wallet::keygen(&entropy, &salt)?;
-
-        let wire = WalletWire::Command(Commands::Keygen).to_wire();
-
-        let keygen_result = wallet.app.poke(wire, noun.clone()).await?;
-
-        println!("keygen result: {:?}", keygen_result);
-        assert!(
-            keygen_result.len() == 2,
-            "Expected keygen result to be a list of 2 noun slabs - markdown and exit"
-        );
-        let exit_cause = unsafe { keygen_result[1].root() };
-        let code = exit_cause.as_cell()?.tail();
-        assert!(unsafe { code.raw_equals(&D(0)) }, "Expected exit code 0");
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    #[cfg_attr(miri, ignore)]
-    async fn test_derive_child() -> Result<(), NockAppError> {
-        init_tracing();
-        let cli = BootCli::parse_from(&["--new"]);
-
-        let prover_hot_state = produce_prover_hot_state();
-        let nockapp = boot::setup(
-            KERNEL,
-            cli.clone(),
-            prover_hot_state.as_slice(),
-            "wallet",
-            None,
-        )
-        .await
-        .map_err(|e| CrownError::Unknown(e.to_string()))?;
-        let mut wallet = Wallet::new(nockapp);
-
-        // Generate a new key pair
-        let mut entropy = [0u8; 32];
-        let mut salt = [0u8; 16];
-        let (noun, op) = Wallet::keygen(&entropy, &salt)?;
-        let wire = WalletWire::Command(Commands::Keygen).to_wire();
-        let _ = wallet.app.poke(wire, noun.clone()).await?;
-
-        // Derive a child key
-        let index = 0;
-        let hardened = true;
-        let label = None;
-        let (noun, op) = Wallet::derive_child(index, hardened, &label)?;
-
-        let wire = WalletWire::Command(Commands::DeriveChild {
-            index,
-            hardened,
-            label,
-        })
-        .to_wire();
-
-        let derive_result = wallet.app.poke(wire, noun.clone()).await?;
-
-        assert!(
-            derive_result.len() == 2,
-            "Expected derive result to be a list of 2 noun slabs - markdown and exit"
-        );
-
-        let exit_cause = unsafe { derive_result[1].root() };
-        let code = exit_cause.as_cell()?.tail();
-        assert!(unsafe { code.raw_equals(&D(0)) }, "Expected exit code 0");
-
-        Ok(())
-    }
-
-    // Tests for Cold Side Commands
-    #[tokio::test]
-    #[cfg_attr(miri, ignore)]
-    async fn test_gen_master_privkey() -> Result<(), NockAppError> {
-        init_tracing();
-        let cli = BootCli::parse_from(&[""]);
-        let nockapp = boot::setup(KERNEL, cli.clone(), &[], "wallet", None)
-            .await
-            .map_err(|e| CrownError::Unknown(e.to_string()))?;
-        let mut wallet = Wallet::new(nockapp);
-        let seedphrase = "correct horse battery staple";
-        let version = 1;
-        let (noun, op) = Wallet::import_seed_phrase(seedphrase, version)?;
-        println!("privkey_slab: {:?}", noun);
-        let wire = WalletWire::Command(Commands::ImportKeys {
-            file: None,
-            key: None,
-            seedphrase: Some(seedphrase.to_string()),
-            version: Some(version),
-        })
-        .to_wire();
-        let privkey_result = wallet.app.poke(wire, noun.clone()).await?;
-        println!("privkey_result: {:?}", privkey_result);
-        Ok(())
-    }
-
-    // Tests for Hot Side Commands
-    // TODO: fix this test by adding a real key file
-    #[tokio::test]
-    #[ignore]
-    async fn test_import_keys() -> Result<(), NockAppError> {
-        init_tracing();
-        let cli = BootCli::parse_from(&["--new"]);
-        let nockapp = boot::setup(KERNEL, cli.clone(), &[], "wallet", None)
-            .await
-            .map_err(|e| CrownError::Unknown(e.to_string()))?;
-        let mut wallet = Wallet::new(nockapp);
-
-        // Create test key file
-        let test_path = "test_keys.jam";
-        let test_data = vec![0u8; 32]; // TODO: Use real jammed key data
-        fs::write(test_path, &test_data).expect(&format!(
-            "Called `expect()` at {}:{} (git sha: {})",
-            file!(),
-            line!(),
-            option_env!("GIT_SHA").unwrap_or("unknown")
-        ));
-
-        let (noun, op) = Wallet::import_keys(test_path)?;
-        let wire = WalletWire::Command(Commands::ImportKeys {
-            file: Some(test_path.to_string()),
-            key: None,
-            seedphrase: None,
-            version: None,
-        })
-        .to_wire();
-        let import_result = wallet.app.poke(wire, noun.clone()).await?;
-
-        fs::remove_file(test_path).expect(&format!(
-            "Called `expect()` at {}:{} (git sha: {})",
-            file!(),
-            line!(),
-            option_env!("GIT_SHA").unwrap_or("unknown")
-        ));
-
-        println!("import result: {:?}", import_result);
-        assert!(
-            !import_result.is_empty(),
-            "Expected non-empty import result"
-        );
-
-        Ok(())
-    }
-
-    // TODO: fix this test
-    #[tokio::test]
-    #[ignore]
-    async fn test_spend_multisig_format() -> Result<(), NockAppError> {
-        // TODO: replace with an end-to-end test that exercises multisig recipient specs.
-        Ok(())
-    }
-
-    #[tokio::test]
-    #[ignore]
-    async fn test_spend_single_sig_format() -> Result<(), NockAppError> {
-        // TODO: replace with an end-to-end test for PKH recipients once fixtures exist.
-        Ok(())
-    }
-
-    #[tokio::test]
-    #[cfg_attr(miri, ignore)]
-    async fn test_list_notes() -> Result<(), NockAppError> {
-        init_tracing();
-        let cli = BootCli::parse_from(&[""]);
-        let nockapp = boot::setup(KERNEL, cli.clone(), &[], "wallet", None)
-            .await
-            .map_err(|e| CrownError::Unknown(e.to_string()))?;
-        let mut wallet = Wallet::new(nockapp);
-
-        // Test listing notes
-        let (noun, op) = Wallet::list_notes()?;
-        let wire = WalletWire::Command(Commands::ListNotes {}).to_wire();
-        let list_result = wallet.app.poke(wire, noun.clone()).await?;
-        println!("list_result: {:?}", list_result);
-
-        Ok(())
-    }
-
-    // TODO: fix this test by adding a real draft
-    #[tokio::test]
-    #[ignore]
-    async fn test_make_tx_from_draft() -> Result<(), NockAppError> {
-        init_tracing();
-        let cli = BootCli::parse_from(&[""]);
-        let nockapp = boot::setup(KERNEL, cli.clone(), &[], "wallet", None)
-            .await
-            .map_err(|e| CrownError::Unknown(e.to_string()))?;
-        let mut wallet = Wallet::new(nockapp);
-
-        // use the transaction in txs/
-        let transaction_path = "txs/test_transaction.tx";
-        let test_data = vec![0u8; 32]; // TODO: Use real transaction data
-        fs::write(transaction_path, &test_data).expect(&format!(
-            "Called `expect()` at {}:{} (git sha: {})",
-            file!(),
-            line!(),
-            option_env!("GIT_SHA").unwrap_or("unknown")
-        ));
-
-        let (noun, op) = Wallet::send_tx(transaction_path)?;
-        let wire = WalletWire::Command(Commands::SendTx {
-            transaction: transaction_path.to_string(),
-        })
-        .to_wire();
-        let tx_result = wallet.app.poke(wire, noun.clone()).await?;
-
-        fs::remove_file(transaction_path).expect(&format!(
-            "Called `expect()` at {}:{} (git sha: {})",
-            file!(),
-            line!(),
-            option_env!("GIT_SHA").unwrap_or("unknown")
-        ));
-
-        println!("transaction result: {:?}", tx_result);
-        assert!(
-            !tx_result.is_empty(),
-            "Expected non-empty transaction result"
-        );
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    #[ignore]
-    async fn test_show_tx() -> Result<(), NockAppError> {
-        init_tracing();
-        let cli = BootCli::parse_from(&[""]);
-        let nockapp = boot::setup(KERNEL, cli.clone(), &[], "wallet", None)
-            .await
-            .map_err(|e| CrownError::Unknown(e.to_string()))?;
-        let mut wallet = Wallet::new(nockapp);
-
-        // Create a temporary transaction file
-        let transaction_path = "test_show_transaction.tx";
-        let test_data = vec![0u8; 32]; // TODO: Use real transaction data
-        fs::write(transaction_path, &test_data).expect(&format!(
-            "Called `expect()` at {}:{} (git sha: {})",
-            file!(),
-            line!(),
-            option_env!("GIT_SHA").unwrap_or("unknown")
-        ));
-
-        let (noun, op) = Wallet::show_tx(transaction_path)?;
-        let wire = WalletWire::Command(Commands::ShowTx {
-            transaction: transaction_path.to_string(),
-        })
-        .to_wire();
-        let show_result = wallet.app.poke(wire, noun.clone()).await?;
-
-        fs::remove_file(transaction_path).expect(&format!(
-            "Called `expect()` at {}:{} (git sha: {})",
-            file!(),
-            line!(),
-            option_env!("GIT_SHA").unwrap_or("unknown")
-        ));
-
-        println!("show-tx result: {:?}", show_result);
-        assert!(!show_result.is_empty(), "Expected non-empty show-tx result");
-
-        Ok(())
-    }
-
-    #[test]
-    fn domain_hash_from_base58_accepts_valid_id() {
-        let tx_id = "3giXkwW4zbFhoyJu27RbP6VNiYgR6yaTfk2AYnEHvxtVaGbmcVD6jb9";
-        Hash::from_base58(tx_id).expect("expected valid base58 hash");
-    }
-
-    #[test]
-    fn domain_hash_from_base58_rejects_invalid_id() {
-        let invalid_tx_id = "not-a-valid-hash";
-        assert!(Hash::from_base58(invalid_tx_id).is_err());
     }
 }

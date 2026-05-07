@@ -5,7 +5,7 @@ use nockapp::{AtomExt, Noun};
 use nockchain_math::noun_ext::NounMathExt;
 use nockchain_math::structs::HoonMapIter;
 use nockchain_math::zoon::common::DefaultTipHasher;
-use nockchain_math::zoon::zmap;
+use nockchain_math::zoon::zmap::{self, ZMap};
 use nockvm::noun::{NounAllocator, D};
 use noun_serde::{NounDecode, NounDecodeError, NounEncode};
 
@@ -24,28 +24,15 @@ pub struct Balance(pub Vec<(Name, Note)>);
 
 impl NounEncode for Balance {
     fn to_noun<A: NounAllocator>(&self, stack: &mut A) -> Noun {
-        self.0.iter().fold(D(0), |map, (name, note)| {
-            let mut key = name.to_noun(stack);
-            let mut value = note.to_noun(stack);
-            zmap::z_map_put(stack, &map, &mut key, &mut value, &DefaultTipHasher)
-                .expect("Failed to put into z_map")
-        })
+        ZMap::try_from_entries(self.0.clone())
+            .expect("balance z-map should encode")
+            .to_noun(stack)
     }
 }
 
 impl NounDecode for Balance {
     fn from_noun(noun: &Noun) -> Result<Self, NounDecodeError> {
-        let notes = HoonMapIter::from(*noun)
-            .filter(|kv| kv.is_cell())
-            .map(|kv| {
-                let [k, v] = kv.uncell()?;
-                let name = Name::from_noun(&k)?;
-                let note = <Note as NounDecode>::from_noun(&v)?;
-
-                Ok((name, note))
-            })
-            .collect::<Result<Vec<_>, NounDecodeError>>()?;
-        Ok(Balance(notes))
+        Ok(Balance(ZMap::<Name, Note>::from_noun(noun)?.into_entries()))
     }
 }
 

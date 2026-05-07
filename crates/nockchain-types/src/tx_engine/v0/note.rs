@@ -2,11 +2,9 @@ use std::collections::HashSet;
 
 use anyhow::Result;
 use nockapp::Noun;
-use nockchain_math::noun_ext::NounMathExt;
-use nockchain_math::structs::HoonMapIter;
-use nockchain_math::zoon::common::DefaultTipHasher;
-use nockchain_math::zoon::{zmap, zset};
-use nockvm::noun::{NounAllocator, D, SIG};
+use nockchain_math::zoon::zmap::ZMap;
+use nockchain_math::zoon::zset::ZSet;
+use nockvm::noun::{NounAllocator, SIG};
 use noun_serde::{NounDecode, NounDecodeError, NounEncode};
 
 use crate::tx_engine::common::{
@@ -46,14 +44,13 @@ pub struct Lock {
 impl NounEncode for Lock {
     fn to_noun<A: NounAllocator>(&self, stack: &mut A) -> Noun {
         let m = u64::to_noun(&self.keys_required, stack);
-        let keys_noun_map = self
-            .pubkeys
-            .iter()
-            .fold(SIG, |map, pubkey: &SchnorrPubkey| {
-                let mut val = pubkey.to_noun(stack);
-                zset::z_set_put(stack, &map, &mut val, &DefaultTipHasher)
-                    .expect("Failed to put public key into set")
-            });
+        let keys_noun_map = if self.pubkeys.is_empty() {
+            SIG
+        } else {
+            ZSet::try_from_items(self.pubkeys.clone())
+                .expect("lock pubkey set should encode")
+                .to_noun(stack)
+        };
         nockvm::noun::T(stack, &[m, keys_noun_map])
     }
 }
@@ -63,14 +60,7 @@ impl NounDecode for Lock {
         let cell = noun.as_cell()?;
         let keys_required = cell.head().as_atom()?.as_u64()?;
 
-        // It is called HoonMapIter, but it can be used for sets as well
-        let pubkeys_iter = HoonMapIter::from(cell.tail());
-
-        let mut pubkeys = Vec::new();
-        for pubkey in pubkeys_iter {
-            let schnorr = SchnorrPubkey::from_noun(&pubkey)?;
-            pubkeys.push(schnorr);
-        }
+        let pubkeys = ZSet::<SchnorrPubkey>::from_noun(&cell.tail())?.into_items();
 
         let unique = pubkeys.iter().collect::<HashSet<_>>();
 
@@ -121,27 +111,17 @@ pub struct Balance(pub Vec<(Name, NoteV0)>);
 
 impl NounEncode for Balance {
     fn to_noun<A: NounAllocator>(&self, stack: &mut A) -> Noun {
-        self.0.iter().fold(D(0), |map, (name, note)| {
-            let mut key = name.to_noun(stack);
-            let mut value = note.to_noun(stack);
-            zmap::z_map_put(stack, &map, &mut key, &mut value, &DefaultTipHasher)
-                .expect("Failed to put into z_map")
-        })
+        ZMap::try_from_entries(self.0.clone())
+            .expect("balance z-map should encode")
+            .to_noun(stack)
     }
 }
 
 impl NounDecode for Balance {
     fn from_noun(noun: &Noun) -> Result<Self, NounDecodeError> {
-        let notes = HoonMapIter::from(*noun)
-            .filter(|kv| kv.is_cell())
-            .map(|kv| {
-                let [k, v] = kv.uncell()?;
-                let name = Name::from_noun(&k)?;
-                let note = NoteV0::from_noun(&v)?;
-                Ok((name, note))
-            })
-            .collect::<Result<Vec<_>, NounDecodeError>>()?;
-        Ok(Balance(notes))
+        Ok(Balance(
+            ZMap::<Name, NoteV0>::from_noun(noun)?.into_entries(),
+        ))
     }
 }
 

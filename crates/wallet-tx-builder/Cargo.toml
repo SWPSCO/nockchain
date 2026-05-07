@@ -1,0 +1,15 @@
+[package]
+name = "wallet-tx-builder"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+bytes.workspace = true
+nockapp.workspace = true
+nockchain-math.workspace = true
+nockchain-types.workspace = true
+nockvm.workspace = true
+noun-serde.workspace = true
+thiserror.workspace = true
+tracing.workspace = true

@@ -1,17 +1,23 @@
 use nockapp::noun::slab::{NockJammer, NounSlab};
 use nockapp::noun::NounAllocatorExt;
+use nockchain_math::belt::Belt;
 use nockchain_math::noun_ext::NounMathExt;
 use nockchain_math::structs::{HoonList, HoonMapIter};
 use nockchain_math::zoon::common::DefaultTipHasher;
-use nockchain_math::zoon::{zmap, zset};
+use nockchain_math::zoon::zmap::{self, ZMap};
+use nockchain_math::zoon::zset::ZSet;
 use nockvm::ext::{make_tas, AtomExt};
 use nockvm::noun::{Noun, NounAllocator, D};
 use noun_serde::{NounDecode, NounDecodeError, NounEncode};
 
+use super::hashable::{
+    hash_leaf_atom, hash_leaf_null, hash_pair, hash_unit_belt, Hashable, HashableEncodingError,
+    HashableTreeHasher,
+};
 use super::note::NoteData;
 use crate::tx_engine::common::{
-    BlockHeight, Hash, Name, Nicks, SchnorrPubkey, SchnorrSignature, Signature, Source, TxId,
-    Version,
+    BlockHeight, BlockHeightDelta, FirstName, Hash, Name, Nicks, SchnorrPubkey, SchnorrSignature,
+    Signature, Source, TxId, Version,
 };
 use crate::v0::{TimelockRangeAbsolute, TimelockRangeRelative};
 
@@ -61,29 +67,15 @@ pub struct Spends(pub Vec<(Name, Spend)>);
 
 impl NounEncode for Spends {
     fn to_noun<A: NounAllocator>(&self, allocator: &mut A) -> Noun {
-        self.0.iter().fold(D(0), |acc, (name, spend)| {
-            let mut key = name.to_noun(allocator);
-            let mut value = spend.to_noun(allocator);
-            zmap::z_map_put(allocator, &acc, &mut key, &mut value, &DefaultTipHasher)
-                .expect("failed to encode spends map")
-        })
+        ZMap::try_from_entries(self.0.clone())
+            .expect("spends z-map should encode")
+            .to_noun(allocator)
     }
 }
 
 impl NounDecode for Spends {
     fn from_noun(noun: &Noun) -> Result<Self, NounDecodeError> {
-        let entries = HoonMapIter::from(*noun)
-            .filter(|entry| entry.is_cell())
-            .map(|entry| {
-                let [name_raw, spend_raw] = entry
-                    .uncell()
-                    .map_err(|_| NounDecodeError::Custom("spend entry must be a pair".into()))?;
-                let name = Name::from_noun(&name_raw)?;
-                let spend = Spend::from_noun(&spend_raw)?;
-                Ok((name, spend))
-            })
-            .collect::<Result<Vec<_>, NounDecodeError>>()?;
-        Ok(Self(entries))
+        Ok(Self(ZMap::<Name, Spend>::from_noun(noun)?.into_entries()))
     }
 }
 
@@ -141,17 +133,15 @@ pub struct Seeds(pub Vec<Seed>);
 
 impl NounEncode for Seeds {
     fn to_noun<A: NounAllocator>(&self, allocator: &mut A) -> Noun {
-        self.0.iter().fold(D(0), |acc, seed| {
-            let mut value = seed.to_noun(allocator);
-            zset::z_set_put(allocator, &acc, &mut value, &DefaultTipHasher)
-                .expect("failed to encode seeds set")
-        })
+        ZSet::try_from_items(self.0.clone())
+            .expect("seed z-set should encode")
+            .to_noun(allocator)
     }
 }
 
 impl NounDecode for Seeds {
     fn from_noun(noun: &Noun) -> Result<Self, NounDecodeError> {
-        decode_zset(noun, Seed::from_noun).map(Self)
+        Ok(Self(ZSet::<Seed>::from_noun(noun)?.into_items()))
     }
 }
 
@@ -268,29 +258,46 @@ impl PkhSignature {
 
 impl NounEncode for PkhSignature {
     fn to_noun<A: NounAllocator>(&self, allocator: &mut A) -> Noun {
-        self.0.iter().fold(D(0), |acc, entry| {
-            let mut key = entry.hash.to_noun(allocator);
-            let mut value = entry.to_noun(allocator);
-            zmap::z_map_put(allocator, &acc, &mut key, &mut value, &DefaultTipHasher)
-                .expect("failed to encode pkh-signature map")
-        })
+        let entries = self
+            .0
+            .iter()
+            .cloned()
+            .map(|entry| {
+                (
+                    entry.hash.clone(),
+                    PkhSignatureValue {
+                        pubkey: entry.pubkey,
+                        signature: entry.signature,
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+        ZMap::try_from_entries(entries)
+            .expect("pkh-signature z-map should encode")
+            .to_noun(allocator)
     }
 }
 
 impl NounDecode for PkhSignature {
     fn from_noun(noun: &Noun) -> Result<Self, NounDecodeError> {
-        let entries = HoonMapIter::from(*noun)
-            .filter(|entry| entry.is_cell())
-            .map(|entry| {
-                let [hash_raw, value_raw] = entry.uncell().map_err(|_| {
-                    NounDecodeError::Custom("pkh-signature entry must be a pair".into())
-                })?;
-                let hash = Hash::from_noun(&hash_raw)?;
-                PkhSignatureEntry::decode(hash, &value_raw)
-            })
-            .collect::<Result<Vec<_>, NounDecodeError>>()?;
-        Ok(Self(entries))
+        let entries = ZMap::<Hash, PkhSignatureValue>::from_noun(noun)?.into_entries();
+        Ok(Self(
+            entries
+                .into_iter()
+                .map(|(hash, value)| PkhSignatureEntry {
+                    hash,
+                    pubkey: value.pubkey,
+                    signature: value.signature,
+                })
+                .collect(),
+        ))
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, NounEncode, NounDecode)]
+struct PkhSignatureValue {
+    pubkey: SchnorrPubkey,
+    signature: SchnorrSignature,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -305,19 +312,6 @@ impl NounEncode for PkhSignatureEntry {
         let pubkey = self.pubkey.to_noun(allocator);
         let signature = self.signature.to_noun(allocator);
         nockvm::noun::T(allocator, &[pubkey, signature])
-    }
-}
-
-impl PkhSignatureEntry {
-    fn decode(hash: Hash, noun: &Noun) -> Result<Self, NounDecodeError> {
-        let cell = noun.as_cell()?;
-        let pubkey = SchnorrPubkey::from_noun(&cell.head())?;
-        let signature = SchnorrSignature::from_noun(&cell.tail())?;
-        Ok(Self {
-            hash,
-            pubkey,
-            signature,
-        })
     }
 }
 
@@ -439,6 +433,171 @@ impl NounDecode for MerkleProof {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct NumericTag(u64);
+
+impl NumericTag {
+    fn into_inner(self) -> u64 {
+        self.0
+    }
+}
+
+impl NounDecode for NumericTag {
+    fn from_noun(noun: &Noun) -> Result<Self, NounDecodeError> {
+        if let Ok(value) = u64::from_noun(noun) {
+            return Ok(Self(value));
+        }
+
+        let tag = String::from_noun(noun)?;
+        let value = tag.parse::<u64>().map_err(|_| {
+            NounDecodeError::Custom("lock tree tag must contain only digits".into())
+        })?;
+        Ok(Self(value))
+    }
+}
+
+/// Binary lock tree with power-of-two fanout over spend conditions.
+///
+/// This mirrors `$lock` in `tx-engine-1.hoon`: a lock is either a single
+/// spend-condition leaf, or a tagged `%2/%4/%8/%16` tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Lock {
+    SpendCondition(SpendCondition),
+    V2(LockV2),
+    V4(LockV4),
+    V8(LockV8),
+    V16(LockV16),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, NounEncode, NounDecode)]
+pub struct LockV2 {
+    pub p: SpendCondition,
+    pub q: SpendCondition,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, NounEncode, NounDecode)]
+pub struct LockV4 {
+    pub p: LockV2,
+    pub q: LockV2,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, NounEncode, NounDecode)]
+pub struct LockV8 {
+    pub p: LockV4,
+    pub q: LockV4,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, NounEncode, NounDecode)]
+pub struct LockV16 {
+    pub p: LockV8,
+    pub q: LockV8,
+}
+
+impl LockV2 {
+    fn flatten_spend_conditions(&self) -> Vec<SpendCondition> {
+        vec![self.p.clone(), self.q.clone()]
+    }
+}
+
+impl LockV4 {
+    fn flatten_spend_conditions(&self) -> Vec<SpendCondition> {
+        let mut out = self.p.flatten_spend_conditions();
+        out.extend(self.q.flatten_spend_conditions());
+        out
+    }
+}
+
+impl LockV8 {
+    fn flatten_spend_conditions(&self) -> Vec<SpendCondition> {
+        let mut out = self.p.flatten_spend_conditions();
+        out.extend(self.q.flatten_spend_conditions());
+        out
+    }
+}
+
+impl LockV16 {
+    fn flatten_spend_conditions(&self) -> Vec<SpendCondition> {
+        let mut out = self.p.flatten_spend_conditions();
+        out.extend(self.q.flatten_spend_conditions());
+        out
+    }
+}
+
+impl Lock {
+    /// Returns how many spend-condition leaves are present in this lock.
+    pub fn spend_condition_count(&self) -> u64 {
+        match self {
+            Self::SpendCondition(_) => 1,
+            Self::V2(_) => 2,
+            Self::V4(_) => 4,
+            Self::V8(_) => 8,
+            Self::V16(_) => 16,
+        }
+    }
+
+    /// Flattens the lock tree in left-to-right order.
+    pub fn flatten_spend_conditions(&self) -> Vec<SpendCondition> {
+        match self {
+            Self::SpendCondition(spend_condition) => vec![spend_condition.clone()],
+            Self::V2(v2) => v2.flatten_spend_conditions(),
+            Self::V4(v4) => v4.flatten_spend_conditions(),
+            Self::V8(v8) => v8.flatten_spend_conditions(),
+            Self::V16(v16) => v16.flatten_spend_conditions(),
+        }
+    }
+
+    /// Computes the consensus lock root by hashing this lock's handwritten hashable form.
+    pub fn hash(&self) -> Result<Hash, LockHashError> {
+        self.hash_digest()
+    }
+}
+
+impl NounEncode for Lock {
+    fn to_noun<A: NounAllocator>(&self, allocator: &mut A) -> Noun {
+        match self {
+            Self::SpendCondition(spend_condition) => spend_condition.to_noun(allocator),
+            Self::V2(v2) => {
+                let value = v2.to_noun(allocator);
+                nockvm::noun::T(allocator, &[D(2), value])
+            }
+            Self::V4(v4) => {
+                let value = v4.to_noun(allocator);
+                nockvm::noun::T(allocator, &[D(4), value])
+            }
+            Self::V8(v8) => {
+                let value = v8.to_noun(allocator);
+                nockvm::noun::T(allocator, &[D(8), value])
+            }
+            Self::V16(v16) => {
+                let value = v16.to_noun(allocator);
+                nockvm::noun::T(allocator, &[D(16), value])
+            }
+        }
+    }
+}
+
+impl NounDecode for Lock {
+    fn from_noun(noun: &Noun) -> Result<Self, NounDecodeError> {
+        if let Ok(spend_condition) = SpendCondition::from_noun(noun) {
+            return Ok(Self::SpendCondition(spend_condition));
+        }
+
+        let cell = noun.as_cell().map_err(|_| {
+            NounDecodeError::Custom("lock must be spend-condition or lock tree".into())
+        })?;
+        let tag = NumericTag::from_noun(&cell.head())?.into_inner();
+        match tag {
+            2 => Ok(Self::V2(LockV2::from_noun(&cell.tail())?)),
+            4 => Ok(Self::V4(LockV4::from_noun(&cell.tail())?)),
+            8 => Ok(Self::V8(LockV8::from_noun(&cell.tail())?)),
+            16 => Ok(Self::V16(LockV16::from_noun(&cell.tail())?)),
+            _ => Err(NounDecodeError::Custom(format!(
+                "unsupported lock tree tag: {tag}"
+            ))),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpendCondition(pub Vec<LockPrimitive>);
 
@@ -535,17 +694,25 @@ impl NounDecode for LockPrimitive {
 pub struct Pkh {
     pub m: u64,
     // z-set of hashes
-    pub hashes: Vec<Hash>,
+    pub hashes: ZSet<Hash>,
+}
+
+impl Pkh {
+    pub fn new<I>(m: u64, hashes: I) -> Self
+    where
+        I: IntoIterator<Item = Hash>,
+    {
+        Self {
+            m,
+            hashes: ZSet::try_from_items(hashes).expect("pkh hash z-set should build"),
+        }
+    }
 }
 
 impl NounEncode for Pkh {
     fn to_noun<A: NounAllocator>(&self, allocator: &mut A) -> Noun {
         let m = self.m.to_noun(allocator);
-        let hashes = self.hashes.iter().fold(D(0), |acc, hash| {
-            let mut value = hash.to_noun(allocator);
-            zset::z_set_put(allocator, &acc, &mut value, &DefaultTipHasher)
-                .expect("failed to encode pkh hash set")
-        });
+        let hashes = self.hashes.to_noun(allocator);
         nockvm::noun::T(allocator, &[m, hashes])
     }
 }
@@ -554,7 +721,7 @@ impl NounDecode for Pkh {
     fn from_noun(noun: &Noun) -> Result<Self, NounDecodeError> {
         let cell = noun.as_cell()?;
         let m = u64::from_noun(&cell.head())?;
-        let hashes = decode_zset(&cell.tail(), Hash::from_noun)?;
+        let hashes = ZSet::<Hash>::from_noun(&cell.tail())?;
         Ok(Self { m, hashes })
     }
 }
@@ -573,54 +740,436 @@ pub struct LockTimeBounds {
 
 // Encode into a set of hashes
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Hax(pub Vec<Hash>);
+pub struct Hax(pub ZSet<Hash>);
+
+impl Hax {
+    pub fn new<I>(hashes: I) -> Self
+    where
+        I: IntoIterator<Item = Hash>,
+    {
+        Self(ZSet::try_from_items(hashes).expect("hax z-set should build"))
+    }
+}
 
 impl NounEncode for Hax {
     fn to_noun<A: NounAllocator>(&self, allocator: &mut A) -> Noun {
-        self.0.iter().fold(D(0), |acc, hash| {
-            let mut value = hash.to_noun(allocator);
-            zset::z_set_put(allocator, &acc, &mut value, &DefaultTipHasher)
-                .expect("failed to encode hax set")
-        })
+        self.0.to_noun(allocator)
     }
 }
 
 impl NounDecode for Hax {
     fn from_noun(noun: &Noun) -> Result<Self, NounDecodeError> {
-        decode_zset(noun, Hash::from_noun).map(Self)
+        Ok(Self(ZSet::<Hash>::from_noun(noun)?))
     }
 }
 
-fn decode_zset<T, F>(noun: &Noun, mut f: F) -> Result<Vec<T>, NounDecodeError>
-where
-    F: FnMut(&Noun) -> Result<T, NounDecodeError>,
-{
-    fn traverse<T, F>(node: &Noun, acc: &mut Vec<T>, f: &mut F) -> Result<(), NounDecodeError>
-    where
-        F: FnMut(&Noun) -> Result<T, NounDecodeError>,
-    {
-        if let Ok(atom) = node.as_atom() {
-            if atom.as_u64()? == 0 {
-                return Ok(());
-            }
-            return Err(NounDecodeError::ExpectedCell);
-        }
+/// Errors raised while converting consensus values to hashable nouns.
+#[derive(Debug, thiserror::Error)]
+pub enum LockHashError {
+    #[error(transparent)]
+    HashableEncoding(#[from] HashableEncodingError),
+}
 
-        let cell = node
-            .as_cell()
-            .map_err(|_| NounDecodeError::Custom("z-set node must be a cell".into()))?;
-        acc.push(f(&cell.head())?);
+#[derive(Debug, thiserror::Error)]
+pub enum FirstNameFromLockRootError {
+    #[error(transparent)]
+    HashableEncoding(#[from] HashableEncodingError),
+}
 
-        let branches = cell
-            .tail()
-            .as_cell()
-            .map_err(|_| NounDecodeError::Custom("z-set branches must be a cell".into()))?;
-        traverse(&branches.head(), acc, f)?;
-        traverse(&branches.tail(), acc, f)?;
-        Ok(())
+struct FirstNameDigestInput<'a> {
+    lock_root: &'a Hash,
+}
+
+impl Hashable for FirstNameDigestInput<'_> {
+    type Error = FirstNameFromLockRootError;
+
+    fn hash_digest(&self) -> Result<Hash, Self::Error> {
+        let first_tag = hash_leaf_atom(0)?;
+        Ok(hash_pair(&first_tag, self.lock_root))
+    }
+}
+
+impl FirstName {
+    /// Derives the v1 first-name digest from a lock-root hash.
+    pub fn from_lock_root(lock_root: &Hash) -> Result<Self, FirstNameFromLockRootError> {
+        Ok(Self(FirstNameDigestInput { lock_root }.hash_digest()?))
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum SpendConditionFirstNameError {
+    #[error(transparent)]
+    LockHash(#[from] LockHashError),
+    #[error(transparent)]
+    FirstNameFromLockRoot(#[from] FirstNameFromLockRootError),
+}
+
+impl SpendCondition {
+    /// Builds a simple single-signer PKH spend-condition.
+    pub fn simple_pkh(pkh: Hash) -> Self {
+        Self::new(vec![LockPrimitive::Pkh(Pkh::new(1, vec![pkh]))])
     }
 
-    let mut acc = Vec::new();
-    traverse(noun, &mut acc, &mut f)?;
-    Ok(acc)
+    /// Builds a coinbase-style single-signer PKH spend-condition with a relative timelock.
+    pub fn coinbase_pkh(pkh: Hash, coinbase_relative_min: u64) -> Self {
+        let lock_tim = LockTim {
+            rel: TimelockRangeRelative::new(
+                Some(BlockHeightDelta(Belt(coinbase_relative_min))),
+                None,
+            ),
+            abs: TimelockRangeAbsolute::none(),
+        };
+        Self::new(vec![
+            LockPrimitive::Pkh(Pkh::new(1, vec![pkh])),
+            LockPrimitive::Tim(lock_tim),
+        ])
+    }
+
+    /// Computes the consensus spend-condition hash.
+    pub fn hash(&self) -> Result<Hash, LockHashError> {
+        self.hash_digest()
+    }
+
+    /// Computes the v1 note first-name from this spend-condition.
+    pub fn first_name(&self) -> Result<FirstName, SpendConditionFirstNameError> {
+        let lock_root = Lock::SpendCondition(self.clone()).hash()?;
+        Ok(FirstName::from_lock_root(&lock_root)?)
+    }
+}
+
+impl Hashable for SpendCondition {
+    type Error = LockHashError;
+
+    fn hash_digest(&self) -> Result<Hash, Self::Error> {
+        let mut tail = hash_leaf_null();
+        for primitive in self.0.iter().rev() {
+            let head = primitive.hash_digest()?;
+            tail = hash_pair(&head, &tail);
+        }
+        Ok(tail)
+    }
+}
+
+impl Hashable for LockPrimitive {
+    type Error = LockHashError;
+
+    fn hash_digest(&self) -> Result<Hash, Self::Error> {
+        match self {
+            Self::Pkh(pkh) => {
+                let tag = hash_leaf_atom(nockvm_macros::tas!(b"pkh"))?;
+                let payload = pkh.hash_digest()?;
+                Ok(hash_pair(&tag, &payload))
+            }
+            Self::Tim(tim) => {
+                let tag = hash_leaf_atom(nockvm_macros::tas!(b"tim"))?;
+                let payload = tim.hash_digest()?;
+                Ok(hash_pair(&tag, &payload))
+            }
+            Self::Hax(hax) => {
+                let tag = hash_leaf_atom(nockvm_macros::tas!(b"hax"))?;
+                let payload = hax.hash_digest()?;
+                Ok(hash_pair(&tag, &payload))
+            }
+            Self::Burn => {
+                let burn_tag = hash_leaf_atom(nockvm_macros::tas!(b"brn"))?;
+                let null_leaf = hash_leaf_null();
+                Ok(hash_pair(&burn_tag, &null_leaf))
+            }
+        }
+    }
+}
+
+impl Hashable for Pkh {
+    type Error = LockHashError;
+
+    fn hash_digest(&self) -> Result<Hash, Self::Error> {
+        let m_hashable = hash_leaf_atom(self.m)?;
+        let hashes_hashable = self.hashes.hash_with(&HashableTreeHasher);
+        Ok(hash_pair(&m_hashable, &hashes_hashable))
+    }
+}
+
+impl Hashable for Hax {
+    type Error = LockHashError;
+
+    fn hash_digest(&self) -> Result<Hash, Self::Error> {
+        Ok(self.0.hash_with(&HashableTreeHasher))
+    }
+}
+
+impl Hashable for LockTim {
+    type Error = LockHashError;
+
+    fn hash_digest(&self) -> Result<Hash, Self::Error> {
+        let rel_min = hash_unit_belt(self.rel.min.as_ref().map(|height| height.0));
+        let rel_max = hash_unit_belt(self.rel.max.as_ref().map(|height| height.0));
+        let abs_min = hash_unit_belt(self.abs.min.as_ref().map(|height| height.0));
+        let abs_max = hash_unit_belt(self.abs.max.as_ref().map(|height| height.0));
+        let rel = hash_pair(&rel_min, &rel_max);
+        let abs = hash_pair(&abs_min, &abs_max);
+        Ok(hash_pair(&rel, &abs))
+    }
+}
+
+impl Hashable for Lock {
+    type Error = LockHashError;
+
+    fn hash_digest(&self) -> Result<Hash, Self::Error> {
+        match self {
+            Self::SpendCondition(spend_condition) => spend_condition.hash_digest(),
+            Self::V2(v2) => {
+                let tag = hash_leaf_atom(2)?;
+                let payload = v2.hash_digest()?;
+                Ok(hash_pair(&tag, &payload))
+            }
+            Self::V4(v4) => {
+                let tag = hash_leaf_atom(4)?;
+                let payload = v4.hash_digest()?;
+                Ok(hash_pair(&tag, &payload))
+            }
+            Self::V8(v8) => {
+                let tag = hash_leaf_atom(8)?;
+                let payload = v8.hash_digest()?;
+                Ok(hash_pair(&tag, &payload))
+            }
+            Self::V16(v16) => {
+                let tag = hash_leaf_atom(16)?;
+                let payload = v16.hash_digest()?;
+                Ok(hash_pair(&tag, &payload))
+            }
+        }
+    }
+}
+
+impl Hashable for LockV2 {
+    type Error = LockHashError;
+
+    fn hash_digest(&self) -> Result<Hash, Self::Error> {
+        let p_hash = self.p.hash()?;
+        let q_hash = self.q.hash()?;
+        Ok(hash_pair(&p_hash, &q_hash))
+    }
+}
+
+impl Hashable for LockV4 {
+    type Error = LockHashError;
+
+    fn hash_digest(&self) -> Result<Hash, Self::Error> {
+        let left = self.p.hash_digest()?;
+        let right = self.q.hash_digest()?;
+        Ok(hash_pair(&left, &right))
+    }
+}
+
+impl Hashable for LockV8 {
+    type Error = LockHashError;
+
+    fn hash_digest(&self) -> Result<Hash, Self::Error> {
+        let left = self.p.hash_digest()?;
+        let right = self.q.hash_digest()?;
+        Ok(hash_pair(&left, &right))
+    }
+}
+
+impl Hashable for LockV16 {
+    type Error = LockHashError;
+
+    fn hash_digest(&self) -> Result<Hash, Self::Error> {
+        let left = self.p.hash_digest()?;
+        let right = self.q.hash_digest()?;
+        Ok(hash_pair(&left, &right))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use nockapp::noun::slab::{NockJammer, NounSlab};
+    use nockchain_math::belt::Belt;
+    use noun_serde::{NounDecode, NounEncode};
+
+    use super::{Hax, Lock, LockPrimitive, LockTim, LockV2, LockV4, Pkh, SpendCondition};
+    use crate::tx_engine::common::{
+        BlockHeight, BlockHeightDelta, Hash, TimelockRangeAbsolute, TimelockRangeRelative,
+    };
+
+    const ADDRESS_A_B58: &str = "9yPePjfWAdUnzaQKyxcRXKRa5PpUzKKEwtpECBZsUYt9Jd7egSDEWoV";
+    const ADDRESS_B_B58: &str = "9phXGACnW4238oqgvn2gpwaUjG3RAqcxq2Ash2vaKp8KjzSd3MQ56Jt";
+    const EXPECTED_PKH_ROOT_B58: &str = "DKrgXqE8bXR1uBZ3t4vU13m2KquGCDbnn1PeoPL7dxSHTucGPFDPt53";
+    const EXPECTED_MULTISIG_2_OF_2_ROOT_B58: &str =
+        "4eMAT3BuhLPjYFronoYJ9RSLVSgveCL3nQB7RHSLZzjBTiYCxEzkzEH";
+    const EXPECTED_TIM_ROOT_B58: &str = "66FLtgznHvE7v4Fi4wZ6aA9EzsPD6pfaL3qL85apJuiBF8unRKXVsor";
+    const EXPECTED_HAX_ROOT_B58: &str = "4kwz3RMCacfRXY3ydNoQ1tsUKuzaBEzGSpX9GpSWf8T3Rj24Ucuj6v4";
+    const EXPECTED_LOCK_V2_ROOT_B58: &str =
+        "e3qeUqDf6ZTkayiiQDpKpax6RqXMBAMRLtrppvL41EdyJYFj743ZKB";
+    const EXPECTED_LOCK_V4_ROOT_B58: &str =
+        "6ezbUN1ozEvZi9TUGVN1pY2TcCJc5KWoCzjj519ihE6LGupvJpnysjo";
+    const EXPECTED_MEGA_LOCK_V4_ROOT_B58: &str =
+        "DaNZuUK5iHhkCiDt3UShiNbz79TLdoLyNs3dKjTX1yzEZ7tjwjzbe8U";
+    const BRIDGE_ROOT_B58: &str = "AcsPkuhXQoGeEsF91yynpm1kcW17PQ2Z1MEozgx7YnDPkZwrtzLuuqd";
+
+    fn pkh_condition(m: u64, hashes: Vec<Hash>) -> SpendCondition {
+        SpendCondition::new(vec![pkh_primitive(m, hashes)])
+    }
+
+    fn pkh_primitive(m: u64, hashes: Vec<Hash>) -> LockPrimitive {
+        LockPrimitive::Pkh(Pkh::new(m, hashes))
+    }
+
+    fn tim_condition() -> SpendCondition {
+        SpendCondition::new(vec![tim_primitive(Some(3), Some(10), Some(20), None)])
+    }
+
+    fn tim_primitive(
+        rel_min: Option<u64>,
+        rel_max: Option<u64>,
+        abs_min: Option<u64>,
+        abs_max: Option<u64>,
+    ) -> LockPrimitive {
+        LockPrimitive::Tim(LockTim {
+            rel: TimelockRangeRelative {
+                min: rel_min.map(|value| BlockHeightDelta(Belt(value))),
+                max: rel_max.map(|value| BlockHeightDelta(Belt(value))),
+            },
+            abs: TimelockRangeAbsolute {
+                min: abs_min.map(|value| BlockHeight(Belt(value))),
+                max: abs_max.map(|value| BlockHeight(Belt(value))),
+            },
+        })
+    }
+
+    fn hax_condition(hashes: Vec<Hash>) -> SpendCondition {
+        SpendCondition::new(vec![hax_primitive(hashes)])
+    }
+
+    fn hax_primitive(hashes: Vec<Hash>) -> LockPrimitive {
+        LockPrimitive::Hax(Hax::new(hashes))
+    }
+
+    #[test]
+    fn lock_hash_matches_known_hoon_vectors() {
+        let address_a = Hash::from_base58(ADDRESS_A_B58).expect("address a should parse");
+        let address_b = Hash::from_base58(ADDRESS_B_B58).expect("address b should parse");
+        let bridge_root = Hash::from_base58(BRIDGE_ROOT_B58).expect("bridge root should parse");
+
+        let single_pkh_lock = Lock::SpendCondition(pkh_condition(1, vec![address_a.clone()]));
+        let multisig_lock =
+            Lock::SpendCondition(pkh_condition(2, vec![address_a.clone(), address_b.clone()]));
+        let tim_lock = Lock::SpendCondition(tim_condition());
+        let hax_lock =
+            Lock::SpendCondition(hax_condition(vec![address_a.clone(), address_b.clone()]));
+        let lock_v2 = Lock::V2(LockV2 {
+            p: pkh_condition(1, vec![address_a.clone()]),
+            q: tim_condition(),
+        });
+        let lock_v4 = Lock::V4(LockV4 {
+            p: LockV2 {
+                p: pkh_condition(1, vec![address_a.clone()]),
+                q: tim_condition(),
+            },
+            q: LockV2 {
+                p: hax_condition(vec![address_a.clone(), address_b.clone()]),
+                q: SpendCondition::new(vec![LockPrimitive::Burn]),
+            },
+        });
+        let mega_lock_v4 = Lock::V4(LockV4 {
+            p: LockV2 {
+                p: SpendCondition::new(vec![
+                    pkh_primitive(2, vec![address_a.clone(), address_b.clone()]),
+                    tim_primitive(Some(5), Some(15), Some(25), None),
+                    hax_primitive(vec![address_a.clone(), bridge_root.clone()]),
+                ]),
+                q: SpendCondition::new(vec![
+                    hax_primitive(vec![address_b.clone()]),
+                    tim_primitive(None, Some(8), None, Some(40)),
+                    pkh_primitive(1, vec![address_b.clone()]),
+                ]),
+            },
+            q: LockV2 {
+                p: SpendCondition::new(vec![
+                    pkh_primitive(1, vec![address_a.clone()]),
+                    tim_primitive(Some(2), None, Some(30), Some(60)),
+                    hax_primitive(vec![address_a.clone(), address_b.clone()]),
+                ]),
+                q: SpendCondition::new(vec![
+                    tim_primitive(Some(1), Some(4), Some(50), Some(90)),
+                    hax_primitive(vec![address_a.clone()]),
+                    pkh_primitive(1, vec![address_a.clone(), address_b.clone()]),
+                ]),
+            },
+        });
+
+        assert_eq!(
+            single_pkh_lock
+                .hash()
+                .expect("single pkh lock hash should compute")
+                .to_base58(),
+            EXPECTED_PKH_ROOT_B58
+        );
+        assert_eq!(
+            multisig_lock
+                .hash()
+                .expect("multisig lock hash should compute")
+                .to_base58(),
+            EXPECTED_MULTISIG_2_OF_2_ROOT_B58
+        );
+        assert_eq!(
+            tim_lock
+                .hash()
+                .expect("tim lock hash should compute")
+                .to_base58(),
+            EXPECTED_TIM_ROOT_B58
+        );
+        assert_eq!(
+            hax_lock
+                .hash()
+                .expect("hax lock hash should compute")
+                .to_base58(),
+            EXPECTED_HAX_ROOT_B58
+        );
+        assert_eq!(
+            lock_v2
+                .hash()
+                .expect("v2 lock hash should compute")
+                .to_base58(),
+            EXPECTED_LOCK_V2_ROOT_B58
+        );
+        assert_eq!(
+            lock_v4
+                .hash()
+                .expect("v4 lock hash should compute")
+                .to_base58(),
+            EXPECTED_LOCK_V4_ROOT_B58
+        );
+        assert_eq!(
+            mega_lock_v4
+                .hash()
+                .expect("mega v4 lock hash should compute")
+                .to_base58(),
+            EXPECTED_MEGA_LOCK_V4_ROOT_B58
+        );
+    }
+
+    #[test]
+    fn lock_tree_roundtrip_preserves_leaf_count() {
+        fn pkh_with_value(value: u64) -> SpendCondition {
+            pkh_condition(1, vec![Hash::from_limbs(&[value, 0, 0, 0, 0])])
+        }
+
+        let lock = Lock::V4(LockV4 {
+            p: LockV2 {
+                p: pkh_with_value(11),
+                q: pkh_with_value(12),
+            },
+            q: LockV2 {
+                p: pkh_with_value(13),
+                q: pkh_with_value(14),
+            },
+        });
+
+        let mut slab: NounSlab<NockJammer> = NounSlab::new();
+        let noun = lock.to_noun(&mut slab);
+        let decoded = Lock::from_noun(&noun).expect("lock should decode");
+        assert_eq!(decoded.spend_condition_count(), 4);
+        assert_eq!(decoded.flatten_spend_conditions().len(), 4);
+    }
 }

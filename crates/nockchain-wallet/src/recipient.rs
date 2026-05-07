@@ -1,11 +1,16 @@
 use std::collections::BTreeSet;
 
 use nockchain_types::common::Hash;
+use nockchain_types::tx_engine::v1::tx::{Lock, LockPrimitive, Pkh, SpendCondition};
 use nockchain_types::{EthAddress, EthAddressParseError};
 use noun_serde::{NounDecode, NounEncode};
 use serde::Deserialize;
+use wallet_tx_builder::types::{PlannedOutput, RawNoteDataEntry};
 
 use crate::{CrownError, NockAppError};
+
+pub const BRIDGE_LOCK_ROOT_DEFAULT_B58: &str =
+    "AcsPkuhXQoGeEsF91yynpm1kcW17PQ2Z1MEozgx7YnDPkZwrtzLuuqd";
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
@@ -216,6 +221,104 @@ pub fn recipient_tokens_to_specs(
         .into_iter()
         .map(|token| token.into_recipient_spec())
         .collect()
+}
+
+fn pkh_lock(threshold: u64, addresses: &[Hash]) -> Lock {
+    Lock::SpendCondition(SpendCondition::new(vec![LockPrimitive::Pkh(Pkh::new(
+        threshold,
+        addresses.to_vec(),
+    ))]))
+}
+
+fn lock_root(lock: &Lock) -> Result<Hash, NockAppError> {
+    lock.hash()
+        .map_err(|err| CrownError::Unknown(format!("unable to derive lock root: {err}")).into())
+}
+
+fn evm_address_to_based(evm_address: EthAddress) -> [u64; 3] {
+    let mut be = [0_u8; 32];
+    be[12..].copy_from_slice(evm_address.as_slice());
+    let limbs = Hash::from_be_bytes(&be).to_array();
+    [limbs[0], limbs[1], limbs[2]]
+}
+
+/// Converts CLI recipient specs into planner outputs with tx-builder-compatible note-data.
+pub fn planner_recipient_outputs(
+    recipients: &[RecipientSpec],
+    include_data: bool,
+) -> Result<Vec<PlannedOutput>, NockAppError> {
+    recipients
+        .iter()
+        .map(|recipient| planner_recipient_output(recipient, include_data))
+        .collect()
+}
+
+/// Builds one planner output from a recipient, including deterministic lock root + note-data.
+pub fn planner_recipient_output(
+    recipient: &RecipientSpec,
+    include_data: bool,
+) -> Result<PlannedOutput, NockAppError> {
+    match recipient {
+        RecipientSpec::P2pkh { address, amount } => {
+            let lock = pkh_lock(1, std::slice::from_ref(address));
+            let note_data = if include_data {
+                vec![RawNoteDataEntry::from_lock(lock.clone())]
+            } else {
+                Vec::new()
+            };
+            Ok(PlannedOutput {
+                lock_root: lock_root(&lock)?,
+                amount: *amount,
+                note_data,
+            })
+        }
+        RecipientSpec::Multisig {
+            threshold,
+            addresses,
+            amount,
+        } => {
+            let lock = pkh_lock(*threshold, addresses);
+            Ok(PlannedOutput {
+                lock_root: lock_root(&lock)?,
+                amount: *amount,
+                // Hoon always includes lock note-data for multisig outputs.
+                note_data: vec![RawNoteDataEntry::from_lock(lock.clone())],
+            })
+        }
+        RecipientSpec::BridgeDeposit {
+            evm_address,
+            amount,
+        } => Ok(PlannedOutput {
+            lock_root: Hash::from_base58(BRIDGE_LOCK_ROOT_DEFAULT_B58).map_err(|err| {
+                NockAppError::from(CrownError::Unknown(format!(
+                    "Invalid bridge lock root constant '{}': {}",
+                    BRIDGE_LOCK_ROOT_DEFAULT_B58, err
+                )))
+            })?,
+            amount: *amount,
+            note_data: vec![RawNoteDataEntry::from_bridge_deposit(evm_address_to_based(
+                *evm_address,
+            ))],
+        }),
+    }
+}
+
+pub fn planner_refund_output_template(
+    refund_pkh: Option<&Hash>,
+    signer_pkh: &Hash,
+    include_data: bool,
+) -> Result<PlannedOutput, NockAppError> {
+    let refund_owner = refund_pkh.unwrap_or(signer_pkh).clone();
+    let refund_lock = pkh_lock(1, std::slice::from_ref(&refund_owner));
+    Ok(PlannedOutput {
+        lock_root: lock_root(&refund_lock)?,
+        amount: 0,
+        note_data: if include_data {
+            vec![RawNoteDataEntry::from_lock(refund_lock.clone())]
+        } else {
+            Vec::new()
+        },
+    })
 }
 
 #[cfg(test)]

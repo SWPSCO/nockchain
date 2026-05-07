@@ -1,13 +1,17 @@
-use bincode::{config, decode_from_slice, encode_to_vec, Decode, Encode};
+use bincode::{config, encode_to_vec, Decode, Encode};
 use blake3::Hash;
+use bytes::Bytes;
 use nockvm_macros::tas;
 
+use super::artifact::{ArtifactError, CheckedReader};
 use crate::kernel::form::LoadState;
 use crate::noun::slab::NounSlab;
 use crate::{JammedNoun, NockAppError};
 
 const EXPORTED_STATE_MAGIC_BYTES: u64 = tas!(b"EXPJAM");
 const EXPORTED_STATE_VERSION: u32 = 0;
+const EXPORTED_STATE_ADVICE: &str =
+    "Re-export the state jam from a known-good node, or start from a checkpoint instead.";
 
 /// A structure for exporting just the kernel state, without the cold state
 #[derive(Encode, Decode, PartialEq, Debug)]
@@ -30,9 +34,38 @@ impl ExportedState {
         encode_to_vec(self, config::standard())
     }
 
-    pub fn decode(data: &[u8]) -> Result<Self, bincode::error::DecodeError> {
-        let (state, _) = decode_from_slice(data, config::standard())?;
-        Ok(state)
+    pub fn decode(data: &[u8]) -> Result<Self, ArtifactError> {
+        let mut reader =
+            CheckedReader::new_with_advice(data, "exported state jam", EXPORTED_STATE_ADVICE);
+        let magic_bytes = reader.read_u64("magic bytes")?;
+        if magic_bytes != EXPORTED_STATE_MAGIC_BYTES {
+            return Err(ArtifactError::InvalidMagic {
+                format: "exported state jam",
+                expected: "EXPJAM",
+            });
+        }
+
+        let version = reader.read_u32("version")?;
+        if version != EXPORTED_STATE_VERSION {
+            return Err(ArtifactError::UnsupportedVersion {
+                format: "exported state jam",
+                version,
+                supported: "0",
+            });
+        }
+
+        let ker_hash = reader.read_hash("kernel hash")?;
+        let event_num = reader.read_u64("event number")?;
+        let jam = JammedNoun::new(Bytes::copy_from_slice(reader.read_bytes("state jam")?));
+        reader.finish()?;
+
+        Ok(Self {
+            magic_bytes,
+            version,
+            ker_hash,
+            event_num,
+            jam,
+        })
     }
 
     pub fn from_loadstate(state: LoadState) -> Self {
@@ -57,5 +90,64 @@ impl ExportedState {
             ker_hash: self.ker_hash,
             event_num: self.event_num,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+
+    use blake3::hash;
+
+    use super::*;
+
+    fn exported_state_with_absurd_jam_length() -> Vec<u8> {
+        let state = ExportedState {
+            magic_bytes: EXPORTED_STATE_MAGIC_BYTES,
+            version: EXPORTED_STATE_VERSION,
+            ker_hash: hash(b"state-jam"),
+            event_num: 7,
+            jam: JammedNoun::new(Bytes::new()),
+        };
+        let mut bytes = state.encode().expect("encode exported state");
+
+        // The final byte is the bincode varint length for the empty Bytes field.
+        assert_eq!(bytes.pop(), Some(0));
+        bytes.push(253);
+        bytes.extend_from_slice(&u64::MAX.to_le_bytes());
+        bytes
+    }
+
+    #[test]
+    fn decodes_exported_state_roundtrip() {
+        let state = ExportedState {
+            magic_bytes: EXPORTED_STATE_MAGIC_BYTES,
+            version: EXPORTED_STATE_VERSION,
+            ker_hash: hash(b"state-jam"),
+            event_num: 7,
+            jam: JammedNoun::new(Bytes::from_static(b"state")),
+        };
+        let encoded = state.encode().expect("encode exported state");
+        let decoded = ExportedState::decode(&encoded).expect("decode exported state");
+
+        assert_eq!(decoded, state);
+    }
+
+    #[test]
+    fn corrupt_exported_state_length_is_reported_without_panic() {
+        let bytes = exported_state_with_absurd_jam_length();
+        let decode_result = catch_unwind(AssertUnwindSafe(|| ExportedState::decode(&bytes)));
+
+        assert!(
+            decode_result.is_ok(),
+            "corrupt exported state length must be reported as a decode error, not a panic"
+        );
+        let err = decode_result
+            .expect("checked above")
+            .expect_err("corrupt exported state should fail to decode");
+        assert!(
+            err.to_string().contains("Re-export the state jam"),
+            "error should give an operator a recovery path: {err}"
+        );
     }
 }

@@ -1,17 +1,14 @@
 use ibig::UBig;
+use nockchain_types::tx_engine::v1::hashable as hashable_helper;
 use nockvm::interpreter::Context;
 use nockvm::jets::util::{slot, BAIL_FAIL};
 use nockvm::jets::JetErr;
 use nockvm::mem::NockStack;
-use nockvm::noun::{Atom, Noun, D, T};
-use nockvm_macros::tas;
+use nockvm::noun::{Atom, Noun, T};
 
 use crate::form::belt::{mont_reduction, montify, montiply, Belt};
 use crate::form::math::tip5;
 use crate::form::noun_ext::NounMathExt;
-use crate::form::structs::HoonList;
-use crate::jets::bp_jets::bpoly_to_list;
-use crate::jets::mary_jets::{change_step, get_mary_fields};
 use crate::utils::{
     belt_as_noun, bitslice_to_u128, fits_in_u128, hoon_list_to_vecbelt, hoon_list_to_vecnoun,
     vec_to_hoon_list, vecnoun_to_hoon_list,
@@ -194,65 +191,7 @@ pub fn hash_hashable_jet(context: &mut Context, subject: Noun) -> Result<Noun, J
 }
 
 pub fn hash_hashable(stack: &mut NockStack, h: Noun) -> Result<Noun, JetErr> {
-    if !h.is_cell() {
-        return Err(BAIL_FAIL);
-    }
-
-    let h_head = h.as_cell()?.head();
-    let h_tail = h.as_cell()?.tail();
-
-    if h_head.is_direct() {
-        let tag = h_head.as_direct()?;
-
-        match tag.data() {
-            tas!(b"hash") => hash_hashable_hash(stack, h_tail),
-            tas!(b"leaf") => hash_hashable_leaf(stack, h_tail),
-            tas!(b"list") => hash_hashable_list(stack, h_tail),
-            tas!(b"mary") => hash_hashable_mary(stack, h_tail),
-            _ => hash_hashable_other(stack, h_head, h_tail),
-        }
-    } else {
-        hash_hashable_other(stack, h_head, h_tail)
-    }
-}
-
-fn hash_hashable_hash(_stack: &mut NockStack, p: Noun) -> Result<Noun, JetErr> {
-    Ok(p)
-}
-fn hash_hashable_leaf(stack: &mut NockStack, p: Noun) -> Result<Noun, JetErr> {
-    tip5::hash::hash_noun_varlen(stack, p)
-}
-fn hash_hashable_list(stack: &mut NockStack, p: Noun) -> Result<Noun, JetErr> {
-    let turn: Vec<Noun> = HoonList::try_from(p)?
-        .into_iter()
-        .map(|x| hash_hashable(stack, x).expect("hash_hashable should succeed for list element"))
-        .collect();
-    let turn_list = vecnoun_to_hoon_list(stack, &turn);
-    tip5::hash::hash_noun_varlen(stack, turn_list)
-}
-fn hash_hashable_mary(stack: &mut NockStack, p: Noun) -> Result<Noun, JetErr> {
-    let (ma_step, ma_array_len, _ma_array_dat) = get_mary_fields(p)?;
-
-    let ma_changed = change_step(stack, p, D(1))?;
-    let [_ma_changed_step, ma_changed_array] = ma_changed.uncell()?; // +$  mary  [step=@ =array]
-    let bpoly_list = bpoly_to_list(stack, ma_changed_array)?;
-    let hash_belts_list = tip5::hash::hash_belts_list(stack, bpoly_list)?;
-
-    let leaf_step = T(stack, &[D(tas!(b"leaf")), ma_step.as_noun()]);
-    let leaf_len = T(stack, &[D(tas!(b"leaf")), ma_array_len.as_noun()]);
-    let hash = T(stack, &[D(tas!(b"hash")), hash_belts_list]);
-    let arg = T(stack, &[leaf_step, leaf_len, hash]);
-
-    hash_hashable(stack, arg)
-}
-
-fn hash_hashable_other(stack: &mut NockStack, p: Noun, q: Noun) -> Result<Noun, JetErr> {
-    let ph = hash_hashable(stack, p)?;
-    let qh = hash_hashable(stack, q)?;
-
-    let cell = T(stack, &[ph, qh]);
-
-    hash_ten_cell(stack, cell)
+    hashable_helper::hash_hashable(stack, h)
 }
 
 pub fn digest_to_atom_jet(context: &mut Context, subject: Noun) -> Result<Noun, JetErr> {

@@ -1133,4 +1133,203 @@ mod tests {
 
         println!("SUCCESS: Fix confirmed - adding boolean field resolves the EOF enum serialization issue");
     }
+
+    #[derive(Debug, serde::Deserialize)]
+    struct Gen1CborConformanceVectors {
+        schema_version: String,
+        request_vectors: Vec<RequestVector>,
+        response_vectors: Vec<ResponseVector>,
+        invalid_vectors: Vec<InvalidVector>,
+    }
+
+    #[derive(Debug, serde::Deserialize)]
+    struct RequestVector {
+        id: String,
+        variant: RequestVariant,
+        cbor_hex: String,
+        message_hex: String,
+        pow_hex: Option<String>,
+        nonce: Option<u64>,
+    }
+
+    #[derive(Debug, serde::Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum RequestVariant {
+        Gossip,
+        Request,
+    }
+
+    #[derive(Debug, serde::Deserialize)]
+    struct ResponseVector {
+        id: String,
+        variant: ResponseVariant,
+        cbor_hex: String,
+        acked: Option<bool>,
+        message_hex: Option<String>,
+    }
+
+    #[derive(Debug, serde::Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum ResponseVariant {
+        Ack,
+        Result,
+    }
+
+    #[derive(Debug, serde::Deserialize)]
+    struct InvalidVector {
+        id: String,
+        target: InvalidTarget,
+        cbor_hex: String,
+        error_substring: Option<String>,
+    }
+
+    #[derive(Debug, serde::Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum InvalidTarget {
+        Request,
+        Response,
+    }
+
+    fn load_gen1_cbor_conformance_vectors() -> Gen1CborConformanceVectors {
+        serde_json::from_str(include_str!("../testdata/req_res_gen1_cbor_vectors.json"))
+            .expect("gen1 cbor vector fixture must be valid JSON")
+    }
+
+    fn decode_hex(hex_value: &str) -> Vec<u8> {
+        hex::decode(hex_value).expect("vector hex must be valid")
+    }
+
+    fn request_from_vector(vector: &RequestVector) -> NockchainRequest {
+        match vector.variant {
+            RequestVariant::Gossip => NockchainRequest::Gossip {
+                message: ByteBuf::from(decode_hex(&vector.message_hex)),
+            },
+            RequestVariant::Request => {
+                let pow_hex = vector
+                    .pow_hex
+                    .as_ref()
+                    .expect("request vectors require pow_hex for Request variant");
+                let pow_bytes = decode_hex(pow_hex);
+                let pow: [u8; 16] = pow_bytes
+                    .try_into()
+                    .expect("pow_hex must decode to 16 bytes");
+                let nonce = vector
+                    .nonce
+                    .expect("request vectors require nonce for Request variant");
+                NockchainRequest::Request {
+                    pow,
+                    nonce,
+                    message: ByteBuf::from(decode_hex(&vector.message_hex)),
+                }
+            }
+        }
+    }
+
+    fn response_from_vector(vector: &ResponseVector) -> NockchainResponse {
+        match vector.variant {
+            ResponseVariant::Ack => {
+                let acked = vector
+                    .acked
+                    .expect("response vectors require acked for Ack variant");
+                NockchainResponse::Ack { acked }
+            }
+            ResponseVariant::Result => {
+                let message_hex = vector
+                    .message_hex
+                    .as_ref()
+                    .expect("response vectors require message_hex for Result variant");
+                NockchainResponse::Result {
+                    message: ByteBuf::from(decode_hex(message_hex)),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_gen1_cbor_vector_schema_version() {
+        let vectors = load_gen1_cbor_conformance_vectors();
+        assert_eq!(vectors.schema_version, "req_res_gen1_cbor_v1");
+    }
+
+    #[test]
+    fn test_gen1_request_cbor_vectors_roundtrip() {
+        let vectors = load_gen1_cbor_conformance_vectors();
+        assert!(
+            !vectors.request_vectors.is_empty(),
+            "request vector fixture must not be empty"
+        );
+        for vector in vectors.request_vectors {
+            let expected = request_from_vector(&vector);
+            let encoded = serde_cbor::to_vec(&expected).expect("request should serialize");
+            assert_eq!(
+                hex::encode(&encoded),
+                vector.cbor_hex,
+                "request vector '{}' cbor mismatch",
+                vector.id
+            );
+            let decoded: NockchainRequest = serde_cbor::from_slice(&decode_hex(&vector.cbor_hex))
+                .expect("request vector cbor should deserialize");
+            assert_eq!(
+                decoded, expected,
+                "request vector '{}' roundtrip mismatch",
+                vector.id
+            );
+        }
+    }
+
+    #[test]
+    fn test_gen1_response_cbor_vectors_roundtrip() {
+        let vectors = load_gen1_cbor_conformance_vectors();
+        assert!(
+            !vectors.response_vectors.is_empty(),
+            "response vector fixture must not be empty"
+        );
+        for vector in vectors.response_vectors {
+            let expected = response_from_vector(&vector);
+            let encoded = serde_cbor::to_vec(&expected).expect("response should serialize");
+            assert_eq!(
+                hex::encode(&encoded),
+                vector.cbor_hex,
+                "response vector '{}' cbor mismatch",
+                vector.id
+            );
+            let decoded: NockchainResponse = serde_cbor::from_slice(&decode_hex(&vector.cbor_hex))
+                .expect("response vector cbor should deserialize");
+            assert_eq!(
+                decoded, expected,
+                "response vector '{}' roundtrip mismatch",
+                vector.id
+            );
+        }
+    }
+
+    #[test]
+    fn test_gen1_invalid_cbor_vectors_fail_decode() {
+        let vectors = load_gen1_cbor_conformance_vectors();
+        assert!(
+            !vectors.invalid_vectors.is_empty(),
+            "invalid vector fixture must not be empty"
+        );
+        for vector in vectors.invalid_vectors {
+            let bytes = decode_hex(&vector.cbor_hex);
+            let err = match vector.target {
+                InvalidTarget::Request => serde_cbor::from_slice::<NockchainRequest>(&bytes)
+                    .expect_err("invalid request vector should fail decode"),
+                InvalidTarget::Response => serde_cbor::from_slice::<NockchainResponse>(&bytes)
+                    .expect_err("invalid response vector should fail decode"),
+            };
+            if let Some(substring) = vector.error_substring {
+                if !substring.is_empty() {
+                    let err_text = format!("{err:?}");
+                    assert!(
+                        err_text.contains(&substring),
+                        "invalid vector '{}' error mismatch. expected substring '{}', got '{}'",
+                        vector.id,
+                        substring,
+                        err_text
+                    );
+                }
+            }
+        }
+    }
 }

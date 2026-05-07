@@ -320,10 +320,35 @@ impl TransactionState {
     }
 
     pub fn push(&mut self, tx: BridgeTx) {
+        if let Some(existing) = self
+            .transactions
+            .iter_mut()
+            .find(|existing| Self::same_event(existing, &tx))
+        {
+            existing.status = tx.status;
+            if existing.base_block.is_none() {
+                existing.base_block = tx.base_block;
+            }
+            if existing.nock_height.is_none() {
+                existing.nock_height = tx.nock_height;
+            }
+            return;
+        }
+
         if self.transactions.len() >= self.max_transactions {
             self.transactions.pop_back();
         }
         self.transactions.push_front(tx);
+    }
+
+    fn same_event(a: &BridgeTx, b: &BridgeTx) -> bool {
+        a.tx_hash == b.tx_hash
+            && a.direction == b.direction
+            && a.from == b.from
+            && a.to == b.to
+            && a.amount == b.amount
+            && a.base_block == b.base_block
+            && a.nock_height == b.nock_height
     }
 
     pub fn deposits(&self) -> impl Iterator<Item = &BridgeTx> {
@@ -860,5 +885,58 @@ mod tests {
         );
         assert_eq!(format_nock_from_nicks(1), "0.0000152587890625");
         assert_eq!(format_nock_from_nicks(653_410_000_000), "9970245.361328125");
+    }
+
+    #[test]
+    fn transaction_state_deduplicates_replayed_event() {
+        let mut state = TransactionState::new(10);
+        let tx = BridgeTx {
+            tx_hash: "0xabc".to_string(),
+            direction: TxDirection::Deposit,
+            from: "Base".to_string(),
+            to: "0x1111".to_string(),
+            amount: 123,
+            status: TxStatus::Completed,
+            timestamp: std::time::UNIX_EPOCH,
+            base_block: Some(42),
+            nock_height: None,
+        };
+        let replay = BridgeTx {
+            timestamp: std::time::UNIX_EPOCH + Duration::from_secs(10),
+            ..tx.clone()
+        };
+
+        state.push(tx.clone());
+        state.push(replay);
+
+        assert_eq!(state.transactions.len(), 1);
+        assert_eq!(state.transactions[0].tx_hash, tx.tx_hash);
+        assert_eq!(state.transactions[0].timestamp, tx.timestamp);
+    }
+
+    #[test]
+    fn transaction_state_keeps_distinct_events_with_same_tx_hash() {
+        let mut state = TransactionState::new(10);
+        let tx1 = BridgeTx {
+            tx_hash: "0xabc".to_string(),
+            direction: TxDirection::Deposit,
+            from: "Base".to_string(),
+            to: "0x1111".to_string(),
+            amount: 123,
+            status: TxStatus::Completed,
+            timestamp: std::time::UNIX_EPOCH,
+            base_block: Some(42),
+            nock_height: None,
+        };
+        let tx2 = BridgeTx {
+            amount: 456,
+            timestamp: std::time::UNIX_EPOCH + Duration::from_secs(1),
+            ..tx1.clone()
+        };
+
+        state.push(tx1);
+        state.push(tx2);
+
+        assert_eq!(state.transactions.len(), 2);
     }
 }

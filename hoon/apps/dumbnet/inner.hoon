@@ -36,14 +36,16 @@
     ~&  [%nockchain-state-version -.arg]
     ::  cut
     |^
-    =.  k  ~>  %bout  (update-constants (check-checkpoints (state-n-to-6 arg)))
+    =.  k  ~>  %bout  (update-constants (check-checkpoints (state-n-to-7 arg)))
     =.  c.k  ~>  %bout  check-and-repair:con
+    ~|  %v1-phase-must-be-lte-asert-phase
+    ?>  (lte v1-phase.constants.k asert-phase.constants.k)
     k
     ::  this arm should be renamed each state upgrade to state-n-to-[latest] and extended to loop through all upgrades
-    ++  state-n-to-6
+    ++  state-n-to-7
       |=  arg=load-kernel-state:dk
       ^-  kernel-state:dk
-      ?.  ?=(%6 -.arg)
+      ?.  ?=(%7 -.arg)
         ~>  %slog.[0 'load: State upgrade required']
         ?-  -.arg
             ::
@@ -53,8 +55,43 @@
           %3  $(arg (state-3-to-4 arg))
           %4  $(arg (state-4-to-5 arg))
           %5  $(arg (state-5-to-6 arg))
+          %6  $(arg (state-6-to-7 arg))
         ==
       arg
+    ::
+    ::  upgrade kernel state 6 to kernel state 7
+    ::    blockchain-constants:v1 was extended with five ASERT fields in
+    ::    this PR. kernel-state-6 uses blockchain-constants-v1-pre-asert
+    ::    (the frozen pre-ASERT shape) so that old %6 states can decode
+    ::    cleanly. kernel-state-7 uses the full blockchain-constants:v1.
+    ::    we discard the old constants and let update-constants fill in
+    ::    current defaults below.
+    ++  state-6-to-7
+      |=  arg=kernel-state-6:dk
+      ^-  kernel-state-7:dk
+      ::  guard: refuse if mainnet chain has already crossed ASERT activation.
+      ::  replicates is-mainnet logic inline to avoid calling dumb-derived with
+      ::  pre-ASERT constants (incompatible type).
+      =/  on-mainnet=?
+        ?~  genesis-seal.c.arg
+          ?^  genesis-id=(~(get z-by heaviest-chain.d.arg) 0)
+            =/  genesis  (~(get z-by blocks.c.arg) u.genesis-id)
+            ?~  genesis  %.n
+            =((hash:page-msg:t ~(msg get:local-page:t u.genesis)) realnet-genesis-msg:dk)
+          %.n
+        =(realnet-genesis-msg:dk msg-hash.u.genesis-seal.c.arg)
+      =/  phase  asert-phase:*blockchain-constants:t
+      ?:  &(on-mainnet ?=(^ highest-block-height.d.arg) (gte u.highest-block-height.d.arg phase))
+        ~>  %slog.[0 'FATAL: late-upgrade - mainnet chain crossed ASERT activation under pre-ASERT rules']
+        !!
+      :*  %7
+          c=c.arg
+          a=a.arg
+          ::  discard stale pre-upgrade candidate; miner will rebuild on next tick
+          m=m.arg(candidate-block *page:t, candidate-acc *tx-acc:t)
+          d=d.arg
+          constants=*blockchain-constants:t
+      ==
     ::
     ::  upgrade kernel state 5 to kernel state 6
     ++  state-5-to-6
@@ -95,7 +132,7 @@
           next-nonce       next-nonce.m.arg
         ==
       =/  default-constants=blockchain-constants:t  *blockchain-constants:t
-      =/  new-constants=blockchain-constants:t
+      =/  new-constants=blockchain-constants-v1-pre-asert:dk
         :*  v1-phase.default-constants
             bythos-phase.default-constants
             data.default-constants
@@ -283,6 +320,7 @@
     ^-  (unit (unit *))
     ~>  %slog.[0 (cat 3 'peek: %' -.arg)]
     =/  =(pole)  arg
+    |^
     ?+  pole  ~
     ::
         [%mainnet ~]
@@ -382,38 +420,10 @@
       ``heaviest-chain.d.k
     ::
         [%heaviest-chain-blocks-range start=@ end=@ ~]
-      ^-  (unit (unit (list [page-number:t block-id:t page:t (z-map tx-id:t tx:t)])))
-      =/  start-height  ((soft page-number:t) start.pole)
-      =/  end-height  ((soft page-number:t) end.pole)
-      ?~  start-height  ~
-      ?~  end-height  ~
-      ::  ensure start <= end
-      ?:  (gth u.start-height u.end-height)
-        ``~
-      ::  build list of blocks in range from heaviest chain
-      =/  result=(list [page-number:t block-id:t page:t (z-map tx-id:t tx:t)])
-        =/  height  u.start-height
-        |-  ^-  (list [page-number:t block-id:t page:t (z-map tx-id:t tx:t)])
-        ?:  (gth height u.end-height)
-          ~
-        ::  get block-id from heaviest chain
-        =/  block-id=(unit block-id:t)
-          (~(get z-by heaviest-chain.d.k) height)
-        ?~  block-id
-          $(height +(height))
-        ::  get block data
-        =/  local-block=(unit local-page:t)
-          (~(get z-by blocks.c.k) u.block-id)
-        ?~  local-block
-          $(height +(height))
-        ::  get transactions for this block
-        =/  block-txs=(unit (z-map tx-id:t tx:t))
-          (~(get z-by txs.c.k) u.block-id)
-        =/  txs-map  ?~(block-txs ~ u.block-txs)
-        ::  add to result list
-        :-  [height u.block-id (to-page:local-page:t u.local-block) txs-map]
-        $(height +(height))
-      ``result
+      (heaviest-chain-blocks-range start.pole end.pole %.y)
+    ::
+        [%heaviest-chain-blocks-range-no-pow start=@ end=@ ~]
+      (heaviest-chain-blocks-range start.pole end.pole %.n)
     ::
         [%desk-hash ~]
       ^-  (unit (unit (unit @uvI)))
@@ -591,6 +601,45 @@
       =+  tid=(from-b58:hash:t tid-b58:pole)
       ``(~(has z-by raw-txs.c.k) tid)
     ==
+    ++  heaviest-chain-blocks-range
+      |=  [start=@ end=@ include-pow=?]
+      ^-  (unit (unit (list [page-number:t block-id:t page:t (z-map tx-id:t tx:t)])))
+      =/  start-height  ((soft page-number:t) start)
+      =/  end-height  ((soft page-number:t) end)
+      ?~  start-height  ~
+      ?~  end-height  ~
+      ::  ensure start <= end
+      ?:  (gth u.start-height u.end-height)
+        ``~
+      =/  to-page
+        ?:  include-pow
+          to-page:local-page:t
+        to-page-no-pow:local-page:t
+      ::  build list of blocks in range from heaviest chain
+      =/  result=(list [page-number:t block-id:t page:t (z-map tx-id:t tx:t)])
+        =/  height  u.start-height
+        |-  ^-  (list [page-number:t block-id:t page:t (z-map tx-id:t tx:t)])
+        ?:  (gth height u.end-height)
+          ~
+        ::  get block-id from heaviest chain
+        =/  block-id=(unit block-id:t)
+          (~(get z-by heaviest-chain.d.k) height)
+        ?~  block-id
+          $(height +(height))
+        ::  get block data
+        =/  local-block=(unit local-page:t)
+          (~(get z-by blocks.c.k) u.block-id)
+        ?~  local-block
+          $(height +(height))
+        ::  get transactions for this block
+        =/  block-txs=(unit (z-map tx-id:t tx:t))
+          (~(get z-by txs.c.k) u.block-id)
+        =/  txs-map  ?~(block-txs ~ u.block-txs)
+        ::  add to result list
+        :-  [height u.block-id (to-page u.local-block) txs-map]
+        $(height +(height))
+      ``result
+    --
   ::
   ++  poke
     |=  [wir=wire eny=@ our=@ux now=@da dat=*]
@@ -627,7 +676,7 @@
     :_  effs
     =/  version=proof-version:sp
       (height-to-proof-version:con ~(height get:page:t candidate-block.m.k))
-    =/  target  (~(got z-by targets.c.k) ~(parent get:page:t candidate-block.m.k))
+    =/  target  ~(target get:page:t candidate-block.m.k)
     =/  commit  (block-commitment:page:t candidate-block.m.k)
     ?-  version
       %0  [%mine %0 commit target pow-len:t]
@@ -1162,7 +1211,10 @@
         ~>  %slog.[0 'accept-block: New heaviest block!']
         =/  span=span-effect:dk
           :+  %span  %new-heaviest-chain
-          ~['block_height'^n+~(height get:page:t pag) 'heaviest_block_digest'^s+(to-b58:hash:t ~(digest get:page:t pag))]
+          :~  'block_height'^n+~(height get:page:t pag)
+              'heaviest_block_digest'^s+(to-b58:hash:t ~(digest get:page:t pag))
+              'block_target'^s+(scot %ux (merge:bignum:t ~(target get:page:t pag)))
+          ==
         :*  [%gossip %0 %heard-block pag]
             span
             effs
@@ -1366,7 +1418,7 @@
           [~ k]
         ~&  %foo1
         ?:  %+  check-target:mine  dig.command
-            (~(got z-by targets.c.k) ~(parent get:page:t candidate-block.m.k))
+            ~(target get:page:t candidate-block.m.k)
           =.  m.k  (set-pow:min prf.command)
           =.  m.k  set-digest:min
           =^  heard-block-effs  k  (heard-block /poke/miner now candidate-block.m.k eny)

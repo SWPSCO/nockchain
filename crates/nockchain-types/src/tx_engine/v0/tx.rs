@@ -1,8 +1,6 @@
-use nockchain_math::noun_ext::NounMathExt;
-use nockchain_math::structs::HoonMapIter;
-use nockchain_math::zoon::common::DefaultTipHasher;
-use nockchain_math::zoon::{zmap, zset};
-use nockvm::noun::{Noun, NounAllocator, D};
+use nockchain_math::zoon::zmap::ZMap;
+use nockchain_math::zoon::zset::ZSet;
+use nockvm::noun::{Noun, NounAllocator};
 use noun_serde::{NounDecode, NounDecodeError, NounEncode};
 
 use super::note::{Lock, NoteV0, TimelockIntent};
@@ -65,29 +63,15 @@ pub struct Inputs(pub Vec<(Name, Input)>);
 
 impl NounEncode for Inputs {
     fn to_noun<A: NounAllocator>(&self, stack: &mut A) -> Noun {
-        self.0.iter().fold(D(0), |map, (name, input)| {
-            let mut key = name.to_noun(stack);
-            let mut value = input.to_noun(stack);
-            zmap::z_map_put(stack, &map, &mut key, &mut value, &DefaultTipHasher)
-                .expect("Failed to put into z_map")
-        })
+        ZMap::try_from_entries(self.0.clone())
+            .expect("inputs z-map should encode")
+            .to_noun(stack)
     }
 }
 
 impl NounDecode for Inputs {
     fn from_noun(noun: &Noun) -> Result<Self, NounDecodeError> {
-        let entries = HoonMapIter::from(*noun)
-            .filter(|entry| entry.is_cell())
-            .map(|entry| {
-                let [key, value] = entry
-                    .uncell()
-                    .map_err(|_| NounDecodeError::Custom("input entry not a pair".into()))?;
-                let name = Name::from_noun(&key)?;
-                let input = Input::from_noun(&value)?;
-                Ok((name, input))
-            })
-            .collect::<Result<Vec<_>, NounDecodeError>>()?;
-        Ok(Self(entries))
+        Ok(Self(ZMap::<Name, Input>::from_noun(noun)?.into_entries()))
     }
 }
 
@@ -149,42 +133,17 @@ pub struct Seed {
 
 impl NounEncode for Seeds {
     fn to_noun<A: NounAllocator>(&self, stack: &mut A) -> Noun {
-        self.seeds.iter().fold(D(0), |set, seed| {
-            let mut value = seed.to_noun(stack);
-            zset::z_set_put(stack, &set, &mut value, &DefaultTipHasher)
-                .expect("z-set put for seeds should not fail")
-        })
+        ZSet::try_from_items(self.seeds.clone())
+            .expect("seed z-set should encode")
+            .to_noun(stack)
     }
 }
 
 impl NounDecode for Seeds {
     fn from_noun(noun: &Noun) -> Result<Self, NounDecodeError> {
-        fn traverse(node: &Noun, acc: &mut Vec<Seed>) -> Result<(), NounDecodeError> {
-            if let Ok(atom) = node.as_atom() {
-                if atom.as_u64()? == 0 {
-                    return Ok(());
-                }
-                return Err(NounDecodeError::ExpectedCell);
-            }
-
-            let cell = node
-                .as_cell()
-                .map_err(|_| NounDecodeError::Custom("seed node not a cell".into()))?;
-            let seed = Seed::from_noun(&cell.head())?;
-            acc.push(seed);
-
-            let branches = cell
-                .tail()
-                .as_cell()
-                .map_err(|_| NounDecodeError::Custom("seed branches not a cell".into()))?;
-            traverse(&branches.head(), acc)?;
-            traverse(&branches.tail(), acc)?;
-            Ok(())
-        }
-
-        let mut seeds = Vec::new();
-        traverse(noun, &mut seeds)?;
-        Ok(Seeds { seeds })
+        Ok(Seeds {
+            seeds: ZSet::<Seed>::from_noun(noun)?.into_items(),
+        })
     }
 }
 

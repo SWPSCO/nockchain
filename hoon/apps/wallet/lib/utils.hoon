@@ -38,10 +38,10 @@
   |%
   ++  spends
     |=  [raw-spends=spends:v1:transact =input-display:wt page-num=page-number:transact]
-    =+  bc=*blockchain-constants:transact
     =/  bythos-active=?  (gte page-num bythos-phase.bc)
     =/  seeds-count=@
-      (count-seed-words:spends:transact [raw-spends page-num])
+      :: count seeds against the tx-engine instance already bound to this wallet's constants
+      (count-seed-words:spends:t [raw-spends page-num])
     =/  witness-count=@
       (count-witness-words [raw-spends input-display page-num])
     ::  match consensus formula:
@@ -64,7 +64,6 @@
   ::
   ++  count-witness-words
     |=  [raw-spends=spends:v1:transact =input-display:wt page-num=page-number:transact]
-    =+  bc=*blockchain-constants:transact
     ?:  (gte page-num bythos-phase.bc)
       (count-witness-words-raw [raw-spends input-display])
     (count-witness-words-raw [raw-spends input-display])
@@ -325,6 +324,17 @@
         'N/A'
       (lock:v1:display u.lock.meta)
     ::
+    ++  watch-first-name-locks
+      ^-  (list [name=hash:transact lock=(unit lock:transact)])
+      =+  subtree=(~(kids of keys.state) watch-path)
+      %+  murn
+        ~(tap by kid.subtree)
+      |=  [=trek =meta:wt]
+      ?.  ?=(%first-name -.meta)
+        ~
+      %-  some
+      [name.meta lock.meta]
+    ::
     ++  watch-first-names
       ^-  (list @t)
       =+  subtree=(~(kids of keys.state) watch-path)
@@ -337,8 +347,8 @@
         ?:  (gte (met 3 addr) 132)
           acc
         =+  pubkey-hash=(from-b58:hash:transact addr)
-        =+  simple-name=(simple:v1:first-name:transact pubkey-hash)
-        =+  coinbase-name=(coinbase:v1:first-name:transact pubkey-hash)
+        =+  simple-name=(simple:v1:first-name:t pubkey-hash)
+        =+  coinbase-name=(coinbase:v1:first-name:t pubkey-hash)
         :+  (to-b58:hash:transact simple-name)
           (to-b58:hash:transact coinbase-name)
         acc

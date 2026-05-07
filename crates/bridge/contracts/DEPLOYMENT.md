@@ -11,25 +11,18 @@ networks (devnets, simulations, or proxied mainnets).
 
 ## Quick Start
 
-For a quick deployment to a new Tenderly devnet:
+For a quick deployment to a new Tenderly Base Sepolia virtual testnet:
 
 ```bash
 cd crates/bridge/contracts
 
-# 1. Install dependencies
-make install
+# Required environment variables:
+#   TENDERLY_ACCESS_KEY, TENDERLY_ACCOUNT_ID, TENDERLY_PROJECT_SLUG,
+#   TENDERLY_PRIVATE_KEY, BRIDGE_NODE_0..BRIDGE_NODE_4
+./scripts/tenderly-vnet-deploy.sh --cleanup-old --cleanup-prefix bridge-vnet --cleanup-keep 3
 
-# 2. Configure environment
-cp .env.template .env
-# Edit .env with your values
-
-# 3. Spawn Tenderly devnet
-tenderly devnet spawn --network base-sepolia --project bridge-contracts
-
-# 4. Update .env with RPC URL from above
-
-# 5. Deploy
-make deploy
+# Load generated RPC + contract addresses for bridge runtime scripts
+source scripts/environments/virtual-testnet.generated.env
 ```
 
 ## Table of Contents
@@ -122,21 +115,30 @@ export BRIDGE_NODE_0="0x..."
 
 ## 3. Deployment
 
-### Spawn or Select Tenderly Network
+### Provision Tenderly Network (Recommended)
 
-For a devnet fork:
+Use the bridge provisioning script from the repository root:
 
 ```bash
-tenderly devnet spawn --network base-sepolia --project bridge-contracts
+cd open/crates/bridge
+./scripts/tenderly-vnet-deploy.sh
 ```
 
-Copy the returned `rpc_url`. For live networks proxied through Tenderly, use
-the RPC URL shown in the Tenderly dashboard.
+This script:
 
-### Fund Test Accounts (Devnets Only)
+- Creates a fresh Base Sepolia virtual testnet via Tenderly API
+- Funds deployer + bridge node accounts with `tenderly_setBalance`
+- Deploys `MessageInbox` and `Nock` via `contracts/scripts/deploy_tenderly.sh`
+- Writes `scripts/environments/virtual-testnet.generated.env`
 
-Tenderly devnets start with zero balances. Before running integration tests,
-fund the bridge node and test accounts using the `tenderly_setBalance` RPC:
+The generated env file includes `TENDERLY_RPC_URL`, `BASE_WS_URL`,
+`INBOX_CONTRACT_ADDRESS`, and `NOCK_CONTRACT_ADDRESS` for downstream bridge
+scripts.
+
+### Manual Network/Funding Path (Fallback)
+
+If you are bypassing `tenderly-vnet-deploy.sh`, you can provision and fund
+manually:
 
 ```bash
 # Fund bridge node 0 and test account with 10 ETH each
@@ -153,10 +155,8 @@ curl -X POST "$TENDERLY_RPC_URL" \
   }'
 ```
 
-The hex value `0x8AC7230489E80000` equals 10 ETH (10 × 10^18 wei). You can
-fund multiple addresses in a single call by adding them to the array.
-
-**Note:** This is only needed for devnets. Mainnet forks inherit real balances.
+The hex value `0x8AC7230489E80000` equals 10 ETH (10 × 10^18 wei). Mainnet
+forks inherit real balances and usually do not require this step.
 
 ### Preview Deployment (Dry Run)
 

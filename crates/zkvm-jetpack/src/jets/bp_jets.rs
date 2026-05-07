@@ -2,8 +2,7 @@ use nockvm::interpreter::Context;
 use nockvm::jets::list::util::flop;
 use nockvm::jets::util::{slot, BAIL_FAIL};
 use nockvm::jets::{JetErr, Result};
-use nockvm::mem::NockStack;
-use nockvm::noun::{Atom, Cell, IndirectAtom, Noun, D, NO, T, YES};
+use nockvm::noun::{Atom, Cell, IndirectAtom, Noun, NO, YES};
 use tracing::debug;
 
 use crate::form::belt::*;
@@ -20,29 +19,7 @@ use crate::utils::is_hoon_list_end;
 pub fn bpoly_to_list_jet(context: &mut Context, subject: Noun) -> Result {
     let stack = &mut context.stack;
     let sam = slot(subject, 6)?;
-    bpoly_to_list(stack, sam)
-}
-
-pub fn bpoly_to_list(stack: &mut NockStack, sam: Noun) -> Result {
-    let Ok(sam_bpoly) = BPolySlice::try_from(sam) else {
-        return Err(BAIL_FAIL);
-    };
-
-    //  empty list is a null atom
-    let mut res_list = D(0);
-
-    let len = sam_bpoly.len();
-
-    if len == 0 {
-        return Ok(res_list);
-    }
-
-    for i in (0..len).rev() {
-        let res_atom = Atom::new(stack, sam_bpoly.0[i].into());
-        res_list = T(stack, &[res_atom.as_noun(), res_list]);
-    }
-
-    Ok(res_list)
+    nockchain_types::tx_engine::v1::hashable::bpoly_to_list(stack, sam)
 }
 
 pub fn bpadd_jet(context: &mut Context, subject: Noun) -> Result {

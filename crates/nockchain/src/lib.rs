@@ -11,6 +11,7 @@
 pub mod config;
 pub mod mining;
 pub mod setup;
+pub mod traces;
 
 use std::error::Error;
 use std::fs;
@@ -28,13 +29,13 @@ pub mod colors;
 
 use colors::*;
 use nockapp::noun::slab::{Jammer, NounSlab};
+use nockchain_types::fakenet_blockchain_constants;
 use nockvm::jets::hot::HotEntry;
 use nockvm::noun::{D, T, YES};
 use nockvm_macros::tas;
 use tracing::{debug, info, instrument};
 
 use crate::mining::{MiningKeyConfig, MiningPkhConfig};
-use crate::setup::fakenet_blockchain_constants;
 
 /// Module for handling driver initialization signals
 pub mod driver_init {
@@ -220,8 +221,7 @@ pub async fn init_with_kernel<J: Jammer + Send + 'static>(
 
     cli.validate()?;
 
-    let mut nockapp_cli = cli.nockapp_cli.clone();
-    nockapp_cli.stack_size = nockapp::kernel::boot::NockStackSize::Medium;
+    let nockapp_cli = cli.nockapp_cli.clone();
 
     let mut nockapp =
         boot::setup::<J>(kernel_jam, nockapp_cli, hot_state, "nockchain", None).await?;
@@ -408,9 +408,15 @@ pub async fn init_with_kernel<J: Jammer + Send + 'static>(
         if let Some(bythos_phase) = cli.fakenet_bythos_phase {
             fakenet_constants = fakenet_constants.with_bythos_phase(bythos_phase);
         }
+        if let Some(asert) = cli.fakenet_asert.into_config()? {
+            fakenet_constants = fakenet_constants
+                .with_asert_phase(asert.phase)
+                .with_asert_anchor_height(asert.anchor_height)
+                .with_asert_anchor_target_bex(asert.anchor_target_bex);
+        }
         setup::poke(
             &mut nockapp,
-            setup::SetupCommand::PokeFakenetConstants(fakenet_constants),
+            setup::SetupCommand::PokeFakenetConstants(Box::new(fakenet_constants)),
         )
         .await?;
         if let Some(true) = is_kernel_mainnet {
@@ -529,6 +535,7 @@ pub async fn init_with_kernel<J: Jammer + Send + 'static>(
         ))
         .await;
 
+    nockapp.add_io_driver(crate::traces::traces_driver()).await;
     nockapp.add_io_driver(nockapp::exit_driver()).await;
 
     Ok(nockapp)

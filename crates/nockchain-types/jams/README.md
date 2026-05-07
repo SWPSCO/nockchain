@@ -26,3 +26,88 @@ To refresh coverage:
 3. Update assertions in the matching tests when fixture structure changes.
 
 These tests use fixed `include_bytes!` paths, so fixture files must exist at compile time.
+
+## Compatibility note
+- If you change `tx_engine` encoding/decoding or noun shape without a version bump, regenerate these fixtures.
+- Otherwise tests may fail for the wrong reason, or pass against stale data that no longer matches current consensus encoding.
+
+## Regeneration Flow
+`hoon-closed` regeneration flow
+- Run all commands from the repo root.
+- Each `hoon-closed` run writes `out.jam`; move it to the fixture path shown below.
+
+## Fixture map
+- `open/crates/nockchain-types/jams/v0/raw-tx.jam`
+  - generator: `closed/hoon/scripts/fixtures/v0/generate-raw-tx.hoon`
+  - command:
+```bash
+cargo run --profile release --bin hoon-closed -- \
+  closed/hoon/scripts/fixtures/v0/generate-raw-tx.hoon \
+  closed/hoon
+cp out.jam open/crates/nockchain-types/jams/v0/raw-tx.jam
+```
+- `open/crates/nockchain-types/jams/v0/note.jam`
+  - generator: `closed/hoon/scripts/fixtures/v0/generate-note.hoon`
+  - command:
+```bash
+cargo run --profile release --bin hoon-closed -- \
+  closed/hoon/scripts/fixtures/v0/generate-note.hoon \
+  closed/hoon
+cp out.jam open/crates/nockchain-types/jams/v0/note.jam
+```
+- `open/crates/nockchain-types/jams/v0/balance.jam`
+  - generator: `closed/hoon/scripts/fixtures/v0/generate-balance.hoon`
+  - command:
+```bash
+cargo run --profile release --bin hoon-closed -- \
+  closed/hoon/scripts/fixtures/v0/generate-balance.hoon \
+  closed/hoon
+cp out.jam open/crates/nockchain-types/jams/v0/balance.jam
+```
+- `open/crates/nockchain-types/jams/v0/timelock.jam`
+  - generator: `closed/hoon/scripts/fixtures/v0/generate-timelock.hoon`
+  - command:
+```bash
+cargo run --profile release --bin hoon-closed -- \
+  closed/hoon/scripts/fixtures/v0/generate-timelock.hoon \
+  closed/hoon
+cp out.jam open/crates/nockchain-types/jams/v0/timelock.jam
+```
+- `open/crates/nockchain-types/jams/v1/raw-tx.jam`
+  - generator: `closed/hoon/scripts/fixtures/v1/generate-v1-raw-tx.hoon`
+  - command:
+```bash
+cargo run --profile release --bin hoon-closed -- \
+  closed/hoon/scripts/fixtures/v1/generate-v1-raw-tx.hoon \
+  closed/hoon
+cp out.jam open/crates/nockchain-types/jams/v1/raw-tx.jam
+```
+- `open/crates/nockchain-types/jams/v1/note.jam`
+  - generator: `closed/hoon/scripts/fixtures/v1/generate-v1-note.hoon`
+  - command:
+```bash
+cargo run --profile release --bin hoon-closed -- \
+  closed/hoon/scripts/fixtures/v1/generate-v1-note.hoon \
+  closed/hoon
+cp out.jam open/crates/nockchain-types/jams/v1/note.jam
+```
+- `open/crates/nockchain-types/jams/v1/raw-tx-word-count-oracle.jam`
+  - generator: `closed/hoon/scripts/fixtures/v1/generate-v1-raw-tx-word-count-golden.hoon`
+  - command:
+```bash
+cargo run --profile release --bin hoon-closed -- \
+  closed/hoon/scripts/fixtures/v1/generate-v1-raw-tx-word-count-golden.hoon \
+  closed/hoon
+cp out.jam open/crates/nockchain-types/jams/v1/raw-tx-word-count-oracle.jam
+```
+
+## Captured fixture (no direct Hoon script)
+- `open/crates/nockchain-types/jams/v0/early-balance.jam`
+  - source: captured `%balance-by-pubkey` peek payload.
+  - capture command:
+```bash
+cargo run -p nockapp-grpc --example dump_balance_peek -- \
+  http://127.0.0.1:50051 \
+  <PUBKEY_B58> \
+  /tmp
+```

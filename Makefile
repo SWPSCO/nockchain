@@ -11,6 +11,8 @@ export MINIMAL_LOG_FORMAT ?= true
 export MINING_PKH ?= 9yPePjfWAdUnzaQKyxcRXKRa5PpUzKKEwtpECBZsUYt9Jd7egSDEWoV
 export
 
+ZIGBUILD_TARGET ?= x86_64-unknown-linux-gnu.2.39
+
 .PHONY: build
 build: build-hoon-all build-rust
 	$(call show_env_vars)
@@ -20,9 +22,21 @@ build: build-hoon-all build-rust
 build-rust:
 	cargo build --release
 
+.PHONY: install-cargo-zigbuild
+install-cargo-zigbuild:
+	cargo install --locked cargo-zigbuild
+
+.PHONY: zig-build-bridge
+zig-build-bridge:
+	cargo zigbuild --release --target $(ZIGBUILD_TARGET) --bin bridge
+
 .PHONY: build-nockchain-jemalloc
 build-nockchain-jemalloc:
 	cargo build --release --features jemalloc --bin nockchain
+
+.PHONY: build-nockchain-bridge-tui
+build-nockchain-bridge-tui:
+	cargo build --release --bin nockchain-bridge-tui
 
 ## Run all tests
 .PHONY: test

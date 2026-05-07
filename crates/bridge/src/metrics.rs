@@ -8,11 +8,16 @@ use crate::tui::types::NetworkState;
 metrics_struct![
     BridgeHealthMetrics,
     (running_status, "bridge.health.running_status", Gauge),
+    (stop_local_requests, "bridge.stop.local.requests", Count),
+    (stop_local_triggered, "bridge.stop.local.triggered", Count),
+    (stop_local_duplicate, "bridge.stop.local.duplicate", Count),
     (base_hold_height, "bridge.health.base_hold_height", Gauge),
     (nock_hold_height, "bridge.health.nock_hold_height", Gauge),
+    (base_tip_height, "bridge.health.base_tip_height", Gauge),
     (base_block_height, "bridge.health.base_block_height", Gauge),
     (nock_block_height, "bridge.health.nock_block_height", Gauge),
     (last_deposit_nonce, "bridge.health.last_deposit_nonce", Gauge),
+    (deposit_log_max_nonce, "bridge.health.deposit_log_max_nonce", Gauge),
     (ingress_broadcast_signature_requests, "bridge.ingress.broadcast_signature.requests", Count),
     (
         ingress_broadcast_signature_invalid_deposit_id_len,
@@ -320,7 +325,29 @@ pub fn init_metrics() -> Arc<BridgeHealthMetrics> {
 
 pub fn update_bridge_metrics(network: &NetworkState, last_deposit_nonce: Option<u64>) {
     let metrics = init_metrics();
+    update_bridge_metrics_with(&metrics, network, last_deposit_nonce);
+}
 
+pub fn update_base_tip_height(tip_height: Option<u64>) {
+    let metrics = init_metrics();
+    update_base_tip_height_with(&metrics, tip_height);
+}
+
+pub fn update_deposit_log_max_nonce(max_nonce: Option<u64>) {
+    let metrics = init_metrics();
+    update_deposit_log_max_nonce_with(&metrics, max_nonce);
+}
+
+pub fn advance_deposit_log_max_nonce(inserted: u64, first_epoch_nonce: u64) {
+    let metrics = init_metrics();
+    advance_deposit_log_max_nonce_with(&metrics, inserted, first_epoch_nonce);
+}
+
+fn update_bridge_metrics_with(
+    metrics: &BridgeHealthMetrics,
+    network: &NetworkState,
+    last_deposit_nonce: Option<u64>,
+) {
     let running_metric = if network.kernel_stopped {
         RunningStatusMetric::Stop
     } else {
@@ -354,4 +381,86 @@ pub fn update_bridge_metrics(network: &NetworkState, last_deposit_nonce: Option<
     metrics.base_block_height.swap(base_height as f64);
     metrics.nock_block_height.swap(nock_height as f64);
     metrics.last_deposit_nonce.swap(last_deposit_nonce as f64);
+}
+
+fn update_base_tip_height_with(metrics: &BridgeHealthMetrics, tip_height: Option<u64>) {
+    metrics
+        .base_tip_height
+        .swap(tip_height.unwrap_or_default() as f64);
+}
+
+fn update_deposit_log_max_nonce_with(metrics: &BridgeHealthMetrics, max_nonce: Option<u64>) {
+    metrics
+        .deposit_log_max_nonce
+        .swap(max_nonce.unwrap_or_default() as f64);
+}
+
+fn advance_deposit_log_max_nonce_with(
+    metrics: &BridgeHealthMetrics,
+    inserted: u64,
+    first_epoch_nonce: u64,
+) {
+    if inserted == 0 {
+        return;
+    }
+
+    let current = metrics.deposit_log_max_nonce.load() as u64;
+    let next = if current == 0 {
+        first_epoch_nonce.saturating_add(inserted - 1)
+    } else {
+        current.saturating_add(inserted)
+    };
+    metrics.deposit_log_max_nonce.swap(next as f64);
+}
+
+#[cfg(test)]
+mod tests {
+    use gnort::{MetricsRegistry, RegistryConfig};
+
+    use super::{
+        advance_deposit_log_max_nonce_with, update_base_tip_height_with,
+        update_deposit_log_max_nonce_with, BridgeHealthMetrics,
+    };
+
+    #[test]
+    fn update_base_tip_height_reports_latest_tip() {
+        let metrics =
+            BridgeHealthMetrics::register(&MetricsRegistry::new(RegistryConfig::default()))
+                .expect("metrics should register");
+
+        update_base_tip_height_with(&metrics, Some(113));
+        assert_eq!(metrics.base_tip_height.load(), 113.0);
+
+        update_base_tip_height_with(&metrics, None);
+        assert_eq!(metrics.base_tip_height.load(), 0.0);
+    }
+
+    #[test]
+    fn update_deposit_log_max_nonce_reports_local_log_head() {
+        let metrics =
+            BridgeHealthMetrics::register(&MetricsRegistry::new(RegistryConfig::default()))
+                .expect("metrics should register");
+
+        update_deposit_log_max_nonce_with(&metrics, Some(113));
+        assert_eq!(metrics.deposit_log_max_nonce.load(), 113.0);
+
+        update_deposit_log_max_nonce_with(&metrics, None);
+        assert_eq!(metrics.deposit_log_max_nonce.load(), 0.0);
+    }
+
+    #[test]
+    fn advance_deposit_log_max_nonce_avoids_requerying_the_log() {
+        let metrics =
+            BridgeHealthMetrics::register(&MetricsRegistry::new(RegistryConfig::default()))
+                .expect("metrics should register");
+
+        advance_deposit_log_max_nonce_with(&metrics, 2, 101);
+        assert_eq!(metrics.deposit_log_max_nonce.load(), 102.0);
+
+        advance_deposit_log_max_nonce_with(&metrics, 3, 101);
+        assert_eq!(metrics.deposit_log_max_nonce.load(), 105.0);
+
+        advance_deposit_log_max_nonce_with(&metrics, 0, 101);
+        assert_eq!(metrics.deposit_log_max_nonce.load(), 105.0);
+    }
 }

@@ -339,6 +339,9 @@ async fn main() -> Result<(), BridgeError> {
     let deposit_log =
         Arc::new(bridge::deposit_log::DepositLog::open(deposit_log_path.clone()).await?);
     info!("Using deposit queue log at {}", deposit_log_path.display());
+    bridge::metrics::update_deposit_log_max_nonce(
+        deposit_log.max_nonce_in_epoch(&nonce_epoch).await?,
+    );
 
     // Deposit log sync happens after the kernel action loop is running.
 

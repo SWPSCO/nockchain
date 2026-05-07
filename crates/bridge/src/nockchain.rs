@@ -1,7 +1,8 @@
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use backon::{ExponentialBuilder, Retryable};
+use async_trait::async_trait;
+use backon::Retryable;
 use nockapp::noun::slab::{NockJammer, NounSlab};
 use nockapp::{Bytes, ToBytes};
 use nockapp_grpc::services::private_nockapp::client::PrivateNockAppGrpcClient;
@@ -11,14 +12,16 @@ use tokio::time::sleep;
 use tracing::{debug, info, warn};
 
 use crate::bridge_status::BridgeStatus;
+use crate::core::nock_observer::{plan_nock_tick, NockPlanAction, NockPlanInput};
 use crate::errors::BridgeError;
+use crate::loop_policy::NockObserverLoopPolicy;
 use crate::metrics;
+use crate::ports::{NockSourcePort, NockTipInfo};
 use crate::runtime::{BridgeEvent, BridgeRuntimeHandle, ChainEvent, NockBlockEvent};
 use crate::stop::StopHandle;
 use crate::tui::types::{AlertSeverity, ChainState, NetworkState, NockchainApiStatus};
 use crate::types::Tx;
 
-const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(10);
 const CLIENT_PID: i32 = 1;
 
 /// Default nockchain confirmation depth used by the driver if not specified in config.
@@ -26,6 +29,7 @@ const CLIENT_PID: i32 = 1;
 /// The bridge kernel assumes blocks it receives are final; this is enforced by the Rust driver.
 pub const DEFAULT_NOCKCHAIN_CONFIRMATION_DEPTH: u64 = 100;
 
+#[cfg(test)]
 fn confirmed_height(chain_tip: u64, confirmation_depth: u64) -> Option<u64> {
     if confirmation_depth == 0 {
         return None;
@@ -38,327 +42,40 @@ fn confirmed_height(chain_tip: u64, confirmation_depth: u64) -> Option<u64> {
     }
 }
 
-struct NockBlockObservation {
-    block: Page,
-    page_slab: NounSlab<NockJammer>,
-    page_noun: nockapp::Noun,
-    txs: Vec<(TxId, Tx)>,
+pub struct NockGrpcSource {
+    client: PrivateNockAppGrpcClient,
 }
 
-pub struct NockchainWatcher {
-    endpoint: String,
-    poll_interval: Duration,
-    runtime: Arc<BridgeRuntimeHandle>,
-    confirmation_depth: u64,
-    stop: StopHandle,
-    /// Optional bridge_status for connection status + alert updates.
-    bridge_status: Option<BridgeStatus>,
+impl NockGrpcSource {
+    pub async fn connect(endpoint: String) -> Result<Self, BridgeError> {
+        let client = PrivateNockAppGrpcClient::connect(endpoint)
+            .await
+            .map_err(|err| BridgeError::EventMonitoring(err.to_string()))?;
+        Ok(Self { client })
+    }
+
+    pub fn from_client(client: PrivateNockAppGrpcClient) -> Self {
+        Self { client }
+    }
 }
 
-impl NockchainWatcher {
-    pub fn new(
-        endpoint: String,
-        runtime: Arc<BridgeRuntimeHandle>,
-        confirmation_depth: u64,
-        stop: StopHandle,
-    ) -> Self {
-        Self {
-            endpoint,
-            poll_interval: DEFAULT_POLL_INTERVAL,
-            runtime,
-            confirmation_depth,
-            stop,
-            bridge_status: None,
-        }
+#[async_trait]
+impl NockSourcePort for NockGrpcSource {
+    async fn tip_info(&mut self) -> Result<Option<NockTipInfo>, BridgeError> {
+        let info = Self::fetch_tip_info_from_client(&mut self.client).await?;
+        Ok(info.map(|(height, tip_hash)| NockTipInfo { height, tip_hash }))
     }
 
-    pub fn with_poll_interval(
-        endpoint: String,
-        runtime: Arc<BridgeRuntimeHandle>,
-        poll_interval: Duration,
-        confirmation_depth: u64,
-        stop: StopHandle,
-    ) -> Self {
-        Self {
-            endpoint,
-            poll_interval,
-            runtime,
-            confirmation_depth,
-            stop,
-            bridge_status: None,
-        }
+    async fn fetch_block_at_height(
+        &mut self,
+        height: u64,
+    ) -> Result<Option<NockBlockEvent>, BridgeError> {
+        Self::fetch_block_at_height_from_client(&mut self.client, height).await
     }
+}
 
-    /// Set the TUI state for connection status updates.
-    pub fn with_bridge_status(mut self, bridge_status: BridgeStatus) -> Self {
-        self.bridge_status = Some(bridge_status);
-        self
-    }
-
-    /// Update the nockchain API connection status in the TUI.
-    fn update_status(&self, status: NockchainApiStatus) {
-        if let Some(ref bridge_status) = self.bridge_status {
-            bridge_status.update_nockchain_api_status(status);
-        }
-    }
-
-    /// Update the nockchain tip hash in the TUI.
-    fn update_tip_hash(&self, tip_hash: String) {
-        if let Some(ref bridge_status) = self.bridge_status {
-            bridge_status.update_nockchain_tip_hash(tip_hash);
-        }
-    }
-
-    /// Push an alert to the TUI.
-    fn push_alert(&self, severity: AlertSeverity, title: String, message: String) {
-        if let Some(ref bridge_status) = self.bridge_status {
-            bridge_status.push_alert(severity, title, message, "nock-watcher".to_string());
-        }
-    }
-
-    pub async fn run(self) -> Result<(), BridgeError> {
-        let mut was_connected = false;
-
-        // Unlimited retries with exponential backoff
-        let backoff = || {
-            ExponentialBuilder::default()
-                .with_min_delay(Duration::from_secs(1))
-                .with_max_delay(Duration::from_secs(300))
-                .with_jitter()
-        };
-
-        self.update_status(NockchainApiStatus::connecting(0, None));
-
-        loop {
-            if self.stop.is_stopped() {
-                sleep(self.poll_interval).await;
-                continue;
-            }
-
-            let attempt_count = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
-            let attempt_count_notify = attempt_count.clone();
-            let endpoint = self.endpoint.clone();
-            let connect = || async { PrivateNockAppGrpcClient::connect(endpoint.clone()).await };
-
-            self.update_status(NockchainApiStatus::connecting(1, None));
-
-            let connect_result = connect
-                .retry(backoff())
-                .notify(|err, dur| {
-                    let attempt =
-                        attempt_count_notify.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-                    let error_msg = err.to_string();
-
-                    self.update_status(NockchainApiStatus::connecting(
-                        attempt + 1,
-                        Some(error_msg.clone()),
-                    ));
-
-                    warn!(
-                        target: "bridge.nock-watcher",
-                        endpoint=%self.endpoint,
-                        error=%error_msg,
-                        attempt=attempt,
-                        backoff_secs=dur.as_secs(),
-                        "failed to connect, will retry"
-                    );
-
-                    if attempt == 1 || attempt.is_multiple_of(10) {
-                        self.push_alert(
-                            AlertSeverity::Warning,
-                            "Nockchain API Connection Failed".to_string(),
-                            format!(
-                                "Attempt {}: {}",
-                                attempt,
-                                truncate_error_msg(&error_msg, 50)
-                            ),
-                        );
-                    }
-                })
-                .await;
-
-            match connect_result {
-                Ok(mut client) => {
-                    self.update_status(NockchainApiStatus::connected());
-
-                    if was_connected {
-                        info!(
-                            target: "bridge.nock-watcher",
-                            endpoint=%self.endpoint,
-                            "reconnected to nockchain gRPC endpoint"
-                        );
-                        self.push_alert(
-                            AlertSeverity::Info,
-                            "Nockchain API Reconnected".to_string(),
-                            format!("Reconnected to {}", self.endpoint),
-                        );
-                    } else {
-                        info!(
-                            target: "bridge.nock-watcher",
-                            endpoint=%self.endpoint,
-                            "connected to nockchain gRPC endpoint"
-                        );
-                    }
-                    was_connected = true;
-
-                    if let Err(err) = self.stream_events(&mut client).await {
-                        let error_msg = err.to_string();
-                        warn!(
-                            target: "bridge.nock-watcher",
-                            error=%error_msg,
-                            "nockchain watcher stream failed, reconnecting"
-                        );
-                        self.update_status(NockchainApiStatus::disconnected(error_msg.clone()));
-                        self.push_alert(
-                            AlertSeverity::Warning,
-                            "Nockchain API Disconnected".to_string(),
-                            format!("Connection lost: {}", truncate_error_msg(&error_msg, 60)),
-                        );
-                    }
-                }
-                Err(err) => {
-                    // Should not happen with unlimited retries
-                    let error_msg = err.to_string();
-                    warn!(
-                        target: "bridge.nock-watcher",
-                        endpoint=%self.endpoint,
-                        error=%error_msg,
-                        "connect failed unexpectedly"
-                    );
-                    self.update_status(NockchainApiStatus::disconnected(error_msg));
-                    sleep(Duration::from_secs(1)).await;
-                }
-            }
-        }
-    }
-
-    async fn stream_events(
-        &self,
-        client: &mut PrivateNockAppGrpcClient,
-    ) -> Result<(), BridgeError> {
-        info!(
-            target: "bridge.nock-watcher",
-            confirmation_depth = self.confirmation_depth,
-            "starting nock observer with confirmation depth"
-        );
-        loop {
-            if self.stop.is_stopped() {
-                sleep(self.poll_interval).await;
-                continue;
-            }
-            let (tip_height, tip_hash) = match self.fetch_tip_info(client).await {
-                Ok(Some(info)) => info,
-                Ok(None) => {
-                    debug!(
-                        target: "bridge.nock-watcher",
-                        "no heaviest block available from private nockapp"
-                    );
-                    sleep(self.poll_interval).await;
-                    continue;
-                }
-                Err(err) => {
-                    warn!(
-                        target: "bridge.nock-watcher",
-                        error=%err,
-                        "failed to fetch tip height"
-                    );
-                    sleep(self.poll_interval).await;
-                    continue;
-                }
-            };
-            self.update_tip_hash(tip_hash);
-
-            let Some(confirmed_target) = confirmed_height(tip_height, self.confirmation_depth)
-            else {
-                debug!(
-                    target: "bridge.nock-watcher",
-                    tip_height,
-                    "no confirmed block yet (bootstrap)"
-                );
-                sleep(self.poll_interval).await;
-                continue;
-            };
-
-            let next_needed_height = match self.runtime.peek_nock_next_height().await {
-                Ok(Some(height)) => height,
-                Ok(None) => {
-                    debug!(
-                        target: "bridge.nock-watcher",
-                        tip_height,
-                        "kernel has no pending nock block"
-                    );
-                    sleep(self.poll_interval).await;
-                    continue;
-                }
-                Err(err) => {
-                    warn!(
-                        target: "bridge.nock-watcher",
-                        error=%err,
-                        "failed to peek nock next height"
-                    );
-                    sleep(self.poll_interval).await;
-                    continue;
-                }
-            };
-
-            if confirmed_target < next_needed_height {
-                debug!(
-                    target: "bridge.nock-watcher",
-                    tip_height,
-                    confirmed_target,
-                    next_needed_height,
-                    "target height not yet confirmed for kernel need"
-                );
-                sleep(self.poll_interval).await;
-                continue;
-            }
-
-            match self.fetch_block_at_height(client, next_needed_height).await {
-                Ok(Some(observation)) => {
-                    let height = observation.block.height;
-                    let block_hash = observation.block.digest.to_base58();
-                    let txs_count = observation.txs.len();
-                    let event = NockBlockEvent {
-                        block: observation.block,
-                        page_slab: observation.page_slab,
-                        page_noun: observation.page_noun,
-                        txs: observation.txs,
-                    };
-                    self.runtime
-                        .send_event(BridgeEvent::Chain(Box::new(ChainEvent::Nock(event))))
-                        .await?;
-                    info!(
-                        target: "bridge.nock-watcher",
-                        height,
-                        tip_height,
-                        confirmations = tip_height - height,
-                        hash=%block_hash,
-                        txs_count=%txs_count,
-                        "emitted confirmed nock block"
-                    );
-                }
-                Ok(None) => {
-                    debug!(
-                        target: "bridge.nock-watcher",
-                        target = next_needed_height,
-                        "block at target height not found"
-                    );
-                }
-                Err(err) => {
-                    warn!(
-                        target: "bridge.nock-watcher",
-                        target = next_needed_height,
-                        error=%err,
-                        "failed to fetch block at height"
-                    );
-                }
-            }
-            sleep(self.poll_interval).await;
-        }
-    }
-
-    async fn fetch_tip_info(
-        &self,
+impl NockGrpcSource {
+    async fn fetch_tip_info_from_client(
         client: &mut PrivateNockAppGrpcClient,
     ) -> Result<Option<(u64, String)>, BridgeError> {
         let heavy_path = vec![Bytes::from("heavy")];
@@ -376,7 +93,7 @@ impl NockchainWatcher {
         };
         let tip_hash = block_id_base58.clone();
 
-        let block_path = vec![Bytes::from("block"), Bytes::from(block_id_base58.clone())];
+        let block_path = vec![Bytes::from("block"), Bytes::from(block_id_base58)];
         let block_bytes = jam_path(&block_path)?;
         let response = client
             .peek(CLIENT_PID, block_bytes)
@@ -388,11 +105,10 @@ impl NockchainWatcher {
         Ok(Some((page.height, tip_hash)))
     }
 
-    async fn fetch_block_at_height(
-        &self,
+    async fn fetch_block_at_height_from_client(
         client: &mut PrivateNockAppGrpcClient,
         height: u64,
-    ) -> Result<Option<NockBlockObservation>, BridgeError> {
+    ) -> Result<Option<NockBlockEvent>, BridgeError> {
         let heavy_n_path = vec![Bytes::from("heavy-n"), Bytes::from(height.to_bytes()?)];
         let heavy_n_bytes = jam_path(&heavy_n_path)?;
         let response = client
@@ -406,11 +122,9 @@ impl NockchainWatcher {
             Err(_) => return Ok(None),
         };
 
-        let txs = self
-            .fetch_transactions(client, &page.digest, &page.tx_ids)
-            .await?;
+        let txs = Self::fetch_transactions_from_client(client, &page.digest, &page.tx_ids).await?;
 
-        Ok(Some(NockBlockObservation {
+        Ok(Some(NockBlockEvent {
             block: page,
             page_slab,
             page_noun,
@@ -418,8 +132,7 @@ impl NockchainWatcher {
         }))
     }
 
-    async fn fetch_transactions(
-        &self,
+    async fn fetch_transactions_from_client(
         client: &mut PrivateNockAppGrpcClient,
         block_id: &BlockId,
         tx_ids: &[TxId],
@@ -443,6 +156,374 @@ impl NockchainWatcher {
             txs.push((tx_id.clone(), tx));
         }
         Ok(txs)
+    }
+}
+
+struct NockWatcherConnection {
+    endpoint: String,
+    policy: NockObserverLoopPolicy,
+}
+
+struct NockWatcherDeps {
+    runtime: Arc<BridgeRuntimeHandle>,
+    stop: StopHandle,
+}
+
+struct NockWatcherConfig {
+    confirmation_depth: u64,
+}
+
+struct NockWatcherUi {
+    /// Optional bridge_status for connection status + alert updates.
+    bridge_status: Option<BridgeStatus>,
+}
+
+pub struct NockchainWatcher {
+    connection: NockWatcherConnection,
+    deps: NockWatcherDeps,
+    config: NockWatcherConfig,
+    ui: NockWatcherUi,
+}
+
+impl NockchainWatcher {
+    pub fn new(
+        endpoint: String,
+        runtime: Arc<BridgeRuntimeHandle>,
+        confirmation_depth: u64,
+        stop: StopHandle,
+    ) -> Self {
+        Self::with_policy(
+            endpoint,
+            runtime,
+            confirmation_depth,
+            stop,
+            NockObserverLoopPolicy::default(),
+        )
+    }
+
+    pub fn with_poll_interval(
+        endpoint: String,
+        runtime: Arc<BridgeRuntimeHandle>,
+        poll_interval: Duration,
+        confirmation_depth: u64,
+        stop: StopHandle,
+    ) -> Self {
+        let policy = NockObserverLoopPolicy {
+            poll_interval,
+            ..NockObserverLoopPolicy::default()
+        };
+        Self::with_policy(endpoint, runtime, confirmation_depth, stop, policy)
+    }
+
+    pub fn with_policy(
+        endpoint: String,
+        runtime: Arc<BridgeRuntimeHandle>,
+        confirmation_depth: u64,
+        stop: StopHandle,
+        policy: NockObserverLoopPolicy,
+    ) -> Self {
+        Self {
+            connection: NockWatcherConnection { endpoint, policy },
+            deps: NockWatcherDeps { runtime, stop },
+            config: NockWatcherConfig { confirmation_depth },
+            ui: NockWatcherUi {
+                bridge_status: None,
+            },
+        }
+    }
+
+    /// Set the TUI state for connection status updates.
+    pub fn with_bridge_status(mut self, bridge_status: BridgeStatus) -> Self {
+        self.ui.bridge_status = Some(bridge_status);
+        self
+    }
+
+    /// Update the nockchain API connection status in the TUI.
+    fn update_status(&self, status: NockchainApiStatus) {
+        if let Some(ref bridge_status) = self.ui.bridge_status {
+            bridge_status.update_nockchain_api_status(status);
+        }
+    }
+
+    /// Update the nockchain tip hash in the TUI.
+    fn update_tip_hash(&self, tip_hash: String) {
+        if let Some(ref bridge_status) = self.ui.bridge_status {
+            bridge_status.update_nockchain_tip_hash(tip_hash);
+        }
+    }
+
+    /// Push an alert to the TUI.
+    fn push_alert(&self, severity: AlertSeverity, title: String, message: String) {
+        if let Some(ref bridge_status) = self.ui.bridge_status {
+            bridge_status.push_alert(severity, title, message, "nock-watcher".to_string());
+        }
+    }
+
+    pub async fn run(self) -> Result<(), BridgeError> {
+        let mut was_connected = false;
+
+        // Unlimited retries with exponential backoff by default.
+        let connect_backoff = self.connection.policy.connect_retry;
+
+        self.update_status(NockchainApiStatus::connecting(0, None));
+
+        loop {
+            if self.deps.stop.is_stopped() {
+                sleep(self.connection.policy.poll_interval).await;
+                continue;
+            }
+
+            let attempt_count = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+            let attempt_count_notify = attempt_count.clone();
+            let endpoint = self.connection.endpoint.clone();
+            let connect = || async { PrivateNockAppGrpcClient::connect(endpoint.clone()).await };
+
+            self.update_status(NockchainApiStatus::connecting(1, None));
+
+            let connect_result = connect
+                .retry(connect_backoff.exponential_builder())
+                .notify(|err, dur| {
+                    let attempt =
+                        attempt_count_notify.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                    let error_msg = err.to_string();
+
+                    self.update_status(NockchainApiStatus::connecting(
+                        attempt + 1,
+                        Some(error_msg.clone()),
+                    ));
+
+                    warn!(
+                        target: "bridge.nock-watcher",
+                        endpoint=%self.connection.endpoint,
+                        error=%error_msg,
+                        attempt=attempt,
+                        backoff_secs=dur.as_secs(),
+                        "failed to connect, will retry"
+                    );
+
+                    if attempt == 1 || attempt.is_multiple_of(10) {
+                        self.push_alert(
+                            AlertSeverity::Warning,
+                            "Nockchain API Connection Failed".to_string(),
+                            format!(
+                                "Attempt {}: {}",
+                                attempt,
+                                truncate_error_msg(&error_msg, 50)
+                            ),
+                        );
+                    }
+                })
+                .await;
+
+            match connect_result {
+                Ok(client) => {
+                    self.update_status(NockchainApiStatus::connected());
+
+                    if was_connected {
+                        info!(
+                            target: "bridge.nock-watcher",
+                            endpoint=%self.connection.endpoint,
+                            "reconnected to nockchain gRPC endpoint"
+                        );
+                        self.push_alert(
+                            AlertSeverity::Info,
+                            "Nockchain API Reconnected".to_string(),
+                            format!("Reconnected to {}", self.connection.endpoint),
+                        );
+                    } else {
+                        info!(
+                            target: "bridge.nock-watcher",
+                            endpoint=%self.connection.endpoint,
+                            "connected to nockchain gRPC endpoint"
+                        );
+                    }
+                    was_connected = true;
+
+                    let mut source = NockGrpcSource::from_client(client);
+                    if let Err(err) = self.stream_events_with_source(&mut source).await {
+                        let error_msg = err.to_string();
+                        warn!(
+                            target: "bridge.nock-watcher",
+                            error=%error_msg,
+                            "nockchain watcher stream failed, reconnecting"
+                        );
+                        self.update_status(NockchainApiStatus::disconnected(error_msg.clone()));
+                        self.push_alert(
+                            AlertSeverity::Warning,
+                            "Nockchain API Disconnected".to_string(),
+                            format!("Connection lost: {}", truncate_error_msg(&error_msg, 60)),
+                        );
+                    }
+                }
+                Err(err) => {
+                    // Should not happen with unlimited retries
+                    let error_msg = err.to_string();
+                    warn!(
+                        target: "bridge.nock-watcher",
+                        endpoint=%self.connection.endpoint,
+                        error=%error_msg,
+                        "connect failed unexpectedly"
+                    );
+                    self.update_status(NockchainApiStatus::disconnected(error_msg));
+                    sleep(self.connection.policy.connect_failure_sleep).await;
+                }
+            }
+        }
+    }
+
+    async fn stream_events_with_source<S>(&self, source: &mut S) -> Result<(), BridgeError>
+    where
+        S: NockSourcePort,
+    {
+        let poll_interval = self.connection.policy.poll_interval;
+        info!(
+            target: "bridge.nock-watcher",
+            confirmation_depth = self.config.confirmation_depth,
+            "starting nock observer with confirmation depth"
+        );
+        loop {
+            if self.deps.stop.is_stopped() {
+                sleep(poll_interval).await;
+                continue;
+            }
+            let tip_info = match source.tip_info().await {
+                Ok(info) => info,
+                Err(err) => {
+                    warn!(
+                        target: "bridge.nock-watcher",
+                        error=%err,
+                        "failed to fetch tip height"
+                    );
+                    sleep(poll_interval).await;
+                    continue;
+                }
+            };
+
+            if let Some(info) = &tip_info {
+                self.update_tip_hash(info.tip_hash.clone());
+            }
+
+            let next_needed_height = match self.deps.runtime.peek_nock_next_height().await {
+                Ok(height) => height,
+                Err(err) => {
+                    warn!(
+                        target: "bridge.nock-watcher",
+                        error=%err,
+                        "failed to peek nock next height"
+                    );
+                    sleep(poll_interval).await;
+                    continue;
+                }
+            };
+
+            let action = plan_nock_tick(NockPlanInput {
+                tip_height: tip_info.as_ref().map(|info| info.height),
+                next_needed_height,
+                confirmation_depth: self.config.confirmation_depth,
+            });
+
+            let (tip_height, target_height) = match action {
+                NockPlanAction::NoTipAvailable => {
+                    debug!(
+                        target: "bridge.nock-watcher",
+                        "no heaviest block available from private nockapp"
+                    );
+                    sleep(poll_interval).await;
+                    continue;
+                }
+                NockPlanAction::NoPendingHeight {
+                    tip_height,
+                    confirmed_target,
+                } => {
+                    debug!(
+                        target: "bridge.nock-watcher",
+                        tip_height,
+                        confirmed_target,
+                        "kernel has no pending nock block"
+                    );
+                    sleep(poll_interval).await;
+                    continue;
+                }
+                NockPlanAction::InvalidConfig(err) => {
+                    warn!(
+                        target: "bridge.nock-watcher",
+                        error=?err,
+                        confirmation_depth=self.config.confirmation_depth,
+                        "invalid nock observer planner configuration"
+                    );
+                    sleep(poll_interval).await;
+                    continue;
+                }
+                NockPlanAction::BootstrapUnconfirmed {
+                    tip_height,
+                    confirmation_depth,
+                } => {
+                    debug!(
+                        target: "bridge.nock-watcher",
+                        tip_height,
+                        confirmation_depth,
+                        "no confirmed block yet (bootstrap)"
+                    );
+                    sleep(poll_interval).await;
+                    continue;
+                }
+                NockPlanAction::NotYetConfirmed {
+                    tip_height,
+                    confirmed_target,
+                    next_needed_height,
+                } => {
+                    debug!(
+                        target: "bridge.nock-watcher",
+                        tip_height,
+                        confirmed_target,
+                        next_needed_height,
+                        "target height not yet confirmed for kernel need"
+                    );
+                    sleep(poll_interval).await;
+                    continue;
+                }
+                NockPlanAction::FetchHeight {
+                    tip_height, height, ..
+                } => (tip_height, height),
+            };
+
+            match source.fetch_block_at_height(target_height).await {
+                Ok(Some(event)) => {
+                    let height = event.block.height;
+                    let block_hash = event.block.digest.to_base58();
+                    let txs_count = event.txs.len();
+                    self.deps
+                        .runtime
+                        .send_event(BridgeEvent::Chain(Box::new(ChainEvent::Nock(event))))
+                        .await?;
+                    info!(
+                        target: "bridge.nock-watcher",
+                        height,
+                        tip_height,
+                        confirmations = tip_height - height,
+                        hash=%block_hash,
+                        txs_count=%txs_count,
+                        "emitted confirmed nock block"
+                    );
+                }
+                Ok(None) => {
+                    debug!(
+                        target: "bridge.nock-watcher",
+                        target = target_height,
+                        "block at target height not found"
+                    );
+                }
+                Err(err) => {
+                    warn!(
+                        target: "bridge.nock-watcher",
+                        target = target_height,
+                        error=%err,
+                        "failed to fetch block at height"
+                    );
+                }
+            }
+            sleep(poll_interval).await;
+        }
     }
 }
 

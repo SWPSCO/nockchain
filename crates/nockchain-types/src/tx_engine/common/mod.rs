@@ -3,9 +3,7 @@ pub mod page;
 use anyhow::Result;
 use nockchain_math::belt::{Belt, PRIME};
 use nockchain_math::crypto::cheetah::{CheetahError, CheetahPoint};
-use nockchain_math::noun_ext::NounMathExt;
-use nockchain_math::zoon::common::DefaultTipHasher;
-use nockchain_math::zoon::zmap;
+use nockchain_math::zoon::zmap::ZMap;
 use nockvm::noun::{Noun, NounAllocator, D};
 use noun_serde::{NounDecode, NounDecodeError, NounEncode};
 use num_bigint::BigUint;
@@ -38,37 +36,17 @@ pub struct Signature(pub Vec<(SchnorrPubkey, SchnorrSignature)>);
 
 impl NounEncode for Signature {
     fn to_noun<A: NounAllocator>(&self, stack: &mut A) -> Noun {
-        self.0.iter().fold(D(0), |map, (pubkey, sig)| {
-            let mut key = pubkey.to_noun(stack);
-            let mut value = sig.to_noun(stack);
-            zmap::z_map_put(stack, &map, &mut key, &mut value, &DefaultTipHasher)
-                .expect("z-map put for signature should not fail")
-        })
+        ZMap::try_from_entries(self.0.clone())
+            .expect("signature z-map should encode")
+            .to_noun(stack)
     }
 }
 
 impl NounDecode for Signature {
     fn from_noun(noun: &Noun) -> Result<Self, NounDecodeError> {
-        if let Ok(atom) = noun.as_atom() {
-            if atom.as_u64()? == 0 {
-                return Ok(Signature(Vec::new()));
-            }
-            return Err(NounDecodeError::Custom("signature node not a cell".into()));
-        }
-
-        let entries = nockchain_math::structs::HoonMapIter::from(*noun)
-            .filter(|entry| entry.is_cell())
-            .map(|entry| {
-                let [key, value] = entry
-                    .uncell()
-                    .map_err(|_| NounDecodeError::Custom("signature entry not a pair".into()))?;
-                let pubkey = SchnorrPubkey::from_noun(&key)?;
-                let signature = SchnorrSignature::from_noun(&value)?;
-                Ok((pubkey, signature))
-            })
-            .collect::<Result<Vec<_>, NounDecodeError>>()?;
-
-        Ok(Signature(entries))
+        Ok(Signature(
+            ZMap::<SchnorrPubkey, SchnorrSignature>::from_noun(noun)?.into_entries(),
+        ))
     }
 }
 
@@ -244,6 +222,44 @@ impl Hash {
 
     pub fn to_array(&self) -> [u64; 5] {
         [self.0[0].0, self.0[1].0, self.0[2].0, self.0[3].0, self.0[4].0]
+    }
+}
+
+/// Canonical wrapper for a v1 note first-name digest.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, NounDecode, NounEncode, Serialize, Deserialize)]
+pub struct FirstName(pub Hash);
+
+impl FirstName {
+    pub fn as_hash(&self) -> &Hash {
+        &self.0
+    }
+
+    pub fn into_hash(self) -> Hash {
+        self.0
+    }
+
+    pub fn to_base58(&self) -> String {
+        self.0.to_base58()
+    }
+
+    pub fn from_base58(s: &str) -> Result<Self, HashDecodeError> {
+        Ok(Self(Hash::from_base58(s)?))
+    }
+
+    pub fn to_array(&self) -> [u64; 5] {
+        self.0.to_array()
+    }
+}
+
+impl From<Hash> for FirstName {
+    fn from(value: Hash) -> Self {
+        Self(value)
+    }
+}
+
+impl From<FirstName> for Hash {
+    fn from(value: FirstName) -> Self {
+        value.0
     }
 }
 

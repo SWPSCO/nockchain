@@ -61,6 +61,14 @@ metrics_struct![
         requests_crown_error_serf_load_error,
         "nockchain-libp2p-io.requests_crown_error_serf_load_error", Count
     ),
+    (
+        requests_crown_error_serf_init_allocation_error,
+        "nockchain-libp2p-io.requests_crown_error_serf_init_allocation_error", Count
+    ),
+    (
+        requests_crown_error_serf_init_panic,
+        "nockchain-libp2p-io.requests_crown_error_serf_init_panic", Count
+    ),
     (requests_crown_error_work_bail, "nockchain-libp2p-io.requests_crown_error_work_bail", Count),
     (requests_crown_error_peek_bail, "nockchain-libp2p-io.requests_crown_error_peek_bail", Count),
     (requests_crown_error_work_swap, "nockchain-libp2p-io.requests_crown_error_work_swap", Count),

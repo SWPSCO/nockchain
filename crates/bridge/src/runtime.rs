@@ -3,6 +3,7 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use alloy::primitives::Address;
+use async_trait::async_trait;
 use hex::encode;
 use nockapp::driver::{make_driver, NockAppHandle};
 use nockapp::nockapp::wire::WireRepr;
@@ -17,10 +18,19 @@ use tracing::{debug, error, info, warn};
 
 use crate::bridge_status::BridgeStatus;
 use crate::config::NonceEpochConfig;
+use crate::core::posting::{
+    PostingCandidateDecision, PostingPlanner, PostingReadyProposal, PostingTickPlanInput,
+};
+use crate::core::signing::{
+    SigningCandidatePrecheckDecision, SigningCandidatePrecheckInput, SigningEpochBoundsDecision,
+    SigningEpochBoundsDecisionInput, SigningPlanner, SigningProcessedDecision,
+    SigningProcessedDecisionInput, SigningTickPlanAction, SigningTickPlanInput,
+};
 use crate::errors::BridgeError;
-use crate::ethereum::BaseBridge;
 use crate::health::PeerEndpoint;
+use crate::loop_policy::{PostingLoopPolicy, SigningLoopPolicy};
 use crate::metrics;
+use crate::ports::{BaseContractPort, KernelStatePort};
 use crate::proposal_cache::ProposalCache;
 use crate::signing::BridgeSigner;
 use crate::types::{
@@ -299,12 +309,22 @@ impl NockchainTxEffect {
 }
 
 #[derive(Clone)]
-pub struct BridgeRuntimeHandle {
+struct BridgeRuntimeHandleChannels {
     inbound_tx: Sender<EventEnvelope<BridgeEvent>>,
     effect_tx: Sender<EventEnvelope<BridgeEffect>>,
     peek_tx: Sender<PeekRequest>,
     poke_tx: Sender<BridgePoke>,
+}
+
+#[derive(Clone)]
+struct BridgeRuntimeHandleState {
     base_tip_hash: Arc<RwLock<Option<String>>>,
+}
+
+#[derive(Clone)]
+pub struct BridgeRuntimeHandle {
+    channels: BridgeRuntimeHandleChannels,
+    state: BridgeRuntimeHandleState,
 }
 
 impl BridgeRuntimeHandle {
@@ -312,13 +332,14 @@ impl BridgeRuntimeHandle {
         if tip_hash.is_empty() {
             return;
         }
-        if let Ok(mut guard) = self.base_tip_hash.write() {
+        if let Ok(mut guard) = self.state.base_tip_hash.write() {
             *guard = Some(tip_hash);
         }
     }
 
     pub fn get_base_tip_hash(&self) -> Option<String> {
-        self.base_tip_hash
+        self.state
+            .base_tip_hash
             .read()
             .ok()
             .and_then(|guard| guard.clone())
@@ -327,11 +348,24 @@ impl BridgeRuntimeHandle {
     pub async fn send_event(&self, event: BridgeEvent) -> Result<EventId, BridgeError> {
         let id = make_event_id(event.kind(), &event.identity_material());
         let envelope = EventEnvelope { id, payload: event };
-        self.inbound_tx
+        self.channels
+            .inbound_tx
             .send(envelope)
             .await
             .map_err(|e| BridgeError::Runtime(format!("inbound channel closed: {}", e)))?;
         Ok(id)
+    }
+
+    /// Typed helper for harnesses/tests to inject a Base batch event.
+    pub async fn inject_base_batch(&self, batch: BaseBlockBatch) -> Result<EventId, BridgeError> {
+        self.send_event(BridgeEvent::Chain(Box::new(ChainEvent::Base(batch))))
+            .await
+    }
+
+    /// Typed helper for harnesses/tests to inject a nock block event.
+    pub async fn inject_nock_block(&self, block: NockBlockEvent) -> Result<EventId, BridgeError> {
+        self.send_event(BridgeEvent::Chain(Box::new(ChainEvent::Nock(block))))
+            .await
     }
 
     pub async fn send_effect(&self, effect: BridgeEffect) -> Result<EventId, BridgeError> {
@@ -340,7 +374,8 @@ impl BridgeRuntimeHandle {
             id,
             payload: effect,
         };
-        self.effect_tx
+        self.channels
+            .effect_tx
             .send(envelope)
             .await
             .map_err(|e| BridgeError::Runtime(format!("effect channel closed: {}", e)))?;
@@ -692,7 +727,8 @@ impl BridgeRuntimeHandle {
         path_slab: NounSlab<NockJammer>,
     ) -> Result<Option<Vec<u8>>, BridgeError> {
         let (respond_to, response) = oneshot::channel();
-        self.peek_tx
+        self.channels
+            .peek_tx
             .send(PeekRequest {
                 path_slab,
                 respond_to,
@@ -708,7 +744,8 @@ impl BridgeRuntimeHandle {
     /// This is used by the ingress service to poke the kernel with proposed-base-call
     /// when validating incoming proposals from peers.
     pub async fn send_poke(&self, poke: BridgePoke) -> Result<(), BridgeError> {
-        self.poke_tx
+        self.channels
+            .poke_tx
             .send(poke)
             .await
             .map_err(|e| BridgeError::Runtime(format!("poke channel closed: {}", e)))
@@ -730,6 +767,29 @@ impl BridgeRuntimeHandle {
         slab.set_root(noun);
         let wire = OnePunchWire::Poke.to_wire();
         self.send_poke(BridgePoke { wire, slab }).await
+    }
+}
+
+#[async_trait]
+impl KernelStatePort for BridgeRuntimeHandle {
+    async fn peek_base_hold(&self) -> Result<bool, BridgeError> {
+        BridgeRuntimeHandle::peek_base_hold(self).await
+    }
+
+    async fn peek_base_next_height(&self) -> Result<Option<u64>, BridgeError> {
+        BridgeRuntimeHandle::peek_base_next_height(self).await
+    }
+
+    async fn peek_nock_next_height(&self) -> Result<Option<u64>, BridgeError> {
+        BridgeRuntimeHandle::peek_nock_next_height(self).await
+    }
+
+    async fn emit_chain_event(&self, event: ChainEvent) -> Result<EventId, BridgeError> {
+        self.send_event(BridgeEvent::Chain(Box::new(event))).await
+    }
+
+    fn set_base_tip_hash(&self, tip_hash: String) {
+        BridgeRuntimeHandle::set_base_tip_hash(self, tip_hash);
     }
 }
 
@@ -826,14 +886,27 @@ struct PeekRequest {
     respond_to: oneshot::Sender<Result<Option<Vec<u8>>, BridgeError>>,
 }
 
-pub struct BridgeRuntime {
+struct BridgeRuntimeDeps {
     cause_builder: Arc<dyn CauseBuilder>,
+}
+
+struct BridgeRuntimeChannels {
     inbound_rx: Receiver<EventEnvelope<BridgeEvent>>,
     effect_rx: Receiver<EventEnvelope<BridgeEffect>>,
     poke_tx: Sender<BridgePoke>,
     poke_rx: Option<Receiver<BridgePoke>>,
     peek_rx: Option<Receiver<PeekRequest>>,
+}
+
+#[derive(Default)]
+struct BridgeRuntimeState {
     pending_events: VecDeque<EventEnvelope<BridgeEvent>>,
+}
+
+pub struct BridgeRuntime {
+    deps: BridgeRuntimeDeps,
+    channels: BridgeRuntimeChannels,
+    state: BridgeRuntimeState,
 }
 
 impl BridgeRuntime {
@@ -845,20 +918,24 @@ impl BridgeRuntime {
         let base_tip_hash = Arc::new(RwLock::new(None));
         let handle_poke_tx = poke_tx.clone();
         let runtime = BridgeRuntime {
-            cause_builder,
-            inbound_rx,
-            effect_rx,
-            poke_tx,
-            poke_rx: Some(poke_rx),
-            peek_rx: Some(peek_rx),
-            pending_events: VecDeque::new(),
+            deps: BridgeRuntimeDeps { cause_builder },
+            channels: BridgeRuntimeChannels {
+                inbound_rx,
+                effect_rx,
+                poke_tx,
+                poke_rx: Some(poke_rx),
+                peek_rx: Some(peek_rx),
+            },
+            state: BridgeRuntimeState::default(),
         };
         let handle = BridgeRuntimeHandle {
-            inbound_tx,
-            effect_tx,
-            peek_tx,
-            poke_tx: handle_poke_tx,
-            base_tip_hash,
+            channels: BridgeRuntimeHandleChannels {
+                inbound_tx,
+                effect_tx,
+                peek_tx,
+                poke_tx: handle_poke_tx,
+            },
+            state: BridgeRuntimeHandleState { base_tip_hash },
         };
         (runtime, handle)
     }
@@ -868,10 +945,12 @@ impl BridgeRuntime {
         app: &mut nockapp::NockApp<NockJammer>,
     ) -> Result<(), BridgeError> {
         let poke_rx = self
+            .channels
             .poke_rx
             .take()
             .ok_or_else(|| BridgeError::Runtime("driver already installed".into()))?;
         let peek_rx = self
+            .channels
             .peek_rx
             .take()
             .ok_or_else(|| BridgeError::Runtime("driver already installed".into()))?;
@@ -914,13 +993,13 @@ impl BridgeRuntime {
                 // Use biased to prioritize channel messages over timer
                 biased;
 
-                event = self.inbound_rx.recv() => {
+                event = self.channels.inbound_rx.recv() => {
                     match event {
                         Some(e) => self.process_event(e).await?,
                         None => break, // Channel closed, shutdown
                     }
                 }
-                effect = self.effect_rx.recv() => {
+                effect = self.channels.effect_rx.recv() => {
                     match effect {
                         Some(e) => self.process_effect(e).await?,
                         None => break, // Channel closed, shutdown
@@ -935,10 +1014,11 @@ impl BridgeRuntime {
         &mut self,
         event: EventEnvelope<BridgeEvent>,
     ) -> Result<(), BridgeError> {
-        let outcome = self.cause_builder.build_poke(&event)?;
+        let outcome = self.deps.cause_builder.build_poke(&event)?;
         match outcome {
             CauseBuildOutcome::Emit(poke) => {
-                self.poke_tx
+                self.channels
+                    .poke_tx
                     .send(poke)
                     .await
                     .map_err(|e| BridgeError::Runtime(format!("failed to enqueue poke: {}", e)))?;
@@ -952,7 +1032,7 @@ impl BridgeRuntime {
                     kind=%kind,
                     digest=%digest,
                     reason=%reason,
-                    pending=self.pending_events.len(),
+                    pending=self.state.pending_events.len(),
                     "event deferred"
                 );
             }
@@ -990,8 +1070,8 @@ impl BridgeRuntime {
     }
 
     fn enqueue_pending(&mut self, event: EventEnvelope<BridgeEvent>) {
-        if self.pending_events.len() >= MAX_PENDING_EVENTS {
-            if let Some(oldest) = self.pending_events.pop_front() {
+        if self.state.pending_events.len() >= MAX_PENDING_EVENTS {
+            if let Some(oldest) = self.state.pending_events.pop_front() {
                 warn!(
                     target: "bridge.runtime",
                     kind=%oldest.id.kind.as_str(),
@@ -1000,7 +1080,7 @@ impl BridgeRuntime {
                 );
             }
         }
-        self.pending_events.push_back(event);
+        self.state.pending_events.push_back(event);
     }
 }
 
@@ -1063,362 +1143,251 @@ impl SignatureBroadcastReason {
     }
 }
 
-/// Background loop that deterministically selects deposits to sign from shared history + chain tip.
-///
-/// This decouples signing from `%commit-nock-deposits` effects so nodes can restart at different
-/// nock heights and still converge on the same `lastDepositNonce + 1` deposit for signing.
-#[allow(clippy::too_many_arguments)]
-pub async fn run_signing_cursor_loop(
-    runtime: Arc<BridgeRuntimeHandle>,
-    base_bridge: Arc<BaseBridge>,
-    deposit_log: Arc<crate::deposit_log::DepositLog>,
-    nonce_epoch: &NonceEpochConfig,
-    proposal_cache: Arc<ProposalCache>,
-    signer: Arc<BridgeSigner>,
-    valid_addresses: HashSet<Address>,
-    peers: Vec<PeerEndpoint>,
-    self_node_id: u64,
-    bridge_status: BridgeStatus,
-    address_to_node_id: std::collections::HashMap<Address, u64>,
-    stop_controller: crate::stop::StopController,
-    stop: crate::stop::StopHandle,
-) {
-    use std::time::Instant;
+fn system_time_secs(now: SystemTime) -> u64 {
+    now.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
+}
 
-    use tokio::time::{interval, MissedTickBehavior};
-    use tracing::{debug, error, info, warn};
+fn spawn_signature_broadcast(
+    peers: &[PeerEndpoint],
+    msg: &crate::ingress::proto::SignatureBroadcast,
+    prop_id: &str,
+    reason: SignatureBroadcastReason,
+) {
+    use tracing::{debug, warn};
 
     use crate::ingress::proto::bridge_ingress_client::BridgeIngressClient;
-    use crate::ingress::proto::SignatureBroadcast;
-    use crate::signing::verify_bridge_signature;
-    use crate::stop::trigger_local_stop;
-    use crate::types::{DepositId, NockDepositRequestData};
 
-    const POLL_INTERVAL: Duration = Duration::from_secs(15);
-    const PIPELINE_DEPTH: usize = 4;
-    const REGOSSIP_INTERVAL: Duration = Duration::from_secs(90);
+    for peer in peers {
+        let msg = msg.clone();
+        let addr = peer.address.clone();
+        let peer_id = peer.node_id;
+        let prop_id = prop_id.to_string();
 
-    let my_eth_address = signer.address();
-
-    // Fire-and-forget broadcast of a signature to all peers.
-    fn spawn_signature_broadcast(
-        peers: &[PeerEndpoint],
-        msg: &SignatureBroadcast,
-        prop_id: &str,
-        reason: SignatureBroadcastReason,
-    ) {
-        for peer in peers {
-            let msg = msg.clone();
-            let addr = peer.address.clone();
-            let peer_id = peer.node_id;
-            let prop_id = prop_id.to_string();
-
-            tokio::spawn(async move {
-                match BridgeIngressClient::connect(addr.clone()).await {
-                    Ok(mut client) => match client.broadcast_signature(msg).await {
-                        Ok(_) => {
-                            debug!(
-                                target: "bridge.cursor",
-                                peer_node_id=peer_id,
-                                proposal_hash=%prop_id,
-                                reason=reason.as_str(),
-                                "broadcast signature to peer"
-                            );
-                        }
-                        Err(e) => {
-                            warn!(
-                                target: "bridge.cursor",
-                                peer_node_id=peer_id,
-                                error=%e,
-                                reason=reason.as_str(),
-                                "failed to broadcast signature to peer"
-                            );
-                        }
-                    },
+        tokio::spawn(async move {
+            match BridgeIngressClient::connect(addr.clone()).await {
+                Ok(mut client) => match client.broadcast_signature(msg).await {
+                    Ok(_) => {
+                        debug!(
+                            target: "bridge.cursor",
+                            peer_node_id=peer_id,
+                            proposal_hash=%prop_id,
+                            reason=reason.as_str(),
+                            "broadcast signature to peer"
+                        );
+                    }
                     Err(e) => {
                         warn!(
                             target: "bridge.cursor",
                             peer_node_id=peer_id,
-                            peer_address=%addr,
                             error=%e,
                             reason=reason.as_str(),
-                            "failed to connect to peer for signature broadcast"
+                            "failed to broadcast signature to peer"
                         );
                     }
-                }
-            });
-        }
-    }
-
-    info!(
-        target: "bridge.cursor",
-        poll_interval_secs=POLL_INTERVAL.as_secs(),
-        pipeline_depth=PIPELINE_DEPTH,
-        regossip_interval_secs=REGOSSIP_INTERVAL.as_secs(),
-        "starting signing cursor loop"
-    );
-
-    let mut ticker = interval(POLL_INTERVAL);
-    ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
-    let mut logged_epoch_ready = false;
-    let mut last_regossip = Instant::now();
-
-    loop {
-        ticker.tick().await;
-
-        if stop.is_stopped() {
-            continue;
-        }
-
-        // Periodically re-gossip our own signatures for deposits still collecting.
-        if last_regossip.elapsed() >= REGOSSIP_INTERVAL {
-            match proposal_cache.collecting_with_my_sig() {
-                Ok(pending) => {
-                    for (deposit_id, state) in pending {
-                        let Some(sig) = state.my_signature.clone() else {
-                            continue;
-                        };
-
-                        let broadcast_msg = SignatureBroadcast {
-                            deposit_id: deposit_id.to_bytes(),
-                            proposal_hash: state.proposal_hash.to_vec(),
-                            signature: sig,
-                            signer_address: my_eth_address.as_slice().to_vec(),
-                            timestamp: SystemTime::now()
-                                .duration_since(UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_secs(),
-                        };
-
-                        let prop_id = hex::encode(state.proposal_hash);
-                        spawn_signature_broadcast(
-                            &peers,
-                            &broadcast_msg,
-                            &prop_id,
-                            SignatureBroadcastReason::Regossip,
-                        );
-                    }
-                }
-                Err(err) => {
-                    warn!(
-                        target: "bridge.cursor",
-                        error=%err,
-                        "failed to gather proposals for signature re-gossip"
-                    );
-                }
-            }
-
-            last_regossip = Instant::now();
-        }
-
-        let tip_height = match runtime.nock_hashchain_tip().await {
-            Ok(height) => height,
-            Err(err) => {
-                warn!(
-                    target: "bridge.cursor",
-                    error=%err,
-                    "failed to peek nock hashchain tip height"
-                );
-                continue;
-            }
-        };
-        let Some(tip_height) = tip_height else {
-            debug!(
-                target: "bridge.cursor",
-                "no nock hashchain tip yet, waiting before signing"
-            );
-            continue;
-        };
-        if tip_height < nonce_epoch.start_height {
-            debug!(
-                target: "bridge.cursor",
-                tip_height,
-                nonce_epoch_start_height = nonce_epoch.start_height,
-                "hashchain behind nonce epoch start height, waiting to sign"
-            );
-            continue;
-        }
-        if !logged_epoch_ready {
-            logged_epoch_ready = true;
-            info!(
-                target: "bridge.cursor",
-                tip_height,
-                nonce_epoch_start_height = nonce_epoch.start_height,
-                "hashchain reached nonce epoch start height, signing enabled"
-            );
-        }
-
-        // Query the chain for the last confirmed deposit nonce.
-        // This is the source of truth for the signing cursor.
-        let last_chain_nonce = match base_bridge.get_last_deposit_nonce().await {
-            Ok(n) => n,
-            Err(e) => {
-                warn!(
-                    target: "bridge.cursor",
-                    error=%e,
-                    "failed to query lastDepositNonce from chain"
-                );
-                continue;
-            }
-        };
-        bridge_status.update_last_deposit_nonce(last_chain_nonce);
-        let next_nonce = last_chain_nonce + 1;
-
-        // Select the next deposit(s) to sign from the local epoch log.
-        let nonce_epoch_base = nonce_epoch.base;
-        if last_chain_nonce < nonce_epoch_base {
-            let reason = format!(
-                "nonce epoch mismatch: nonce_epoch_base ({nonce_epoch_base}) is greater than on-chain lastDepositNonce ({last_chain_nonce}); check config"
-            );
-            trigger_local_stop(
-                runtime.clone(),
-                stop_controller.clone(),
-                bridge_status.clone(),
-                reason,
-            )
-            .await;
-            continue;
-        }
-
-        let first_epoch_nonce = nonce_epoch.first_epoch_nonce();
-        let spent_epoch_nonces = if last_chain_nonce < first_epoch_nonce {
-            0
-        } else {
-            last_chain_nonce - first_epoch_nonce + 1
-        };
-        let log_len = match deposit_log.number_of_deposits_in_epoch(nonce_epoch).await {
-            Ok(v) => v,
-            Err(err) => {
-                warn!(
-                    target: "bridge.cursor",
-                    error=%err,
-                    "failed to count deposits in sqlite"
-                );
-                let reason = format!("failed to count deposits in sqlite: {err}");
-                trigger_local_stop(
-                    runtime.clone(),
-                    stop_controller.clone(),
-                    bridge_status.clone(),
-                    reason,
-                )
-                .await;
-                continue;
-            }
-        };
-        if spent_epoch_nonces > log_len {
-            debug!(
-                target: "bridge.cursor",
-                log_len,
-                spent_epoch_nonces,
-                nonce_epoch_base,
-                "deposit log behind chain prefix, waiting for log to catch up"
-            );
-            continue;
-        }
-
-        let candidates = match deposit_log
-            .records_from_nonce(next_nonce, PIPELINE_DEPTH, nonce_epoch)
-            .await
-        {
-            Ok(v) => v,
-            Err(err) => {
-                warn!(
-                    target: "bridge.cursor",
-                    error=%err,
-                    "failed to query candidate deposits from sqlite"
-                );
-                continue;
-            }
-        };
-
-        if candidates.is_empty() {
-            continue;
-        }
-
-        // Sign and gossip signatures for the tip candidate (and optional pipeline).
-        for (nonce, record) in candidates {
-            if stop.is_stopped() {
-                break;
-            }
-
-            if nonce_epoch.is_before_start_key(record.block_height, &record.tx_id) {
-                let reason = format!(
-                    "deposit log contains record below nonce_epoch start key (record_height={} < start_height={}); refusing to sign",
-                    record.block_height, nonce_epoch.start_height
-                );
-                trigger_local_stop(
-                    runtime.clone(),
-                    stop_controller.clone(),
-                    bridge_status.clone(),
-                    reason,
-                )
-                .await;
-                break;
-            }
-
-            let req = NockDepositRequestData {
-                tx_id: record.tx_id.clone(),
-                name: record.name.clone(),
-                recipient: record.recipient,
-                amount: record.amount_to_mint,
-                block_height: record.block_height,
-                as_of: record.as_of.clone(),
-                nonce,
-            };
-
-            let deposit_id = DepositId::from_effect_payload(&req);
-
-            // Skip work if we've already signed this proposal.
-            if let Ok(Some(state)) = proposal_cache.get_state(&deposit_id) {
-                if state.status == crate::proposal_cache::ProposalStatus::Confirmed {
-                    continue;
-                }
-                if state.my_signature.is_some() {
-                    continue;
-                }
-            }
-
-            // Optimization: skip signing if deposit is already processed on-chain.
-            // Do not block signing on transient Base RPC errors.
-            match base_bridge.is_deposit_processed(&req.tx_id).await {
-                Ok(true) => {
-                    if nonce == next_nonce {
-                        let reason = format!(
-                            "epoch mismatch: tip candidate tx_id is already processed on-chain, but lastDepositNonce={last_chain_nonce} implies nonce {next_nonce} is still pending (check nonce_epoch_start_height/base)"
-                        );
-                        trigger_local_stop(
-                            runtime.clone(),
-                            stop_controller.clone(),
-                            bridge_status.clone(),
-                            reason,
-                        )
-                        .await;
-                        break;
-                    }
-                    debug!(
-                        target: "bridge.cursor",
-                        nonce,
-                        "deposit already processed on-chain, skipping signature"
-                    );
-                    continue;
-                }
-                Ok(false) => {}
+                },
                 Err(e) => {
                     warn!(
                         target: "bridge.cursor",
-                        nonce=req.nonce,
+                        peer_node_id=peer_id,
+                        peer_address=%addr,
                         error=%e,
-                        "failed to query processedDeposits, proceeding to sign anyway"
+                        reason=reason.as_str(),
+                        "failed to connect to peer for signature broadcast"
                     );
                 }
             }
+        });
+    }
+}
 
-            let proposal_hash = req.compute_proposal_hash();
-            let proposal_id = hex::encode(proposal_hash);
+#[derive(Clone, Debug)]
+pub struct SigningTickState {
+    pub logged_epoch_ready: bool,
+    pub last_regossip_at: SystemTime,
+}
 
-            // Ensure the proposal is visible in the TUI even if no kernel `%commit-nock-deposits`
-            // effect fires on this node (e.g. after restart).
-            bridge_status.update_proposal(crate::tui::types::Proposal {
+impl SigningTickState {
+    pub fn new(now: SystemTime) -> Self {
+        Self {
+            logged_epoch_ready: false,
+            last_regossip_at: now,
+        }
+    }
+}
+
+impl Default for SigningTickState {
+    fn default() -> Self {
+        Self::new(UNIX_EPOCH)
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct SigningTickInput {
+    pub now: SystemTime,
+    pub tip_height: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SigningTickOutcome {
+    pub regossip_broadcasts: usize,
+    pub initial_broadcasts: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SigningCandidateExecutionResult {
+    Broadcasted,
+    SignFailed,
+    DuplicateSignature,
+    ProposalStale,
+    InvalidOwnSignature,
+    CacheUpdateFailed,
+}
+
+#[derive(Clone)]
+pub struct SigningTickPorts<B: BaseContractPort> {
+    runtime: Arc<BridgeRuntimeHandle>,
+    base_bridge: Arc<B>,
+    deposit_log: Arc<crate::deposit_log::DepositLog>,
+    proposal_cache: Arc<ProposalCache>,
+}
+
+impl<B: BaseContractPort> SigningTickPorts<B> {
+    pub fn new(
+        runtime: Arc<BridgeRuntimeHandle>,
+        base_bridge: Arc<B>,
+        deposit_log: Arc<crate::deposit_log::DepositLog>,
+        proposal_cache: Arc<ProposalCache>,
+    ) -> Self {
+        Self {
+            runtime,
+            base_bridge,
+            deposit_log,
+            proposal_cache,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct SigningTickNodeState {
+    signer: Arc<BridgeSigner>,
+    valid_addresses: Arc<HashSet<Address>>,
+    peers: Arc<Vec<PeerEndpoint>>,
+    self_node_id: u64,
+    address_to_node_id: Arc<std::collections::HashMap<Address, u64>>,
+}
+
+impl SigningTickNodeState {
+    pub fn new(
+        signer: Arc<BridgeSigner>,
+        valid_addresses: HashSet<Address>,
+        peers: Vec<PeerEndpoint>,
+        self_node_id: u64,
+        address_to_node_id: std::collections::HashMap<Address, u64>,
+    ) -> Self {
+        Self {
+            signer,
+            valid_addresses: Arc::new(valid_addresses),
+            peers: Arc::new(peers),
+            self_node_id,
+            address_to_node_id: Arc::new(address_to_node_id),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct SigningTickControl {
+    bridge_status: BridgeStatus,
+    stop_controller: crate::stop::StopController,
+    stop: crate::stop::StopHandle,
+    local_stop_mode: SigningLocalStopMode,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SigningLocalStopMode {
+    #[default]
+    RuntimeProbeAndBroadcast,
+    LocalTriggerOnly,
+}
+
+impl SigningTickControl {
+    pub fn new(
+        bridge_status: BridgeStatus,
+        stop_controller: crate::stop::StopController,
+        stop: crate::stop::StopHandle,
+    ) -> Self {
+        Self {
+            bridge_status,
+            stop_controller,
+            stop,
+            local_stop_mode: SigningLocalStopMode::RuntimeProbeAndBroadcast,
+        }
+    }
+
+    pub fn with_local_stop_mode(mut self, local_stop_mode: SigningLocalStopMode) -> Self {
+        self.local_stop_mode = local_stop_mode;
+        self
+    }
+}
+
+#[derive(Clone)]
+pub struct SigningTickConfig {
+    nonce_epoch: NonceEpochConfig,
+    policy: SigningLoopPolicy,
+}
+
+impl SigningTickConfig {
+    pub fn new(nonce_epoch: &NonceEpochConfig, policy: SigningLoopPolicy) -> Self {
+        Self {
+            nonce_epoch: nonce_epoch.clone(),
+            policy,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct SigningTickContext<B: BaseContractPort> {
+    ports: SigningTickPorts<B>,
+    node: SigningTickNodeState,
+    control: SigningTickControl,
+    config: SigningTickConfig,
+}
+
+impl<B: BaseContractPort> SigningTickContext<B> {
+    pub fn new(
+        ports: SigningTickPorts<B>,
+        node: SigningTickNodeState,
+        control: SigningTickControl,
+        config: SigningTickConfig,
+    ) -> Self {
+        Self {
+            ports,
+            node,
+            control,
+            config,
+        }
+    }
+
+    async fn execute_signing_candidate(
+        &self,
+        req: &crate::types::NockDepositRequestData,
+        deposit_id: &crate::types::DepositId,
+        now: SystemTime,
+        now_secs: u64,
+    ) -> SigningCandidateExecutionResult {
+        use tracing::{debug, error, info, warn};
+
+        use crate::ingress::proto::SignatureBroadcast;
+        use crate::signing::verify_bridge_signature;
+
+        let my_eth_address = self.node.signer.address();
+        let proposal_hash = req.compute_proposal_hash();
+        let proposal_id = hex::encode(proposal_hash);
+
+        // Ensure the proposal is visible in the TUI even if no kernel `%commit-nock-deposits`
+        // effect fires on this node (e.g. after restart).
+        self.control
+            .bridge_status
+            .update_proposal(crate::tui::types::Proposal {
                 id: proposal_id.clone(),
                 proposal_type: "deposit".to_string(),
                 description: format!(
@@ -1430,7 +1399,7 @@ pub async fn run_signing_cursor_loop(
                 signatures_collected: 0,
                 signatures_required: crate::proposal_cache::SIGNATURE_THRESHOLD as u8,
                 signers: vec![],
-                created_at: SystemTime::now(),
+                created_at: now,
                 status: crate::tui::types::ProposalStatus::Pending,
                 data_hash: proposal_id.clone(),
                 submitted_at_block: None,
@@ -1448,141 +1417,683 @@ pub async fn run_signing_cursor_loop(
                 time_until_takeover: None,
             });
 
-            // Step 1: Sign the proposal locally.
-            let signature = match signer.sign_hash(&proposal_hash).await {
-                Ok(sig) => sig.as_bytes().to_vec(),
-                Err(e) => {
-                    error!(
-                        target: "bridge.cursor",
-                        error=%e,
-                        proposal_hash=%proposal_id,
-                        "failed to sign proposal"
-                    );
-                    continue;
-                }
-            };
-
-            // Step 2: Add own signature to cache.
-            let add_result = proposal_cache.add_signature(
-                &deposit_id,
-                crate::proposal_cache::SignatureData {
-                    signer_address: my_eth_address,
-                    signature: signature.clone(),
-                    proposal_hash,
-                    is_mine: true,
-                },
-                Some(req.clone()),
-                |hash, sig| verify_bridge_signature(hash, sig, &valid_addresses),
-            );
-
-            // Apply any pending signatures that arrived before we processed this deposit.
-            let valid_addrs = valid_addresses.clone();
-            if let Ok(report) = proposal_cache.apply_pending_signatures(&deposit_id, |hash, sig| {
-                verify_bridge_signature(hash, sig, &valid_addrs)
-            }) {
-                if report.applied > 0 {
-                    debug!(
-                        target: "bridge.cursor",
-                        proposal_hash=%proposal_id,
-                        applied_count=report.applied,
-                        "applied pending signatures from peers"
-                    );
-                }
-                if let Some(first) = report.mismatched.first() {
-                    let deposit_id_hex = hex::encode(deposit_id.to_bytes());
-                    let expected_hex = hex::encode(first.expected_hash);
-                    let received_hex = hex::encode(first.received_hash);
-                    warn!(
-                        target: "bridge.cursor",
-                        deposit_id=%deposit_id_hex,
-                        expected_hash=%expected_hex,
-                        received_hash=%received_hex,
-                        signer=%first.signer_address,
-                        mismatch_count=report.mismatched.len(),
-                        "peer signature proposal hash mismatch, possible nonce divergence"
-                    );
-                    bridge_status.push_alert(
-                        crate::tui::types::AlertSeverity::Error,
-                        "Nonce Divergence Suspected".to_string(),
-                        format!(
-                            "Deposit {} has {} peer signature(s) for a different proposal hash. expected={}, received={}, signer={}",
-                            deposit_id_hex,
-                            report.mismatched.len(),
-                            expected_hex,
-                            received_hex,
-                            first.signer_address
-                        ),
-                        "nonce-divergence".to_string(),
-                    );
-                }
+        // Step 1: Sign the proposal locally.
+        let signature = match self.node.signer.sign_hash(&proposal_hash).await {
+            Ok(sig) => sig.as_bytes().to_vec(),
+            Err(e) => {
+                error!(
+                    target: "bridge.cursor",
+                    error=%e,
+                    proposal_hash=%proposal_id,
+                    "failed to sign proposal"
+                );
+                return SigningCandidateExecutionResult::SignFailed;
             }
+        };
 
-            if let Ok(Some(state)) = proposal_cache.get_state(&deposit_id) {
-                bridge_status.sync_proposal_signatures_from_cache(
-                    &proposal_id, &state, &address_to_node_id, self_node_id,
+        // Step 2: Add own signature to cache.
+        let add_result = self.ports.proposal_cache.add_signature(
+            deposit_id,
+            crate::proposal_cache::SignatureData {
+                signer_address: my_eth_address,
+                signature: signature.clone(),
+                proposal_hash,
+                is_mine: true,
+            },
+            Some(req.clone()),
+            |hash, sig| verify_bridge_signature(hash, sig, &self.node.valid_addresses),
+        );
+
+        if let Ok(report) = self
+            .ports
+            .proposal_cache
+            .apply_pending_signatures(deposit_id, |hash, sig| {
+                verify_bridge_signature(hash, sig, &self.node.valid_addresses)
+            })
+        {
+            if report.applied > 0 {
+                debug!(
+                    target: "bridge.cursor",
+                    proposal_hash=%proposal_id,
+                    applied_count=report.applied,
+                    "applied pending signatures from peers"
                 );
             }
+            if let Some(first) = report.mismatched.first() {
+                let deposit_id_hex = hex::encode(deposit_id.to_bytes());
+                let expected_hex = hex::encode(first.expected_hash);
+                let received_hex = hex::encode(first.received_hash);
+                warn!(
+                    target: "bridge.cursor",
+                    deposit_id=%deposit_id_hex,
+                    expected_hash=%expected_hex,
+                    received_hash=%received_hex,
+                    signer=%first.signer_address,
+                    mismatch_count=report.mismatched.len(),
+                    "peer signature proposal hash mismatch, possible nonce divergence"
+                );
+                self.control.bridge_status.push_alert(
+                    crate::tui::types::AlertSeverity::Error,
+                    "Nonce Divergence Suspected".to_string(),
+                    format!(
+                        "Deposit {} has {} peer signature(s) for a different proposal hash. expected={}, received={}, signer={}",
+                        deposit_id_hex,
+                        report.mismatched.len(),
+                        expected_hex,
+                        received_hex,
+                        first.signer_address
+                    ),
+                    "nonce-divergence".to_string(),
+                );
+            }
+        }
 
-            match add_result {
-                Ok(crate::proposal_cache::SignatureAddResult::Added)
-                | Ok(crate::proposal_cache::SignatureAddResult::ThresholdReached) => {}
-                Ok(crate::proposal_cache::SignatureAddResult::Duplicate) => {
-                    debug!(
-                        target: "bridge.cursor",
-                        proposal_hash=%proposal_id,
-                        "duplicate signature, skipping broadcast"
+        if let Ok(Some(proposal_state)) = self.ports.proposal_cache.get_state(deposit_id) {
+            self.control
+                .bridge_status
+                .sync_proposal_signatures_from_cache(
+                    &proposal_id, &proposal_state, &self.node.address_to_node_id,
+                    self.node.self_node_id,
+                );
+        }
+
+        match add_result {
+            Ok(crate::proposal_cache::SignatureAddResult::Added)
+            | Ok(crate::proposal_cache::SignatureAddResult::ThresholdReached) => {}
+            Ok(crate::proposal_cache::SignatureAddResult::Duplicate) => {
+                debug!(
+                    target: "bridge.cursor",
+                    proposal_hash=%proposal_id,
+                    "duplicate signature, skipping broadcast"
+                );
+                return SigningCandidateExecutionResult::DuplicateSignature;
+            }
+            Ok(crate::proposal_cache::SignatureAddResult::Stale) => {
+                info!(
+                    target: "bridge.cursor",
+                    proposal_hash=%proposal_id,
+                    "proposal already confirmed, skipping broadcast"
+                );
+                return SigningCandidateExecutionResult::ProposalStale;
+            }
+            Ok(crate::proposal_cache::SignatureAddResult::Invalid(msg)) => {
+                warn!(
+                    target: "bridge.cursor",
+                    proposal_hash=%proposal_id,
+                    error=%msg,
+                    "own signature invalid, skipping broadcast"
+                );
+                return SigningCandidateExecutionResult::InvalidOwnSignature;
+            }
+            Err(e) => {
+                warn!(
+                    target: "bridge.cursor",
+                    proposal_hash=%proposal_id,
+                    error=%e,
+                    "failed to add own signature to cache, skipping broadcast"
+                );
+                return SigningCandidateExecutionResult::CacheUpdateFailed;
+            }
+        }
+
+        // Step 3: Broadcast signature to all peers (fire-and-forget, concurrent).
+        let broadcast_msg = SignatureBroadcast {
+            deposit_id: deposit_id.to_bytes(),
+            proposal_hash: proposal_hash.to_vec(),
+            signature,
+            signer_address: my_eth_address.as_slice().to_vec(),
+            timestamp: now_secs,
+        };
+
+        spawn_signature_broadcast(
+            self.node.peers.as_ref(),
+            &broadcast_msg,
+            &proposal_id,
+            SignatureBroadcastReason::Initial,
+        );
+        SigningCandidateExecutionResult::Broadcasted
+    }
+
+    fn execute_regossip(&self, now_secs: u64) -> usize {
+        use tracing::{debug, warn};
+
+        use crate::ingress::proto::SignatureBroadcast;
+
+        let my_eth_address = self.node.signer.address();
+        let mut broadcasts = 0;
+        match self.ports.proposal_cache.collecting_with_my_sig() {
+            Ok(pending) => {
+                for (deposit_id, proposal_state) in pending {
+                    let Some(sig) = proposal_state.my_signature.clone() else {
+                        continue;
+                    };
+
+                    let broadcast_msg = SignatureBroadcast {
+                        deposit_id: deposit_id.to_bytes(),
+                        proposal_hash: proposal_state.proposal_hash.to_vec(),
+                        signature: sig,
+                        signer_address: my_eth_address.as_slice().to_vec(),
+                        timestamp: now_secs,
+                    };
+
+                    let prop_id = hex::encode(proposal_state.proposal_hash);
+                    spawn_signature_broadcast(
+                        self.node.peers.as_ref(),
+                        &broadcast_msg,
+                        &prop_id,
+                        SignatureBroadcastReason::Regossip,
                     );
-                    continue;
+                    broadcasts += 1;
                 }
-                Ok(crate::proposal_cache::SignatureAddResult::Stale) => {
+            }
+            Err(err) => {
+                warn!(
+                    target: "bridge.cursor",
+                    error=%err,
+                    "failed to gather proposals for signature re-gossip"
+                );
+            }
+        }
+        if broadcasts > 0 {
+            debug!(
+                target: "bridge.cursor",
+                regossip_broadcasts=broadcasts,
+                "re-gossiped collecting signatures"
+            );
+        }
+        broadcasts
+    }
+}
+
+impl<B: BaseContractPort> SigningTickContext<B> {
+    async fn trigger_local_stop(&self, reason: String) {
+        use std::time::SystemTime;
+
+        use tracing::info;
+
+        use crate::stop::{trigger_local_stop, StopInfo, StopSource};
+        use crate::tui::types::AlertSeverity;
+
+        info!(
+            target: "bridge.cursor",
+            mode = ?self.control.local_stop_mode,
+            reason=%reason,
+            "signing requested local stop"
+        );
+
+        match self.control.local_stop_mode {
+            SigningLocalStopMode::RuntimeProbeAndBroadcast => {
+                trigger_local_stop(
+                    self.ports.runtime.clone(),
+                    self.control.stop_controller.clone(),
+                    self.control.bridge_status.clone(),
+                    reason,
+                )
+                .await;
+            }
+            SigningLocalStopMode::LocalTriggerOnly => {
+                let metrics = crate::metrics::init_metrics();
+                metrics.stop_local_requests.increment();
+
+                let info = StopInfo {
+                    reason: reason.clone(),
+                    last: None,
+                    source: StopSource::Local,
+                    at: SystemTime::now(),
+                };
+                if !self.control.stop_controller.trigger(info) {
+                    metrics.stop_local_duplicate.increment();
                     info!(
                         target: "bridge.cursor",
-                        proposal_hash=%proposal_id,
-                        "proposal already confirmed, skipping broadcast"
+                        reason=%reason,
+                        "local stop already active, skipping duplicate local-only trigger"
                     );
+                    return;
+                }
+                metrics.stop_local_triggered.increment();
+                info!(
+                    target: "bridge.cursor",
+                    reason=%reason,
+                    "local-only stop activated"
+                );
+                self.control.bridge_status.push_alert(
+                    AlertSeverity::Error,
+                    "Bridge Stopped".to_string(),
+                    reason,
+                    "local-stop".to_string(),
+                );
+            }
+        }
+    }
+
+    pub async fn tick_once(
+        &self,
+        state: &mut SigningTickState,
+        input: SigningTickInput,
+    ) -> SigningTickOutcome {
+        use tracing::{debug, info, warn};
+
+        use crate::types::{DepositId, NockDepositRequestData};
+
+        let context = self;
+        let mut outcome = SigningTickOutcome::default();
+        let now = input.now;
+        let now_secs = system_time_secs(now);
+
+        // Periodically re-gossip our own signatures for deposits still collecting.
+        if now
+            .duration_since(state.last_regossip_at)
+            .unwrap_or_default()
+            >= context.config.policy.regossip_interval
+        {
+            outcome.regossip_broadcasts += context.execute_regossip(now_secs);
+            state.last_regossip_at = now;
+        }
+
+        // Always poll chain nonce for health/TUI visibility, even before tip/epoch gates.
+        let last_chain_nonce = match context.ports.base_bridge.get_last_deposit_nonce().await {
+            Ok(nonce) => {
+                context
+                    .control
+                    .bridge_status
+                    .update_last_deposit_nonce(nonce);
+                Some(nonce)
+            }
+            Err(e) => {
+                warn!(
+                    target: "bridge.cursor",
+                    error=%e,
+                    "failed to query lastDepositNonce from chain"
+                );
+                None
+            }
+        };
+
+        let nonce_epoch_base = context.config.nonce_epoch.base;
+        let first_epoch_nonce = context.config.nonce_epoch.first_epoch_nonce();
+        let mut epoch_ready_logged = false;
+        let mut maybe_mark_epoch_ready = |tip_height: u64, state: &mut SigningTickState| {
+            if epoch_ready_logged {
+                return;
+            }
+            state.logged_epoch_ready = true;
+            epoch_ready_logged = true;
+            info!(
+                target: "bridge.cursor",
+                tip_height,
+                nonce_epoch_start_height = context.config.nonce_epoch.start_height,
+                "hashchain reached nonce epoch start height, signing enabled"
+            );
+        };
+        let mut plan = SigningPlanner::plan_tick(SigningTickPlanInput {
+            tip_height: input.tip_height,
+            nonce_epoch_start_height: context.config.nonce_epoch.start_height,
+            logged_epoch_ready: state.logged_epoch_ready,
+            last_chain_nonce,
+            nonce_epoch_base,
+            first_epoch_nonce,
+            log_len: None,
+        });
+        let next_nonce = loop {
+            match plan {
+                SigningTickPlanAction::WaitForTip => {
+                    debug!(
+                        target: "bridge.cursor",
+                        "no nock hashchain tip yet, waiting before signing"
+                    );
+                    return outcome;
+                }
+                SigningTickPlanAction::WaitForEpochStart { tip_height } => {
+                    debug!(
+                        target: "bridge.cursor",
+                        tip_height,
+                        nonce_epoch_start_height = context.config.nonce_epoch.start_height,
+                        "hashchain behind nonce epoch start height, waiting to sign"
+                    );
+                    return outcome;
+                }
+                SigningTickPlanAction::NeedLastChainNonce {
+                    tip_height,
+                    reached_epoch_start,
+                } => {
+                    if reached_epoch_start {
+                        maybe_mark_epoch_ready(tip_height, state);
+                    }
+                    return outcome;
+                }
+                SigningTickPlanAction::StopNonceEpochMismatch {
+                    tip_height,
+                    reached_epoch_start,
+                    last_chain_nonce,
+                    nonce_epoch_base,
+                } => {
+                    if reached_epoch_start {
+                        maybe_mark_epoch_ready(tip_height, state);
+                    }
+                    let reason = format!(
+                        "nonce epoch mismatch: nonce_epoch_base ({nonce_epoch_base}) is greater than on-chain lastDepositNonce ({last_chain_nonce}); check config"
+                    );
+                    context.trigger_local_stop(reason).await;
+                    return outcome;
+                }
+                SigningTickPlanAction::NeedLogLen {
+                    tip_height,
+                    reached_epoch_start,
+                    last_chain_nonce,
+                } => {
+                    if reached_epoch_start {
+                        maybe_mark_epoch_ready(tip_height, state);
+                    }
+
+                    let log_len = match context
+                        .ports
+                        .deposit_log
+                        .number_of_deposits_in_epoch(&context.config.nonce_epoch)
+                        .await
+                    {
+                        Ok(v) => v,
+                        Err(err) => {
+                            warn!(
+                                target: "bridge.cursor",
+                                error=%err,
+                                "failed to count deposits in sqlite"
+                            );
+                            let reason = format!("failed to count deposits in sqlite: {err}");
+                            context.trigger_local_stop(reason).await;
+                            return outcome;
+                        }
+                    };
+
+                    plan = SigningPlanner::plan_tick(SigningTickPlanInput {
+                        tip_height: input.tip_height,
+                        nonce_epoch_start_height: context.config.nonce_epoch.start_height,
+                        logged_epoch_ready: state.logged_epoch_ready,
+                        last_chain_nonce: Some(last_chain_nonce),
+                        nonce_epoch_base,
+                        first_epoch_nonce,
+                        log_len: Some(log_len),
+                    });
+                }
+                SigningTickPlanAction::WaitForLogCatchup {
+                    tip_height,
+                    reached_epoch_start,
+                    nonce_epoch_base,
+                    log_len,
+                    spent_epoch_nonces,
+                    ..
+                } => {
+                    if reached_epoch_start {
+                        maybe_mark_epoch_ready(tip_height, state);
+                    }
+                    debug!(
+                        target: "bridge.cursor",
+                        log_len,
+                        spent_epoch_nonces,
+                        nonce_epoch_base,
+                        "deposit log behind chain prefix, waiting for log to catch up"
+                    );
+                    return outcome;
+                }
+                SigningTickPlanAction::Continue {
+                    tip_height,
+                    reached_epoch_start,
+                    next_nonce,
+                    ..
+                } => {
+                    if reached_epoch_start {
+                        maybe_mark_epoch_ready(tip_height, state);
+                    }
+                    break next_nonce;
+                }
+            }
+        };
+
+        let candidates = match context
+            .ports
+            .deposit_log
+            .records_from_nonce(
+                next_nonce, context.config.policy.pipeline_depth, &context.config.nonce_epoch,
+            )
+            .await
+        {
+            Ok(v) => v,
+            Err(err) => {
+                warn!(
+                    target: "bridge.cursor",
+                    error=%err,
+                    "failed to query candidate deposits from sqlite"
+                );
+                return outcome;
+            }
+        };
+
+        if candidates.is_empty() {
+            return outcome;
+        }
+
+        // Sign and gossip signatures for the tip candidate (and optional pipeline).
+        for (nonce, record) in candidates {
+            if context.control.stop.is_stopped() {
+                break;
+            }
+
+            if matches!(
+                SigningPlanner::plan_epoch_bounds(SigningEpochBoundsDecisionInput {
+                    is_before_start_key: context
+                        .config
+                        .nonce_epoch
+                        .is_before_start_key(record.block_height, &record.tx_id),
+                }),
+                SigningEpochBoundsDecision::StopRecordBeforeStart
+            ) {
+                let reason = format!(
+                    "signing candidate is before nonce_epoch start key (record_height={}, start_height={}); candidate should have been filtered before signing",
+                    record.block_height, context.config.nonce_epoch.start_height
+                );
+                context.trigger_local_stop(reason).await;
+                break;
+            }
+
+            let req = NockDepositRequestData {
+                tx_id: record.tx_id.clone(),
+                name: record.name.clone(),
+                recipient: record.recipient,
+                amount: record.amount_to_mint,
+                block_height: record.block_height,
+                as_of: record.as_of.clone(),
+                nonce,
+            };
+
+            let deposit_id = DepositId::from_effect_payload(&req);
+
+            let existing_state = context
+                .ports
+                .proposal_cache
+                .get_state(&deposit_id)
+                .ok()
+                .flatten();
+            let precheck = SigningPlanner::plan_candidate_precheck(SigningCandidatePrecheckInput {
+                is_confirmed: existing_state
+                    .as_ref()
+                    .map(|proposal_state| {
+                        proposal_state.status == crate::proposal_cache::ProposalStatus::Confirmed
+                    })
+                    .unwrap_or(false),
+                has_my_signature: existing_state
+                    .as_ref()
+                    .and_then(|proposal_state| proposal_state.my_signature.as_ref())
+                    .is_some(),
+            });
+            match precheck {
+                SigningCandidatePrecheckDecision::SkipConfirmed
+                | SigningCandidatePrecheckDecision::SkipAlreadySigned => {
                     continue;
                 }
-                Ok(crate::proposal_cache::SignatureAddResult::Invalid(msg)) => {
-                    warn!(
-                        target: "bridge.cursor",
-                        proposal_hash=%proposal_id,
-                        error=%msg,
-                        "own signature invalid, skipping broadcast"
-                    );
-                    continue;
+                SigningCandidatePrecheckDecision::CheckProcessedOnChain => {}
+            }
+
+            // Optimization: skip signing if deposit is already processed on-chain.
+            // Do not block signing on transient Base RPC errors.
+            match context
+                .ports
+                .base_bridge
+                .is_deposit_processed(&req.tx_id)
+                .await
+            {
+                Ok(processed_on_chain) => {
+                    match SigningPlanner::plan_processed(SigningProcessedDecisionInput {
+                        processed_on_chain,
+                    }) {
+                        SigningProcessedDecision::SkipProcessed => {
+                            debug!(
+                                target: "bridge.cursor",
+                                nonce,
+                                "deposit already processed on-chain, skipping signature"
+                            );
+                            continue;
+                        }
+                        SigningProcessedDecision::ContinueSign => {}
+                    }
                 }
                 Err(e) => {
                     warn!(
                         target: "bridge.cursor",
-                        proposal_hash=%proposal_id,
+                        nonce=req.nonce,
                         error=%e,
-                        "failed to add own signature to cache, skipping broadcast"
+                        "failed to query processedDeposits, proceeding to sign anyway"
                     );
-                    continue;
                 }
             }
 
-            // Step 3: Broadcast signature to all peers (fire-and-forget, concurrent).
-            let timestamp = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
-
-            let broadcast_msg = SignatureBroadcast {
-                deposit_id: deposit_id.to_bytes(),
-                proposal_hash: proposal_hash.to_vec(),
-                signature: signature.clone(),
-                signer_address: my_eth_address.as_slice().to_vec(),
-                timestamp,
-            };
-
-            spawn_signature_broadcast(
-                &peers,
-                &broadcast_msg,
-                &proposal_id,
-                SignatureBroadcastReason::Initial,
-            );
+            if matches!(
+                context
+                    .execute_signing_candidate(&req, &deposit_id, now, now_secs)
+                    .await,
+                SigningCandidateExecutionResult::Broadcasted
+            ) {
+                outcome.initial_broadcasts += 1;
+            }
         }
+
+        outcome
+    }
+}
+
+pub async fn signing_tick_once<B: BaseContractPort>(
+    context: &SigningTickContext<B>,
+    state: &mut SigningTickState,
+    input: SigningTickInput,
+) -> SigningTickOutcome {
+    context.tick_once(state, input).await
+}
+
+/// Background loop that deterministically selects deposits to sign from shared history + chain tip.
+///
+/// This decouples signing from `%commit-nock-deposits` effects so nodes can restart at different
+/// nock heights and still converge on the same `lastDepositNonce + 1` deposit for signing.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_signing_cursor_loop<B: BaseContractPort>(
+    runtime: Arc<BridgeRuntimeHandle>,
+    base_bridge: Arc<B>,
+    deposit_log: Arc<crate::deposit_log::DepositLog>,
+    nonce_epoch: &NonceEpochConfig,
+    proposal_cache: Arc<ProposalCache>,
+    signer: Arc<BridgeSigner>,
+    valid_addresses: HashSet<Address>,
+    peers: Vec<PeerEndpoint>,
+    self_node_id: u64,
+    bridge_status: BridgeStatus,
+    address_to_node_id: std::collections::HashMap<Address, u64>,
+    stop_controller: crate::stop::StopController,
+    stop: crate::stop::StopHandle,
+) {
+    run_signing_cursor_loop_with_policy(
+        runtime,
+        base_bridge,
+        deposit_log,
+        nonce_epoch,
+        proposal_cache,
+        signer,
+        valid_addresses,
+        peers,
+        self_node_id,
+        bridge_status,
+        address_to_node_id,
+        stop_controller,
+        stop,
+        SigningLoopPolicy::default(),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn run_signing_cursor_loop_with_policy<B: BaseContractPort>(
+    runtime: Arc<BridgeRuntimeHandle>,
+    base_bridge: Arc<B>,
+    deposit_log: Arc<crate::deposit_log::DepositLog>,
+    nonce_epoch: &NonceEpochConfig,
+    proposal_cache: Arc<ProposalCache>,
+    signer: Arc<BridgeSigner>,
+    valid_addresses: HashSet<Address>,
+    peers: Vec<PeerEndpoint>,
+    self_node_id: u64,
+    bridge_status: BridgeStatus,
+    address_to_node_id: std::collections::HashMap<Address, u64>,
+    stop_controller: crate::stop::StopController,
+    stop: crate::stop::StopHandle,
+    policy: SigningLoopPolicy,
+) {
+    use tokio::time::{interval, MissedTickBehavior};
+    use tracing::{info, warn};
+
+    info!(
+        target: "bridge.cursor",
+        poll_interval_secs=policy.poll_interval.as_secs(),
+        pipeline_depth=policy.pipeline_depth,
+        regossip_interval_secs=policy.regossip_interval.as_secs(),
+        "starting signing cursor loop"
+    );
+
+    let context = SigningTickContext::new(
+        SigningTickPorts::new(runtime.clone(), base_bridge, deposit_log, proposal_cache),
+        SigningTickNodeState::new(
+            signer, valid_addresses, peers, self_node_id, address_to_node_id,
+        ),
+        SigningTickControl::new(bridge_status, stop_controller, stop.clone()),
+        SigningTickConfig::new(nonce_epoch, policy),
+    );
+
+    let mut ticker = interval(policy.poll_interval);
+    ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    let mut state = SigningTickState::new(SystemTime::now());
+
+    loop {
+        ticker.tick().await;
+
+        if stop.is_stopped() {
+            continue;
+        }
+
+        let tip_height = match runtime.nock_hashchain_tip().await {
+            Ok(height) => height,
+            Err(err) => {
+                warn!(
+                    target: "bridge.cursor",
+                    error=%err,
+                    "failed to peek nock hashchain tip height"
+                );
+                continue;
+            }
+        };
+        let _ = signing_tick_once(
+            &context,
+            &mut state,
+            SigningTickInput {
+                now: SystemTime::now(),
+                tip_height,
+            },
+        )
+        .await;
     }
 }
 
@@ -1659,78 +2170,447 @@ fn update_proposal_cache_metrics(proposal_cache: &ProposalCache) {
 /// 1. Threshold reached (status=Ready)
 /// 2. I'm the proposer OR backoff expired (failover logic)
 ///
-pub async fn run_posting_loop(
-    proposal_cache: Arc<ProposalCache>,
-    base_bridge: Arc<BaseBridge>,
-    node_config: NodeConfig,
-    bridge_status: BridgeStatus,
-    stop: crate::stop::StopHandle,
-    status_state: crate::status::BridgeStatusState,
+fn spawn_confirmation_broadcast(
+    peers: &[(u64, String)],
+    msg: &crate::ingress::proto::ConfirmationBroadcast,
+    proposal_id: &str,
 ) {
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    use serde_bytes::ByteBuf;
-    use tracing::{debug, error, info, warn};
+    use tracing::{info, warn};
 
     use crate::ingress::proto::bridge_ingress_client::BridgeIngressClient;
-    use crate::ingress::proto::ConfirmationBroadcast;
-    use crate::proposer::hoon_proposer;
-    use crate::status::LastSubmittedDeposit;
-    use crate::tui::types::{AlertSeverity, BatchStatus, ProposalStatus};
-    use crate::types::DepositSubmission;
 
-    const FAILOVER_BACKOFF_SECS: u64 = 120; // 2m per failover slot
+    for (peer_node_id, peer_address) in peers {
+        let msg = msg.clone();
+        let addr = peer_address.clone();
+        let peer_id = *peer_node_id;
+        let prop_id = proposal_id.to_string();
 
-    // Extract node PKHs for proposer calculation
-    let node_pkhs: Vec<_> = node_config
-        .nodes
-        .iter()
-        .map(|n| n.nock_pkh.clone())
-        .collect();
-    let num_nodes = node_pkhs.len();
-    let my_node_id = node_config.node_id as usize;
+        tokio::spawn(async move {
+            match BridgeIngressClient::connect(addr.clone()).await {
+                Ok(mut client) => match client.broadcast_confirmation(msg).await {
+                    Ok(_) => {
+                        info!(
+                            target: "bridge.posting",
+                            peer_node_id=peer_id,
+                            proposal_hash=%prop_id,
+                            "broadcast confirmation to peer"
+                        );
+                    }
+                    Err(e) => {
+                        warn!(
+                            target: "bridge.posting",
+                            peer_node_id=peer_id,
+                            error=%e,
+                            "failed to broadcast confirmation to peer"
+                        );
+                    }
+                },
+                Err(e) => {
+                    warn!(
+                        target: "bridge.posting",
+                        peer_node_id=peer_id,
+                        peer_address=%addr,
+                        error=%e,
+                        "failed to connect to peer for confirmation broadcast"
+                    );
+                }
+            }
+        });
+    }
+}
 
-    // Build peer addresses for confirmation broadcast (exclude self)
-    let peers: Vec<(u64, String)> = node_config
-        .nodes
-        .iter()
-        .enumerate()
-        .filter(|(idx, _)| *idx != my_node_id)
-        .map(|(idx, node)| (idx as u64, crate::health::normalize_endpoint(&node.ip)))
-        .collect();
+#[derive(Clone, Debug, Default)]
+pub struct PostingTickState {
+    pub ticks_executed: u64,
+}
 
-    info!("Starting proposal posting loop");
+#[derive(Clone, Copy, Debug)]
+pub struct PostingTickInput {
+    pub now: SystemTime,
+}
 
-    loop {
-        tokio::time::sleep(Duration::from_secs(1)).await;
-        update_proposal_cache_metrics(&proposal_cache);
-        if stop.is_stopped() {
-            continue;
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PostingTickOutcome {
+    pub ready_proposals: usize,
+    pub submitted: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PostingSubmissionExecutionResult {
+    Submitted,
+    ProposalNoLongerReady,
+    SignatureFetchFailed,
+    MarkPostingFailed,
+    SubmitFailed,
+    SubmitTimedOut,
+}
+
+#[derive(Clone)]
+pub struct PostingTickPorts<B: BaseContractPort> {
+    proposal_cache: Arc<ProposalCache>,
+    base_bridge: Arc<B>,
+}
+
+impl<B: BaseContractPort> PostingTickPorts<B> {
+    pub fn new(proposal_cache: Arc<ProposalCache>, base_bridge: Arc<B>) -> Self {
+        Self {
+            proposal_cache,
+            base_bridge,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct PostingTickNodeState {
+    node_config: NodeConfig,
+    peers: Arc<Vec<(u64, String)>>,
+    my_node_id: usize,
+}
+
+impl PostingTickNodeState {
+    pub fn new(node_config: NodeConfig) -> Self {
+        let my_node_id = node_config.node_id as usize;
+        let peers: Vec<(u64, String)> = node_config
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|(idx, _)| *idx != my_node_id)
+            .map(|(idx, node)| (idx as u64, crate::health::normalize_endpoint(&node.ip)))
+            .collect();
+        Self {
+            node_config,
+            peers: Arc::new(peers),
+            my_node_id,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct PostingTickControl {
+    bridge_status: BridgeStatus,
+    status_state: crate::status::BridgeStatusState,
+}
+
+impl PostingTickControl {
+    pub fn new(
+        bridge_status: BridgeStatus,
+        status_state: crate::status::BridgeStatusState,
+    ) -> Self {
+        Self {
+            bridge_status,
+            status_state,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct PostingTickConfig {
+    failover_backoff_secs: u64,
+}
+
+impl PostingTickConfig {
+    pub fn new(failover_backoff_secs: u64) -> Self {
+        Self {
+            failover_backoff_secs,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct PostingTickContext<B: BaseContractPort> {
+    ports: PostingTickPorts<B>,
+    node: PostingTickNodeState,
+    control: PostingTickControl,
+    config: PostingTickConfig,
+}
+
+impl<B: BaseContractPort> PostingTickContext<B> {
+    pub fn new(
+        ports: PostingTickPorts<B>,
+        node: PostingTickNodeState,
+        control: PostingTickControl,
+        config: PostingTickConfig,
+    ) -> Self {
+        Self {
+            ports,
+            node,
+            control,
+            config,
+        }
+    }
+
+    async fn execute_submission(
+        &self,
+        deposit_id: &crate::types::DepositId,
+        proposal_state: &crate::proposal_cache::ProposalState,
+        proposal_hash: [u8; 32],
+        proposal_id: &str,
+        now: SystemTime,
+        now_secs: u64,
+    ) -> PostingSubmissionExecutionResult {
+        use serde_bytes::ByteBuf;
+        use tracing::{error, info, warn};
+
+        use crate::ingress::proto::ConfirmationBroadcast;
+        use crate::status::LastSubmittedDeposit;
+        use crate::tui::types::{AlertSeverity, BatchStatus, ProposalStatus};
+        use crate::types::DepositSubmission;
+
+        // Get signatures for posting BEFORE marking as posting
+        // (get_signatures_for_posting requires status == Ready).
+        let signatures = match self
+            .ports
+            .proposal_cache
+            .get_signatures_for_posting(deposit_id)
+        {
+            Ok(Some(sigs)) => sigs,
+            Ok(None) => {
+                warn!(
+                    target: "bridge.posting",
+                    proposal_hash=%proposal_id,
+                    "proposal no longer ready for posting"
+                );
+                return PostingSubmissionExecutionResult::ProposalNoLongerReady;
+            }
+            Err(e) => {
+                error!(
+                    target: "bridge.posting",
+                    error=%e,
+                    proposal_hash=%proposal_id,
+                    "failed to get signatures for posting"
+                );
+                let _ = self.ports.proposal_cache.mark_failed(deposit_id);
+                return PostingSubmissionExecutionResult::SignatureFetchFailed;
+            }
+        };
+
+        // Mark as posting to prevent duplicate submissions.
+        if let Err(e) = self.ports.proposal_cache.mark_posting(deposit_id) {
+            error!(
+                target: "bridge.posting",
+                error=%e,
+                proposal_hash=%proposal_id,
+                "failed to mark proposal as posting"
+            );
+            return PostingSubmissionExecutionResult::MarkPostingFailed;
         }
 
+        // Update batch status to Submitting.
+        self.control
+            .bridge_status
+            .update_batch_status(BatchStatus::Submitting {
+                batch_id: proposal_state.proposal.nonce,
+            });
+
+        info!(
+            target: "bridge.posting",
+            proposal_hash=%proposal_id,
+            "posting proposal to BASE"
+        );
+
+        // Prepare deposit submission.
+        let req = &proposal_state.proposal;
+        let mut recipient_bytes = [0u8; 20];
+        recipient_bytes.copy_from_slice(&req.recipient.0);
+
+        let submission = DepositSubmission {
+            tx_id: req.tx_id.clone(),
+            name_first: req.name.first.clone(),
+            name_last: req.name.last.clone(),
+            recipient: recipient_bytes,
+            amount: req.amount as u128,
+            block_height: req.block_height,
+            as_of: req.as_of.clone(),
+            nonce: req.nonce,
+            signatures: crate::types::SignatureSet {
+                eth_signatures: signatures.into_iter().map(ByteBuf::from).collect(),
+                nock_signatures: vec![], // Not used for Base deposits
+            },
+        };
+
+        // Update TUI to Submitted status with timestamp.
+        if let Some(mut proposal) = self.control.bridge_status.find_proposal(proposal_id) {
+            proposal.status = ProposalStatus::Submitted;
+            proposal.submitted_at = Some(now);
+            if let Ok(duration) = now.duration_since(proposal.created_at) {
+                proposal.time_to_submit_ms = Some(duration.as_millis() as u64);
+            }
+            self.control.bridge_status.update_proposal(proposal);
+        }
+
+        // Submit to BASE with a timeout so a hung RPC can't stall the queue.
+        match tokio::time::timeout(
+            Duration::from_secs(SUBMIT_DEPOSIT_TIMEOUT_SECS),
+            self.ports.base_bridge.submit_deposit(submission),
+        )
+        .await
+        {
+            Ok(Ok(result)) => {
+                info!(
+                    target: "bridge.posting",
+                    proposal_hash=%proposal_id,
+                    tx_hash=%result.tx_hash,
+                    block_number=%result.block_number,
+                    "successfully posted deposit to BASE"
+                );
+
+                self.control
+                    .status_state
+                    .update_last_submitted_deposit(LastSubmittedDeposit {
+                        deposit: proposal_state.proposal.clone(),
+                        base_tx_hash: result.tx_hash.clone(),
+                        base_block_number: result.block_number,
+                    });
+
+                // Mark confirmed in cache.
+                let _ = self.ports.proposal_cache.mark_confirmed(deposit_id);
+
+                // Broadcast confirmation to all peers so they stop waiting.
+                let confirmation_msg = ConfirmationBroadcast {
+                    deposit_id: deposit_id.to_bytes(),
+                    proposal_hash: proposal_hash.to_vec(),
+                    tx_hash: result.tx_hash.as_bytes().to_vec(),
+                    block_number: result.block_number,
+                    timestamp: now_secs,
+                };
+                spawn_confirmation_broadcast(
+                    self.node.peers.as_ref(),
+                    &confirmation_msg,
+                    proposal_id,
+                );
+
+                // Update TUI to Executed status.
+                if let Some(mut proposal) = self.control.bridge_status.find_proposal(proposal_id) {
+                    proposal.status = ProposalStatus::Executed;
+                    proposal.tx_hash = Some(result.tx_hash);
+                    proposal.submitted_at_block = Some(result.block_number);
+                    proposal.executed_at_block = Some(result.block_number);
+                    self.control.bridge_status.update_proposal(proposal);
+                }
+
+                // Update batch status back to Idle after successful submission.
+                self.control
+                    .bridge_status
+                    .update_batch_status(BatchStatus::Idle);
+                PostingSubmissionExecutionResult::Submitted
+            }
+            Ok(Err(e)) => {
+                error!(
+                    target: "bridge.posting",
+                    error=%e,
+                    proposal_hash=%proposal_id,
+                    "failed to post deposit to BASE"
+                );
+
+                // Mark failed in cache.
+                let _ = self.ports.proposal_cache.mark_failed(deposit_id);
+
+                // Update TUI to Failed status.
+                if let Some(mut proposal) = self.control.bridge_status.find_proposal(proposal_id) {
+                    proposal.status = ProposalStatus::Failed {
+                        reason: format!("BASE submission failed: {}", e),
+                    };
+                    self.control.bridge_status.update_proposal(proposal);
+                }
+
+                // Push alert for failure.
+                self.control.bridge_status.push_alert(
+                    AlertSeverity::Error,
+                    "Proposal Failed".to_string(),
+                    format!("Failed to post deposit {}: {}", proposal_id, e),
+                    "posting-loop".to_string(),
+                );
+
+                // Update batch status back to Idle after failure.
+                self.control
+                    .bridge_status
+                    .update_batch_status(BatchStatus::Idle);
+                PostingSubmissionExecutionResult::SubmitFailed
+            }
+            Err(_) => {
+                error!(
+                    target: "bridge.posting",
+                    proposal_hash=%proposal_id,
+                    timeout_secs=SUBMIT_DEPOSIT_TIMEOUT_SECS,
+                    "posting to BASE timed out"
+                );
+
+                // Mark failed in cache.
+                let _ = self.ports.proposal_cache.mark_failed(deposit_id);
+
+                // Update TUI to Failed status.
+                if let Some(mut proposal) = self.control.bridge_status.find_proposal(proposal_id) {
+                    proposal.status = ProposalStatus::Failed {
+                        reason: format!(
+                            "BASE submission timed out after {}s",
+                            SUBMIT_DEPOSIT_TIMEOUT_SECS
+                        ),
+                    };
+                    self.control.bridge_status.update_proposal(proposal);
+                }
+
+                // Push alert for failure.
+                self.control.bridge_status.push_alert(
+                    AlertSeverity::Error,
+                    "Proposal Failed".to_string(),
+                    format!(
+                        "Failed to post deposit {}: timed out after {}s",
+                        proposal_id, SUBMIT_DEPOSIT_TIMEOUT_SECS
+                    ),
+                    "posting-loop".to_string(),
+                );
+
+                // Update batch status back to Idle after timeout.
+                self.control
+                    .bridge_status
+                    .update_batch_status(BatchStatus::Idle);
+                PostingSubmissionExecutionResult::SubmitTimedOut
+            }
+        }
+    }
+}
+
+impl<B: BaseContractPort> PostingTickContext<B> {
+    pub async fn tick_once(
+        &self,
+        state: &mut PostingTickState,
+        input: PostingTickInput,
+    ) -> PostingTickOutcome {
+        use tracing::{debug, error, info};
+
+        use crate::proposer::hoon_proposer;
+
+        let context = self;
+        state.ticks_executed = state.ticks_executed.saturating_add(1);
+        let mut outcome = PostingTickOutcome::default();
+
         // Get all ready proposals
-        let ready_proposals = match proposal_cache.ready_proposals() {
+        let ready_proposals = match context.ports.proposal_cache.ready_proposals() {
             Ok(proposals) => proposals,
             Err(e) => {
                 error!(target: "bridge.posting", error=%e, "failed to fetch ready proposals");
-                continue;
+                return outcome;
             }
         };
 
         if ready_proposals.is_empty() {
-            continue;
+            return outcome;
         }
+        outcome.ready_proposals = ready_proposals.len();
 
         // Query the chain for the last confirmed deposit nonce.
         // This is the source of truth - we only submit lastDepositNonce + 1.
-        let last_chain_nonce = match base_bridge.get_last_deposit_nonce().await {
+        let last_chain_nonce = match context.ports.base_bridge.get_last_deposit_nonce().await {
             Ok(n) => n,
             Err(e) => {
                 error!(target: "bridge.posting", error=%e, "failed to query lastDepositNonce from chain");
-                continue;
+                return outcome;
             }
         };
-        bridge_status.update_last_deposit_nonce(last_chain_nonce);
+        context
+            .control
+            .bridge_status
+            .update_last_deposit_nonce(last_chain_nonce);
         let next_nonce = last_chain_nonce + 1;
 
         debug!(
@@ -1740,23 +2620,26 @@ pub async fn run_posting_loop(
             "queried chain for deposit nonce"
         );
 
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-
         // NOTE: do not "skip" a stuck nonce. Under runtime-assigned epoch nonces, skipping
         // strands deposits permanently because subsequent nonces cannot be posted until the
         // contract advances. We only ever submit `lastDepositNonce + 1`.
+        let now_secs = system_time_secs(input.now);
 
-        // Get current nockchain height for proposer calculation
+        // Get current nockchain height for proposer calculation.
         // Use the block_height from the first proposal as a proxy
-        // (all proposals in a batch should be from the same height)
+        // (all proposals in a batch should be from the same height).
         let current_height = ready_proposals
             .first()
-            .map(|(_, state)| state.proposal.block_height)
+            .map(|(_, proposal_state)| proposal_state.proposal.block_height)
             .unwrap_or(0);
-
+        let node_pkhs: Vec<_> = context
+            .node
+            .node_config
+            .nodes
+            .iter()
+            .map(|node| node.nock_pkh.clone())
+            .collect();
+        let num_nodes = node_pkhs.len();
         let current_proposer = hoon_proposer(current_height, &node_pkhs);
 
         debug!(
@@ -1764,317 +2647,158 @@ pub async fn run_posting_loop(
             ready_count=ready_proposals.len(),
             current_height=current_height,
             current_proposer=current_proposer,
-            my_node_id=my_node_id,
+            my_node_id=context.node.my_node_id,
             "checking ready proposals"
         );
 
-        for (deposit_id, state) in ready_proposals {
-            let proposal_hash = state.proposal_hash;
+        let decisions = PostingPlanner::plan_tick(
+            PostingTickPlanInput {
+                next_nonce,
+                my_node_id: context.node.my_node_id,
+                current_proposer,
+                num_nodes,
+                now_secs,
+                failover_backoff_secs: context.config.failover_backoff_secs,
+            },
+            &ready_proposals
+                .iter()
+                .map(|(_, proposal_state)| PostingReadyProposal {
+                    nonce: proposal_state.proposal.nonce,
+                    ready_at: proposal_state.ready_at,
+                })
+                .collect::<Vec<_>>(),
+        );
+
+        for ((deposit_id, proposal_state), decision) in ready_proposals.into_iter().zip(decisions) {
+            let proposal_hash = proposal_state.proposal_hash;
             let proposal_id = hex::encode(proposal_hash);
 
-            // Only submit the next expected nonce (lastDepositNonce + 1).
-            // If this proposal's nonce doesn't match, skip it.
-            if state.proposal.nonce < next_nonce {
-                // Already on chain - mark as confirmed and skip
-                debug!(
-                    target: "bridge.posting",
-                    proposal_hash=%proposal_id,
-                    nonce=state.proposal.nonce,
-                    last_chain_nonce=last_chain_nonce,
-                    "proposal already confirmed on chain, marking confirmed"
-                );
-                let _ = proposal_cache.mark_confirmed(&deposit_id);
-                continue;
-            } else if state.proposal.nonce > next_nonce {
-                // Not ready yet - waiting for earlier nonce
-                debug!(
-                    target: "bridge.posting",
-                    proposal_hash=%proposal_id,
-                    nonce=state.proposal.nonce,
-                    next_nonce=next_nonce,
-                    "waiting for nonce {} to be ready before posting {}",
-                    next_nonce,
-                    state.proposal.nonce
-                );
-                continue;
-            }
-            // state.proposal.nonce == next_nonce - this is the one to submit
-
-            // Calculate if this node should post
-            let should_post = if my_node_id == current_proposer {
-                // I'm the proposer, post immediately
-                true
-            } else if let Some(ready_at) = state.ready_at {
-                // Calculate failover slot (position after proposer in rotation)
-                let failover_slot = if my_node_id > current_proposer {
-                    my_node_id - current_proposer
-                } else {
-                    num_nodes - current_proposer + my_node_id
-                };
-                let required_wait = FAILOVER_BACKOFF_SECS * failover_slot as u64;
-                let elapsed = now.saturating_sub(ready_at);
-                elapsed >= required_wait
-            } else {
-                // No ready_at timestamp, shouldn't happen but skip
-                false
+            let is_proposer = match decision {
+                PostingCandidateDecision::MarkConfirmedOnChain => {
+                    debug!(
+                            target: "bridge.posting",
+                            proposal_hash=%proposal_id,
+                        nonce=proposal_state.proposal.nonce,
+                        last_chain_nonce=last_chain_nonce,
+                        "proposal already confirmed on chain, marking confirmed"
+                    );
+                    let _ = context.ports.proposal_cache.mark_confirmed(&deposit_id);
+                    continue;
+                }
+                PostingCandidateDecision::WaitForEarlierNonce => {
+                    debug!(
+                        target: "bridge.posting",
+                        proposal_hash=%proposal_id,
+                        nonce=proposal_state.proposal.nonce,
+                        next_nonce=next_nonce,
+                        "waiting for nonce {} to be ready before posting {}",
+                        next_nonce,
+                        proposal_state.proposal.nonce
+                    );
+                    continue;
+                }
+                PostingCandidateDecision::NotMyTurn => {
+                    debug!(
+                        target: "bridge.posting",
+                        proposal_hash=%proposal_id,
+                        current_proposer=current_proposer,
+                        my_node_id=context.node.my_node_id,
+                        "not my turn to post, waiting for proposer or failover"
+                    );
+                    continue;
+                }
+                PostingCandidateDecision::Submit { is_proposer } => is_proposer,
             };
-
-            if !should_post {
-                debug!(
-                    target: "bridge.posting",
-                    proposal_hash=%proposal_id,
-                    current_proposer=current_proposer,
-                    my_node_id=my_node_id,
-                    "not my turn to post, waiting for proposer or failover"
-                );
-                continue;
-            }
 
             info!(
                 target: "bridge.posting",
                 proposal_hash=%proposal_id,
                 current_proposer=current_proposer,
-                my_node_id=my_node_id,
-                is_proposer=(my_node_id == current_proposer),
+                my_node_id=context.node.my_node_id,
+                is_proposer=is_proposer,
                 "posting proposal to BASE"
             );
 
-            // Get signatures for posting BEFORE marking as posting
-            // (get_signatures_for_posting requires status == Ready)
-            let signatures = match proposal_cache.get_signatures_for_posting(&deposit_id) {
-                Ok(Some(sigs)) => sigs,
-                Ok(None) => {
-                    warn!(
-                        target: "bridge.posting",
-                        proposal_hash=%proposal_id,
-                        "proposal no longer ready for posting"
-                    );
-                    continue;
-                }
-                Err(e) => {
-                    error!(
-                        target: "bridge.posting",
-                        error=%e,
-                        proposal_hash=%proposal_id,
-                        "failed to get signatures for posting"
-                    );
-                    let _ = proposal_cache.mark_failed(&deposit_id);
-                    continue;
-                }
-            };
-
-            // Mark as posting to prevent duplicate submissions
-            if let Err(e) = proposal_cache.mark_posting(&deposit_id) {
-                error!(
-                    target: "bridge.posting",
-                    error=%e,
-                    proposal_hash=%proposal_id,
-                    "failed to mark proposal as posting"
-                );
-                continue;
-            }
-
-            // Update batch status to Submitting
-            bridge_status.update_batch_status(BatchStatus::Submitting {
-                batch_id: state.proposal.nonce,
-            });
-
-            info!(
-                target: "bridge.posting",
-                proposal_hash=%proposal_id,
-                "posting proposal to BASE"
-            );
-
-            // Prepare deposit submission
-            let req = &state.proposal;
-            let mut recipient_bytes = [0u8; 20];
-            recipient_bytes.copy_from_slice(&req.recipient.0);
-
-            let submission = DepositSubmission {
-                tx_id: req.tx_id.clone(),
-                name_first: req.name.first.clone(),
-                name_last: req.name.last.clone(),
-                recipient: recipient_bytes,
-                amount: req.amount as u128,
-                block_height: req.block_height,
-                as_of: req.as_of.clone(),
-                nonce: req.nonce,
-                signatures: crate::types::SignatureSet {
-                    eth_signatures: signatures.into_iter().map(ByteBuf::from).collect(),
-                    nock_signatures: vec![], // Not used for Base deposits
-                },
-            };
-
-            // Update TUI to Submitted status with timestamp
-            let submit_time = std::time::SystemTime::now();
-            if let Some(mut proposal) = bridge_status.find_proposal(&proposal_id) {
-                proposal.status = ProposalStatus::Submitted;
-                proposal.submitted_at = Some(submit_time);
-                if let Ok(duration) = submit_time.duration_since(proposal.created_at) {
-                    proposal.time_to_submit_ms = Some(duration.as_millis() as u64);
-                }
-                bridge_status.update_proposal(proposal);
-            }
-
-            // Submit to BASE with a timeout so a hung RPC can't stall the queue
-            match tokio::time::timeout(
-                Duration::from_secs(SUBMIT_DEPOSIT_TIMEOUT_SECS),
-                base_bridge.submit_deposit(submission),
-            )
-            .await
-            {
-                Ok(Ok(result)) => {
-                    info!(
-                        target: "bridge.posting",
-                        proposal_hash=%proposal_id,
-                        tx_hash=%result.tx_hash,
-                        block_number=%result.block_number,
-                        "successfully posted deposit to BASE"
-                    );
-
-                    status_state.update_last_submitted_deposit(LastSubmittedDeposit {
-                        deposit: state.proposal.clone(),
-                        base_tx_hash: result.tx_hash.clone(),
-                        base_block_number: result.block_number,
-                    });
-
-                    // Mark confirmed in cache
-                    let _ = proposal_cache.mark_confirmed(&deposit_id);
-
-                    // Broadcast confirmation to all peers so they stop waiting
-                    let deposit_id_bytes = deposit_id.to_bytes();
-                    let timestamp = SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs();
-
-                    let confirmation_msg = ConfirmationBroadcast {
-                        deposit_id: deposit_id_bytes,
-                        proposal_hash: proposal_hash.to_vec(),
-                        tx_hash: result.tx_hash.as_bytes().to_vec(),
-                        block_number: result.block_number,
-                        timestamp,
-                    };
-
-                    for (peer_node_id, peer_address) in &peers {
-                        let msg = confirmation_msg.clone();
-                        let addr = peer_address.clone();
-                        let peer_id = *peer_node_id;
-                        let prop_id = proposal_id.clone();
-
-                        tokio::spawn(async move {
-                            match BridgeIngressClient::connect(addr.clone()).await {
-                                Ok(mut client) => match client.broadcast_confirmation(msg).await {
-                                    Ok(_) => {
-                                        info!(
-                                            target: "bridge.posting",
-                                            peer_node_id=peer_id,
-                                            proposal_hash=%prop_id,
-                                            "broadcast confirmation to peer"
-                                        );
-                                    }
-                                    Err(e) => {
-                                        warn!(
-                                            target: "bridge.posting",
-                                            peer_node_id=peer_id,
-                                            error=%e,
-                                            "failed to broadcast confirmation to peer"
-                                        );
-                                    }
-                                },
-                                Err(e) => {
-                                    warn!(
-                                        target: "bridge.posting",
-                                        peer_node_id=peer_id,
-                                        peer_address=%addr,
-                                        error=%e,
-                                        "failed to connect to peer for confirmation broadcast"
-                                    );
-                                }
-                            }
-                        });
-                    }
-
-                    // Update TUI to Executed status
-                    if let Some(mut proposal) = bridge_status.find_proposal(&proposal_id) {
-                        proposal.status = ProposalStatus::Executed;
-                        proposal.tx_hash = Some(result.tx_hash);
-                        proposal.submitted_at_block = Some(result.block_number);
-                        proposal.executed_at_block = Some(result.block_number);
-                        bridge_status.update_proposal(proposal);
-                    }
-
-                    // Update batch status back to Idle after successful submission
-                    bridge_status.update_batch_status(BatchStatus::Idle);
-                }
-                Ok(Err(e)) => {
-                    error!(
-                        target: "bridge.posting",
-                        error=%e,
-                        proposal_hash=%proposal_id,
-                        "failed to post deposit to BASE"
-                    );
-
-                    // Mark failed in cache
-                    let _ = proposal_cache.mark_failed(&deposit_id);
-
-                    // Update TUI to Failed status
-                    if let Some(mut proposal) = bridge_status.find_proposal(&proposal_id) {
-                        proposal.status = ProposalStatus::Failed {
-                            reason: format!("BASE submission failed: {}", e),
-                        };
-                        bridge_status.update_proposal(proposal);
-                    }
-
-                    // Push alert for failure
-                    bridge_status.push_alert(
-                        AlertSeverity::Error,
-                        "Proposal Failed".to_string(),
-                        format!("Failed to post deposit {}: {}", proposal_id, e),
-                        "posting-loop".to_string(),
-                    );
-
-                    // Update batch status back to Idle after failure
-                    bridge_status.update_batch_status(BatchStatus::Idle);
-                }
-                Err(_) => {
-                    error!(
-                        target: "bridge.posting",
-                        proposal_hash=%proposal_id,
-                        timeout_secs=SUBMIT_DEPOSIT_TIMEOUT_SECS,
-                        "posting to BASE timed out"
-                    );
-
-                    // Mark failed in cache
-                    let _ = proposal_cache.mark_failed(&deposit_id);
-
-                    // Update TUI to Failed status
-                    if let Some(mut proposal) = bridge_status.find_proposal(&proposal_id) {
-                        proposal.status = ProposalStatus::Failed {
-                            reason: format!(
-                                "BASE submission timed out after {}s",
-                                SUBMIT_DEPOSIT_TIMEOUT_SECS
-                            ),
-                        };
-                        bridge_status.update_proposal(proposal);
-                    }
-
-                    // Push alert for failure
-                    bridge_status.push_alert(
-                        AlertSeverity::Error,
-                        "Proposal Failed".to_string(),
-                        format!(
-                            "Failed to post deposit {}: timed out after {}s",
-                            proposal_id, SUBMIT_DEPOSIT_TIMEOUT_SECS
-                        ),
-                        "posting-loop".to_string(),
-                    );
-
-                    // Update batch status back to Idle after timeout
-                    bridge_status.update_batch_status(BatchStatus::Idle);
-                }
+            if matches!(
+                context
+                    .execute_submission(
+                        &deposit_id, &proposal_state, proposal_hash, &proposal_id, input.now,
+                        now_secs,
+                    )
+                    .await,
+                PostingSubmissionExecutionResult::Submitted
+            ) {
+                outcome.submitted += 1;
             }
         }
+
+        outcome
+    }
+}
+
+pub async fn posting_tick_once<B: BaseContractPort>(
+    context: &PostingTickContext<B>,
+    state: &mut PostingTickState,
+    input: PostingTickInput,
+) -> PostingTickOutcome {
+    context.tick_once(state, input).await
+}
+
+pub async fn run_posting_loop<B: BaseContractPort>(
+    proposal_cache: Arc<ProposalCache>,
+    base_bridge: Arc<B>,
+    node_config: NodeConfig,
+    bridge_status: BridgeStatus,
+    stop: crate::stop::StopHandle,
+    status_state: crate::status::BridgeStatusState,
+) {
+    run_posting_loop_with_policy(
+        proposal_cache,
+        base_bridge,
+        node_config,
+        bridge_status,
+        stop,
+        status_state,
+        PostingLoopPolicy::default(),
+    )
+    .await
+}
+
+pub async fn run_posting_loop_with_policy<B: BaseContractPort>(
+    proposal_cache: Arc<ProposalCache>,
+    base_bridge: Arc<B>,
+    node_config: NodeConfig,
+    bridge_status: BridgeStatus,
+    stop: crate::stop::StopHandle,
+    status_state: crate::status::BridgeStatusState,
+    policy: PostingLoopPolicy,
+) {
+    use tracing::info;
+
+    info!("Starting proposal posting loop");
+    let context = PostingTickContext::new(
+        PostingTickPorts::new(proposal_cache, base_bridge),
+        PostingTickNodeState::new(node_config),
+        PostingTickControl::new(bridge_status, status_state),
+        PostingTickConfig::new(policy.failover_backoff_secs),
+    );
+    let mut state = PostingTickState::default();
+
+    loop {
+        tokio::time::sleep(policy.tick_interval).await;
+        update_proposal_cache_metrics(&context.ports.proposal_cache);
+        if stop.is_stopped() {
+            continue;
+        }
+
+        let _ = posting_tick_once(
+            &context,
+            &mut state,
+            PostingTickInput {
+                now: SystemTime::now(),
+            },
+        )
+        .await;
     }
 }
 
@@ -2288,7 +3012,11 @@ mod tests {
             events: Arc::new(Mutex::new(Vec::new())),
         });
         let (mut runtime, handle) = BridgeRuntime::new(builder);
-        let mut peek_rx = runtime.peek_rx.take().expect("peek receiver missing");
+        let mut peek_rx = runtime
+            .channels
+            .peek_rx
+            .take()
+            .expect("peek receiver missing");
 
         let responder = tokio::spawn(async move {
             if let Some(request) = peek_rx.recv().await {
@@ -2313,7 +3041,11 @@ mod tests {
             events: Arc::new(Mutex::new(Vec::new())),
         });
         let (mut runtime, handle) = BridgeRuntime::new(builder);
-        let mut peek_rx = runtime.peek_rx.take().expect("peek receiver missing");
+        let mut peek_rx = runtime
+            .channels
+            .peek_rx
+            .take()
+            .expect("peek receiver missing");
 
         let responder = tokio::spawn(async move {
             if let Some(request) = peek_rx.recv().await {
@@ -2350,7 +3082,11 @@ mod tests {
             events: Arc::new(Mutex::new(Vec::new())),
         });
         let (mut runtime, handle) = BridgeRuntime::new(builder);
-        let mut peek_rx = runtime.peek_rx.take().expect("peek receiver missing");
+        let mut peek_rx = runtime
+            .channels
+            .peek_rx
+            .take()
+            .expect("peek receiver missing");
 
         let responder = tokio::spawn(async move {
             if let Some(request) = peek_rx.recv().await {
@@ -2374,7 +3110,11 @@ mod tests {
             events: Arc::new(Mutex::new(Vec::new())),
         });
         let (mut runtime, handle) = BridgeRuntime::new(builder);
-        let mut peek_rx = runtime.peek_rx.take().expect("peek receiver missing");
+        let mut peek_rx = runtime
+            .channels
+            .peek_rx
+            .take()
+            .expect("peek receiver missing");
 
         let responder = tokio::spawn(async move {
             if let Some(request) = peek_rx.recv().await {
@@ -2396,7 +3136,11 @@ mod tests {
             events: Arc::new(Mutex::new(Vec::new())),
         });
         let (mut runtime, handle) = BridgeRuntime::new(builder);
-        let mut peek_rx = runtime.peek_rx.take().expect("peek receiver missing");
+        let mut peek_rx = runtime
+            .channels
+            .peek_rx
+            .take()
+            .expect("peek receiver missing");
 
         let responder = tokio::spawn(async move {
             if let Some(request) = peek_rx.recv().await {
@@ -2423,7 +3167,11 @@ mod tests {
             events: Arc::new(Mutex::new(Vec::new())),
         });
         let (mut runtime, handle) = BridgeRuntime::new(builder);
-        let mut peek_rx = runtime.peek_rx.take().expect("peek receiver missing");
+        let mut peek_rx = runtime
+            .channels
+            .peek_rx
+            .take()
+            .expect("peek receiver missing");
 
         let responder = tokio::spawn(async move {
             if let Some(request) = peek_rx.recv().await {

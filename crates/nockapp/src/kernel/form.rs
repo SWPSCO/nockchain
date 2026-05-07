@@ -2,6 +2,7 @@
 #![allow(clippy::items_after_test_module)]
 use std::any::Any;
 use std::future::Future;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -13,7 +14,7 @@ use nockvm::interpreter::{self, interpret, Error, Mote, NockCancelToken};
 use nockvm::jets::cold::{Cold, Nounable};
 use nockvm::jets::hot::{HotEntry, URBIT_HOT_STATE};
 use nockvm::jets::nock::util::mook;
-use nockvm::mem::NockStack;
+use nockvm::mem::{AllocationError, NewStackError, NockStack};
 use nockvm::mug::met3_usize;
 use nockvm::noun::{Atom, Cell, DirectAtom, IndirectAtom, Noun, Slots, D, T};
 use nockvm::trace::{path_to_cord, write_serf_trace_safe};
@@ -41,6 +42,124 @@ const POKE_AXIS: u64 = 23;
 
 const SERF_FINISHED_INTERVAL: Duration = Duration::from_millis(100);
 const SERF_THREAD_STACK_SIZE: usize = 256 * 1024 * 1024; // 8MB
+
+#[derive(Clone, Debug)]
+struct SerfInitDiagnostics {
+    phase: &'static str,
+    stack_size_words: usize,
+    checkpoint_event_num: Option<u64>,
+    checkpoint_ker_hash: Option<Hash>,
+    current_ker_hash: Option<Hash>,
+}
+
+impl SerfInitDiagnostics {
+    fn new(stack_size_words: usize) -> Self {
+        Self {
+            phase: "starting serf initialization",
+            stack_size_words,
+            checkpoint_event_num: None,
+            checkpoint_ker_hash: None,
+            current_ker_hash: None,
+        }
+    }
+
+    fn with_phase(&self, phase: &'static str) -> Self {
+        let mut diagnostics = self.clone();
+        diagnostics.phase = phase;
+        diagnostics
+    }
+
+    fn with_current_ker_hash(&self, current_ker_hash: Hash) -> Self {
+        let mut diagnostics = self.clone();
+        diagnostics.current_ker_hash = Some(current_ker_hash);
+        diagnostics
+    }
+
+    fn with_checkpoint(&self, saveable: &SaveableCheckpoint) -> Self {
+        let mut diagnostics = self.clone();
+        diagnostics.checkpoint_event_num = Some(saveable.event_num);
+        diagnostics.checkpoint_ker_hash = Some(saveable.ker_hash);
+        diagnostics
+    }
+}
+
+fn run_serf_init_phase<T, F>(
+    diagnostics: &SerfInitDiagnostics,
+    phase: &'static str,
+    f: F,
+) -> Result<T>
+where
+    F: FnOnce() -> T,
+{
+    catch_unwind(AssertUnwindSafe(f))
+        .map_err(|payload| serf_init_panic_to_error(diagnostics.with_phase(phase), payload))
+}
+
+fn serf_init_panic_to_error(
+    diagnostics: SerfInitDiagnostics,
+    payload: Box<dyn Any + Send>,
+) -> CrownError {
+    if let Some(err) = payload.downcast_ref::<AllocationError>() {
+        return CrownError::SerfInitAllocationError(serf_init_allocation_message(
+            &diagnostics,
+            &err.to_string(),
+        ));
+    }
+    if let Some(err) = payload.downcast_ref::<NewStackError>() {
+        return CrownError::SerfInitAllocationError(serf_init_allocation_message(
+            &diagnostics,
+            &err.to_string(),
+        ));
+    }
+
+    CrownError::SerfInitPanic(format!(
+        "Serf initialization panicked during {}: {}. Preserve the checkpoint or state jam, rerun with RUST_BACKTRACE=1, and report this as a bug.",
+        diagnostics.phase,
+        panic_payload_message(payload.as_ref())
+    ))
+}
+
+fn serf_init_allocation_message(diagnostics: &SerfInitDiagnostics, err: &str) -> String {
+    let stack_bytes = diagnostics
+        .stack_size_words
+        .saturating_mul(std::mem::size_of::<u64>());
+    let stack_mib = stack_bytes / (1024 * 1024);
+    let checkpoint = match (
+        diagnostics.checkpoint_event_num, diagnostics.checkpoint_ker_hash,
+    ) {
+        (Some(event_num), Some(ker_hash)) => {
+            format!(
+                "checkpoint event_num={event_num} checkpoint_ker_hash={}",
+                ker_hash.to_hex()
+            )
+        }
+        _ => "no checkpoint metadata was available".to_string(),
+    };
+    let current = diagnostics
+        .current_ker_hash
+        .map(|ker_hash| ker_hash.to_hex().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    format!(
+        "Nock stack exhausted during Serf initialization phase `{}`. Configured stack size: {} words (~{} MiB). {} current_ker_hash={}. Try restarting this peer with a larger `--stack-size` (`large` or `huge`). If it still fails with `huge`, restore a checkpoint or state jam from a synced peer and preserve the failing artifact for debugging. Allocation error: {}",
+        diagnostics.phase,
+        diagnostics.stack_size_words,
+        stack_mib,
+        checkpoint,
+        current,
+        err
+    )
+}
+
+fn panic_payload_message(payload: &(dyn Any + Send)) -> String {
+    if let Some(message) = payload.downcast_ref::<&'static str>() {
+        (*message).to_string()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "unknown panic payload".to_string()
+    }
+}
 
 pub struct LoadState {
     pub ker_hash: Hash,
@@ -110,29 +229,43 @@ impl<C: SerfCheckpoint + Send + 'static> SerfThread<C> {
         trace: TraceOpts,
     ) -> Result<Self> {
         let (action_sender, action_receiver) = mpsc::channel(1);
-        let (event_number_sender, event_number_receiver) = oneshot::channel();
-        let (cancel_token_sender, cancel_token_receiver) = oneshot::channel();
+        let (init_sender, init_receiver) =
+            oneshot::channel::<Result<(Arc<AtomicU64>, NockCancelToken)>>();
         let inhibit = Arc::new(AtomicBool::new(false));
         let inhibit_clone = inhibit.clone();
         let handle = std::thread::Builder::new()
             .name("serf".to_string())
             .stack_size(SERF_THREAD_STACK_SIZE)
             .spawn(move || {
-                let stack = NockStack::new(nock_stack_size, 0);
-                let serf = Serf::new(
+                let diagnostics = SerfInitDiagnostics::new(nock_stack_size);
+                let stack = match run_serf_init_phase(&diagnostics, "allocate Nock stack", || {
+                    NockStack::new(nock_stack_size, 0)
+                }) {
+                    Ok(stack) => stack,
+                    Err(err) => {
+                        let _ = init_sender.send(Err(err));
+                        return;
+                    }
+                };
+                let serf = match Serf::new(
                     stack, checkpoint, &kernel_bytes, &constant_hot_state, test_jets, trace,
-                );
-                event_number_sender
-                    .send(serf.event_num.clone())
-                    .expect("Could not send event number out of serf thread");
-                cancel_token_sender
-                    .send(serf.context.cancel_token())
-                    .expect("Could not send cancel token out of serf thread");
+                    nock_stack_size,
+                ) {
+                    Ok(serf) => serf,
+                    Err(err) => {
+                        let _ = init_sender.send(Err(err));
+                        return;
+                    }
+                };
+                let event_number = serf.event_num.clone();
+                let cancel_token = serf.context.cancel_token();
+                if init_sender.send(Ok((event_number, cancel_token))).is_err() {
+                    return;
+                }
                 serf_loop(serf, action_receiver, inhibit_clone);
             })?;
 
-        let event_number = event_number_receiver.await?;
-        let cancel_token = cancel_token_receiver.await?;
+        let (event_number, cancel_token) = init_receiver.await??;
         Ok(SerfThread {
             inhibit,
             handle: Some(handle),
@@ -760,38 +893,62 @@ impl Serf {
         constant_hot_state: &[HotEntry],
         test_jets: Vec<NounSlab>,
         trace: TraceOpts,
-    ) -> Self {
+        nock_stack_size: usize,
+    ) -> Result<Self> {
         let hot_state = [URBIT_HOT_STATE, constant_hot_state].concat();
 
         let mut hasher = Hasher::new();
         hasher.update(kernel_bytes);
         let ker_hash = hasher.finalize();
+        let mut diagnostics =
+            SerfInitDiagnostics::new(nock_stack_size).with_current_ker_hash(ker_hash);
 
         let (maybe_state, cold, event_num_raw) = if let Some(c) = checkpoint {
             let saveable = c.load();
+            diagnostics = diagnostics.with_checkpoint(&saveable);
 
-            let ker_state = saveable.state.copy_to_stack(&mut stack);
-            let cold_noun = saveable.cold.copy_to_stack(&mut stack);
-            let cold_vecs = Cold::from_noun(&mut stack, &cold_noun)
-                .expect("Could not load cold state from snapshot");
-            let cold = Cold::from_vecs(&mut stack, cold_vecs.0, cold_vecs.1, cold_vecs.2);
+            let ker_state = run_serf_init_phase(
+                &diagnostics,
+                "copy checkpoint state into Nock stack",
+                || saveable.state.copy_to_stack(&mut stack),
+            )?;
+            let cold_noun = run_serf_init_phase(
+                &diagnostics,
+                "copy checkpoint cold state into Nock stack",
+                || saveable.cold.copy_to_stack(&mut stack),
+            )?;
+            let cold_vecs =
+                run_serf_init_phase(&diagnostics, "decode checkpoint cold state", || {
+                    Cold::from_noun(&mut stack, &cold_noun)
+                        .expect("Could not load cold state from snapshot")
+                })?;
+            let cold = run_serf_init_phase(&diagnostics, "rebuild checkpoint cold state", || {
+                Cold::from_vecs(&mut stack, cold_vecs.0, cold_vecs.1, cold_vecs.2)
+            })?;
             if saveable.ker_hash != ker_hash {
-                debug!(
-                    "Loading snapshot from kernel {} into kernel {}",
-                    saveable.ker_hash, ker_hash
+                warn!(
+                    checkpoint = %saveable.ker_hash.to_hex(),
+                    current = %ker_hash.to_hex(),
+                    "checkpoint kernel hash mismatch; loading checkpoint state into current kernel"
                 );
             }
             (Some(ker_state), cold, saveable.event_num)
         } else {
-            (None, Cold::new(&mut stack), 0)
+            let cold = run_serf_init_phase(&diagnostics, "initialize empty cold state", || {
+                Cold::new(&mut stack)
+            })?;
+            (None, cold, 0)
         };
 
         let event_num = Arc::new(AtomicU64::new(event_num_raw));
 
-        let mut context = create_context(stack, &hot_state, cold, trace.into(), test_jets);
+        let mut context =
+            run_serf_init_phase(&diagnostics, "create Nock interpreter context", || {
+                create_context(stack, &hot_state, cold, trace.into(), test_jets)
+            })?;
         let cancel_token = context.cancel_token();
 
-        let mut arvo = {
+        let mut arvo = run_serf_init_phase(&diagnostics, "boot kernel", || {
             let kernel_trap = Noun::cue_bytes_slice(&mut context.stack, kernel_bytes)
                 .expect("invalid kernel jam");
             let fol = T(&mut context.stack, &[D(9), D(2), D(0), D(1)]);
@@ -818,7 +975,7 @@ impl Serf {
                     )
                 })
             }
-        };
+        })?;
 
         let mut serf = Self {
             ker_hash,
@@ -830,14 +987,17 @@ impl Serf {
         };
 
         if let Some(kernel_state) = maybe_state {
-            arvo = serf.load(kernel_state).expect("serf: load failed");
+            arvo =
+                run_serf_init_phase(&diagnostics, "load checkpoint state through kernel", || {
+                    serf.load(kernel_state)
+                })??;
         }
 
-        unsafe {
+        run_serf_init_phase(&diagnostics, "preserve loaded kernel state", || unsafe {
             serf.event_update(event_num_raw, arvo);
             serf.preserve_event_update_leftovers();
-        }
-        serf
+        })?;
+        Ok(serf)
     }
 
     /// Performs a peek operation on the Arvo state.
@@ -1258,6 +1418,9 @@ mod tests {
     use std::fs;
     use std::path::Path;
 
+    use blake3::hash;
+    use bytes::Bytes;
+
     use super::*;
 
     async fn setup_kernel(jam: &str) -> Kernel<SaveableCheckpoint> {
@@ -1288,6 +1451,59 @@ mod tests {
     //     let (kernel, _temp_dir) = setup_kernel("kernel.jam");
     //     // Add your custom assertions here to test the kernel's behavior
     // }
+
+    fn checkpoint_with_state_too_large_for_stack(state_bytes_len: usize) -> SaveableCheckpoint {
+        let mut state = NounSlab::new();
+        let state_bytes = Bytes::from(vec![0x41; state_bytes_len]);
+        let state_root = Atom::from_bytes(&mut state, &state_bytes).as_noun();
+        state.set_root(state_root);
+
+        let mut cold_stack = NockStack::new(1024, 0);
+        let cold_noun = Cold::new(&mut cold_stack).into_noun(&mut cold_stack);
+        let mut cold = NounSlab::new();
+        let cold_root = cold.copy_into(cold_noun);
+        cold.set_root(cold_root);
+
+        SaveableCheckpoint {
+            ker_hash: hash(b"stack-oom-repro"),
+            event_num: 1,
+            state,
+            cold,
+        }
+    }
+
+    #[tokio::test]
+    async fn serf_thread_init_stack_oom_is_not_collapsed_into_oneshot_error() {
+        let stack_words = 9 * 1024;
+        let checkpoint = checkpoint_with_state_too_large_for_stack((stack_words - 2) * 8);
+        let result = SerfThread::<SaveableCheckpoint>::new(
+            Vec::new(),
+            Some(checkpoint),
+            Vec::new(),
+            stack_words,
+            Vec::new(),
+            TraceOpts::default(),
+        )
+        .await;
+
+        let Err(err) = result else {
+            panic!("expected serf initialization to fail from stack exhaustion");
+        };
+        let err = err.to_string();
+
+        assert!(
+            !err.contains("oneshot channel error"),
+            "serf stack exhaustion must be reported directly, not as {err:?}"
+        );
+        assert!(
+            err.contains("Out of memory") || err.contains("allocation"),
+            "expected a stack allocation error, got {err:?}"
+        );
+        assert!(
+            err.contains("--stack-size") && err.contains("checkpoint event_num="),
+            "expected operator guidance and checkpoint context, got {err:?}"
+        );
+    }
 }
 
 pub trait SerfCheckpoint: Send {

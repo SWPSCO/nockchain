@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
-use bincode::config::Configuration;
 use bincode::{config, encode_to_vec, Decode, Encode};
 use blake3::{Hash, Hasher};
 use bytes::Bytes;
@@ -13,6 +12,7 @@ use tokio::fs::create_dir_all;
 use tokio::sync::oneshot;
 use tracing::{debug, error, trace, warn};
 
+use super::artifact::{ArtifactError, CheckedReader};
 use crate::metrics::NockAppMetrics;
 use crate::noun::slab::{Jammer, NockJammer, NounSlab};
 use crate::JammedNoun;
@@ -325,11 +325,17 @@ pub enum CheckpointError {
     IOError(#[from] std::io::Error),
     #[error("Bincode decoding error: {0}")]
     DecodeError(#[from] bincode::error::DecodeError),
+    #[error("Artifact decoding error: {0}")]
+    ArtifactError(#[from] ArtifactError),
     #[error("Bincode encoding error: {0}")]
     EncodeError(#[from] bincode::error::EncodeError),
-    #[error("Invalid checksum at {0}")]
+    #[error(
+        "Invalid checksum at {0}. The checkpoint is corrupt or incomplete; restore it from a known-good peer or remove it so Nockchain can try another checkpoint."
+    )]
     InvalidChecksum(PathBuf),
-    #[error("Invalid version at {0}")]
+    #[error(
+        "Invalid checkpoint version at {0}. Use a compatible Nockchain binary for this checkpoint, or restore/remove the checkpoint so the peer can boot from a valid one."
+    )]
     InvalidVersion(PathBuf),
     #[error("Sword noun error: {0}")]
     SwordNounError(#[from] nockvm::noun::Error),
@@ -420,10 +426,32 @@ impl JammedCheckpointV1 {
     async fn load_from_file(path: &Path) -> Result<Self, CheckpointError> {
         debug!("Loading jammed checkpoint from file: {}", path.display());
         let bytes = tokio::fs::read(path).await?;
-        let config = bincode::config::standard();
-        let (checkpoint, _) = bincode::decode_from_slice::<Self, Configuration>(&bytes, config)?;
+        let checkpoint = Self::decode_from_bytes(&bytes, path)?;
         checkpoint.validate(path)?;
         Ok(checkpoint)
+    }
+
+    fn decode_from_bytes(bytes: &[u8], path: &Path) -> Result<Self, CheckpointError> {
+        let mut reader = CheckedReader::new(bytes, "checkpoint v1");
+        let magic_bytes = reader.read_u64("magic bytes")?;
+        let version = reader.read_u32("version")?;
+        if magic_bytes != JAM_MAGIC_BYTES || version != SNAPSHOT_VERSION_1 {
+            return Err(CheckpointError::InvalidVersion(path.to_path_buf()));
+        }
+        let ker_hash = reader.read_hash("kernel hash")?;
+        let checksum = reader.read_hash("checksum")?;
+        let event_num = reader.read_u64("event number")?;
+        let jam = JammedNoun::new(Bytes::copy_from_slice(reader.read_bytes("jam")?));
+        reader.finish()?;
+
+        Ok(Self {
+            magic_bytes,
+            version,
+            ker_hash,
+            checksum,
+            event_num,
+            jam,
+        })
     }
 
     #[allow(dead_code)]
@@ -511,11 +539,7 @@ impl JammedCheckpointV2 {
     async fn load_from_file(path: &Path) -> Result<Self, CheckpointError> {
         debug!("Loading jammed checkpoint from file: {}", path.display());
         let bytes = tokio::fs::read(path).await?;
-        let config = bincode::config::standard();
-        let (envelope, _) = bincode::decode_from_slice::<JammedCheckpointV2Envelope, Configuration>(
-            &bytes, config,
-        )?;
-        let checkpoint = Self::from_envelope(envelope, Some(path))?;
+        let checkpoint = Self::decode_from_bytes_with_path(&bytes, Some(path))?;
         checkpoint.validate(path)?;
         Ok(checkpoint)
     }
@@ -528,29 +552,45 @@ impl JammedCheckpointV2 {
         Ok(())
     }
 
-    fn from_envelope(
-        envelope: JammedCheckpointV2Envelope,
+    fn from_payload(payload: &[u8]) -> Result<Self, CheckpointError> {
+        let mut reader = CheckedReader::new(payload, "checkpoint v2 payload");
+        let ker_hash = reader.read_hash("kernel hash")?;
+        let checksum = reader.read_hash("checksum")?;
+        let event_num = reader.read_u64("event number")?;
+        let cold_jam = JammedNoun::new(Bytes::copy_from_slice(reader.read_bytes("cold jam")?));
+        let state_jam = JammedNoun::new(Bytes::copy_from_slice(reader.read_bytes("state jam")?));
+        reader.finish()?;
+
+        Ok(Self {
+            ker_hash,
+            checksum,
+            event_num,
+            cold_jam,
+            state_jam,
+        })
+    }
+
+    fn decode_from_bytes_with_path(
+        bytes: &[u8],
         path: Option<&Path>,
     ) -> Result<Self, CheckpointError> {
-        if envelope.magic_bytes != JAM_MAGIC_BYTES {
+        let mut reader = CheckedReader::new(bytes, "checkpoint v2 envelope");
+        let magic_bytes = reader.read_u64("magic bytes")?;
+        let version = reader.read_u32("version")?;
+        if magic_bytes != JAM_MAGIC_BYTES {
             return Err(CheckpointError::InvalidVersion(path_or_memory(path)));
         }
-        if envelope.version != LATEST_SNAPSHOT_VERSION {
+        if version != LATEST_SNAPSHOT_VERSION {
             return Err(CheckpointError::InvalidVersion(path_or_memory(path)));
         }
-
-        let config = bincode::config::standard();
-        let (checkpoint, _) =
-            bincode::decode_from_slice::<Self, Configuration>(&envelope.payload, config)?;
-
+        let payload = reader.read_bytes("payload")?;
+        reader.finish()?;
+        let checkpoint = Self::from_payload(payload)?;
         Ok(checkpoint)
     }
 
     pub fn decode_from_bytes(bytes: &[u8]) -> Result<Self, CheckpointError> {
-        let config = bincode::config::standard();
-        let (envelope, _) =
-            bincode::decode_from_slice::<JammedCheckpointV2Envelope, Configuration>(bytes, config)?;
-        let checkpoint = Self::from_envelope(envelope, None)?;
+        let checkpoint = Self::decode_from_bytes_with_path(bytes, None)?;
         let fake_path = path_or_memory(None);
         checkpoint.validate(&fake_path)?;
         Ok(checkpoint)
@@ -711,10 +751,34 @@ impl JammedCheckpointV0 {
     async fn load_from_file(path: &Path) -> Result<Self, CheckpointError> {
         debug!("Loading jammed checkpoint from file: {}", path.display());
         let bytes = tokio::fs::read(path).await?;
-        let config = bincode::config::standard();
-        let (checkpoint, _) = bincode::decode_from_slice::<Self, Configuration>(&bytes, config)?;
+        let checkpoint = Self::decode_from_bytes(&bytes, path)?;
         checkpoint.validate(path)?;
         Ok(checkpoint)
+    }
+
+    fn decode_from_bytes(bytes: &[u8], path: &Path) -> Result<Self, CheckpointError> {
+        let mut reader = CheckedReader::new(bytes, "checkpoint v0");
+        let magic_bytes = reader.read_u64("magic bytes")?;
+        let version = reader.read_u32("version")?;
+        if magic_bytes != JAM_MAGIC_BYTES || version != SNAPSHOT_VERSION_0 {
+            return Err(CheckpointError::InvalidVersion(path.to_path_buf()));
+        }
+        let buff_index = reader.read_bool("buffer index")?;
+        let ker_hash = reader.read_hash("kernel hash")?;
+        let checksum = reader.read_hash("checksum")?;
+        let event_num = reader.read_u64("event number")?;
+        let jam = JammedNoun::new(Bytes::copy_from_slice(reader.read_bytes("jam")?));
+        reader.finish()?;
+
+        Ok(Self {
+            magic_bytes,
+            version,
+            buff_index,
+            ker_hash,
+            checksum,
+            event_num,
+            jam,
+        })
     }
 
     #[tracing::instrument(skip(self))]
@@ -729,7 +793,10 @@ impl JammedCheckpointV0 {
 
 #[cfg(test)]
 mod version_tests {
+    use std::panic::AssertUnwindSafe;
+
     use blake3::hash;
+    use futures::FutureExt;
     use nockvm::noun::{Noun, D, T};
     use tempfile::TempDir;
 
@@ -749,6 +816,47 @@ mod version_tests {
             .expect("expected atom")
             .as_u64()
             .expect("expected atom to fit in u64")
+    }
+
+    fn v1_checkpoint_with_absurd_jam_length(event_num: u64) -> Vec<u8> {
+        let checkpoint = JammedCheckpointV1::new(
+            hash(b"corrupt-v1"),
+            event_num,
+            JammedNoun::new(Bytes::new()),
+        );
+        let mut bytes = checkpoint.encode().expect("encode v1 checkpoint");
+
+        // The final byte is the bincode varint length for the empty Bytes field.
+        assert_eq!(bytes.pop(), Some(0));
+
+        // bincode standard varint marker 253 means the next eight bytes are a u64.
+        // On 64-bit targets this decodes to usize::MAX and currently panics in Vec allocation
+        // before checkpoint fallback can try the older checkpoint.
+        bytes.push(253);
+        bytes.extend_from_slice(&u64::MAX.to_le_bytes());
+        bytes
+    }
+
+    fn v2_checkpoint_with_absurd_payload_length() -> Vec<u8> {
+        let checkpoint = JammedCheckpointV2::new(
+            hash(b"corrupt-v2"),
+            9,
+            JammedNoun::new(Bytes::from_static(b"cold")),
+            JammedNoun::new(Bytes::from_static(b"state")),
+        );
+        let mut bytes = checkpoint.encode().expect("encode v2 checkpoint");
+
+        // The V2 envelope is magic (u64 varint: 9 bytes for CHKJAM), version (one byte for 2),
+        // then a bincode Vec<u8> length for the payload.
+        let payload_len_offset = 10;
+        assert_eq!(
+            bytes[payload_len_offset] as usize,
+            bytes.len() - payload_len_offset - 1
+        );
+        bytes.truncate(payload_len_offset);
+        bytes.push(253);
+        bytes.extend_from_slice(&u64::MAX.to_le_bytes());
+        bytes
     }
 
     #[tokio::test]
@@ -801,6 +909,85 @@ mod version_tests {
         let loaded_cold = atom_value(unsafe { *saveable.cold.root() });
         assert_eq!(loaded_state, state_value);
         assert_eq!(loaded_cold, cold_value);
+    }
+
+    #[test]
+    fn decodes_v2_checkpoint_roundtrip() {
+        let checkpoint = JammedCheckpointV2::new(
+            hash(b"valid-v2"),
+            11,
+            JammedNoun::new(Bytes::from_static(b"cold")),
+            JammedNoun::new(Bytes::from_static(b"state")),
+        );
+        let encoded = checkpoint.encode().expect("encode v2 checkpoint");
+        let decoded =
+            JammedCheckpointV2::decode_from_bytes(&encoded).expect("decode v2 checkpoint");
+
+        assert_eq!(decoded, checkpoint);
+    }
+
+    #[test]
+    fn corrupt_v2_payload_length_is_reported_without_panic() {
+        let bytes = v2_checkpoint_with_absurd_payload_length();
+        let load_result =
+            std::panic::catch_unwind(|| JammedCheckpointV2::decode_from_bytes(&bytes));
+
+        assert!(
+            load_result.is_ok(),
+            "corrupt v2 payload length must be reported as a decode error, not a panic"
+        );
+        assert!(load_result.expect("checked above").is_err());
+    }
+
+    #[tokio::test]
+    async fn corrupt_checkpoint_length_does_not_panic_and_falls_back_to_previous_checkpoint() {
+        let temp = TempDir::new().expect("create temp dir");
+        let valid_state_value = 5;
+        let valid_cold_value = 9;
+        let valid_ker_hash = hash(b"valid-v1");
+        let valid_checkpoint = JammedCheckpointV1::new(
+            valid_ker_hash,
+            7,
+            legacy_pair_jam(valid_state_value, valid_cold_value),
+        );
+
+        std::fs::write(
+            temp.path().join("0.chkjam"),
+            valid_checkpoint.encode().expect("encode valid checkpoint"),
+        )
+        .expect("write valid checkpoint");
+        std::fs::write(
+            temp.path().join("1.chkjam"),
+            v1_checkpoint_with_absurd_jam_length(8),
+        )
+        .expect("write corrupt checkpoint");
+
+        let load_result = AssertUnwindSafe(Saver::<NockJammer>::try_load::<SaveableCheckpoint>(
+            &temp.path().to_path_buf(),
+            None,
+        ))
+        .catch_unwind()
+        .await;
+
+        assert!(
+            load_result.is_ok(),
+            "corrupt checkpoint length must be reported as a load error, not a panic"
+        );
+
+        let (_, maybe_saveable) = load_result
+            .expect("checked above")
+            .expect("valid older checkpoint should be used");
+        let saveable = maybe_saveable.expect("expected fallback checkpoint");
+        assert_eq!(saveable.ker_hash, valid_ker_hash);
+        assert_eq!(saveable.event_num, 7);
+        assert_eq!(
+            atom_value(unsafe { *saveable.state.root() }),
+            valid_state_value
+        );
+        assert_eq!(
+            atom_value(unsafe { *saveable.cold.root() }),
+            valid_cold_value
+        );
     }
 }
 
