@@ -1,0 +1,56 @@
+name: "Check kernel jams are in sync with hoon sources"
+
+on:
+  push:
+    branches:
+      - master
+      - "nockpool/**"
+  pull_request:
+    branches:
+      - master
+      - "nockpool/**"
+    paths:
+      - "hoon/**"
+      - "assets/**.jam"
+      - "crates/hoonc/**"
+      - "Makefile"
+      - ".github/workflows/jam-consistency.yml"
+
+jobs:
+  jam-consistency:
+    name: rebuild jams and diff against committed
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y make
+
+      - name: Cache cargo registry, git, and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-jam-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-jam-
+
+      - name: Install hoonc from this checkout
+        run: make install-hoonc
+
+      - name: Rebuild all kernel jams from hoon
+        run: make build-hoon-all
+
+      - name: Fail if any committed jam differs from the rebuild
+        run: |
+          if ! git diff --exit-code -- assets/*.jam; then
+            echo "::error::Committed jams in assets/ are out of sync with hoon/."
+            echo "::error::Run 'make build-hoon-all' locally and commit the regenerated jams."
+            git status assets/
+            exit 1
+          fi
