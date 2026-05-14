@@ -85,6 +85,7 @@ pub struct BlockchainConstants {
     pub asert_anchor_target_atom: UBig,
     pub asert_ideal_block_time: u64,
     pub asert_half_life: u64,
+    pub asert_anchor_min_timestamp: u64,
 }
 
 impl BlockchainConstants {
@@ -114,6 +115,11 @@ impl BlockchainConstants {
     pub const DEFAULT_ASERT_ANCHOR_TARGET_BEX: u64 = 291;
     pub const DEFAULT_ASERT_IDEAL_BLOCK_TIME: u64 = 150;
     pub const DEFAULT_ASERT_HALF_LIFE: u64 = 43_200;
+    /// Median-of-11 timestamp at the canonical ASERT anchor block (mainnet
+    /// height 65,499), pinned at phase-2 cutover of 014-aletheia. See
+    /// `open/hoon/common/tx-engine-1.hoon`'s `blockchain-constants:v1`
+    /// bunt — must stay in sync.
+    pub const DEFAULT_ASERT_ANCHOR_MIN_TIMESTAMP: u64 = 9_223_372_093_639_027_842;
 
     pub fn new() -> Self {
         let max_target_atom = UBig::from_str_with_radix_prefix(Self::DEFAULT_MAX_TIP5_ATOM)
@@ -152,6 +158,7 @@ impl BlockchainConstants {
             asert_anchor_target_atom,
             asert_ideal_block_time: Self::DEFAULT_ASERT_IDEAL_BLOCK_TIME,
             asert_half_life: Self::DEFAULT_ASERT_HALF_LIFE,
+            asert_anchor_min_timestamp: Self::DEFAULT_ASERT_ANCHOR_MIN_TIMESTAMP,
         }
     }
 
@@ -266,13 +273,15 @@ impl NounEncode for BlockchainConstants {
             Atom::from_ubig(allocator, &self.asert_anchor_target_atom).as_noun();
         let asert_ideal_block_time = Atom::new(allocator, self.asert_ideal_block_time).as_noun();
         let asert_half_life = Atom::new(allocator, self.asert_half_life).as_noun();
+        let asert_anchor_min_timestamp =
+            Atom::new(allocator, self.asert_anchor_min_timestamp).as_noun();
 
         T(
             allocator,
             &[
                 v1_phase, bythos_phase, note_data, base_fee, input_fee_divisor, v0_constants,
                 asert_phase, asert_anchor_height, asert_anchor_target_atom, asert_ideal_block_time,
-                asert_half_life,
+                asert_half_life, asert_anchor_min_timestamp,
             ],
         )
     }
@@ -591,8 +600,12 @@ mod tests {
             BlockchainConstants::DEFAULT_ASERT_IDEAL_BLOCK_TIME
         );
 
-        let asert_half_life_atom = asert_ideal_and_rest
+        let asert_half_life_and_rest = asert_ideal_and_rest
             .tail()
+            .as_cell()
+            .expect("asert-half-life and rest tuple");
+        let asert_half_life_atom = asert_half_life_and_rest
+            .head()
             .as_atom()
             .expect("asert-half-life atom");
         assert_eq!(
@@ -600,6 +613,17 @@ mod tests {
                 .as_u64()
                 .expect("asert-half-life as u64"),
             BlockchainConstants::DEFAULT_ASERT_HALF_LIFE
+        );
+
+        let asert_anchor_min_timestamp_atom = asert_half_life_and_rest
+            .tail()
+            .as_atom()
+            .expect("asert-anchor-min-timestamp atom");
+        assert_eq!(
+            asert_anchor_min_timestamp_atom
+                .as_u64()
+                .expect("asert-anchor-min-timestamp as u64"),
+            BlockchainConstants::DEFAULT_ASERT_ANCHOR_MIN_TIMESTAMP
         );
     }
 }

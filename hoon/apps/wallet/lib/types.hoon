@@ -362,6 +362,23 @@
         blockchain-constants:v0:transact
     ==
   ::
+  ::  frozen phase-1 snapshot of blockchain-constants:v1 (five asert-*
+  ::  fields, no asert-anchor-min-timestamp). used to decode old %7
+  ::  wallet states serialized before phase 2 of 014-aletheia.
+  +$  blockchain-constants-v1-phase-1
+    $:  v1-phase=@
+        bythos-phase=@
+        data=[max-size=@ min-fee=@]
+        base-fee=@
+        input-fee-divisor=@
+        blockchain-constants:v0:transact
+        asert-phase=@
+        asert-anchor-height=@
+        asert-anchor-target-atom=@
+        asert-ideal-block-time=@
+        asert-half-life=@
+    ==
+  ::
   +$  state-6
     $:  %6
         balance=balance-v4
@@ -372,6 +389,14 @@
   ::
   +$  state-7
     $:  %7
+        balance=balance-v4
+        active-master=active-v4
+        keys=keys-v4
+        bc=blockchain-constants-v1-phase-1
+    ==
+  ::
+  +$  state-8
+    $:  %8
         balance=balance-v4
         active-master=active-v4
         keys=keys-v4
@@ -389,9 +414,10 @@
         state-5
         state-6
         state-7
+        state-8
     ==
   ::
-  +$  state  $>(%7 versioned-state)
+  +$  state  $>(%8 versioned-state)
   ::
   +$  seed-name   $~('default-seed' @t)
   ::

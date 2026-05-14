@@ -75,10 +75,18 @@
   (need (get-raw-tx tid))
 ::
 ::  checkpointed digests for chain stability
+::    phase-2 cutover of 014-aletheia pins both the ASERT anchor block
+::    (height 65,499) and the first ASERT block (height 65,500) so any
+::    competing block at either height is rejected network-wide. the
+::    anchor digest is the same digest the phase-1 +find-anchor-min-ts
+::    helper would have walked to; pinning it freezes the median-of-11
+::    asert-anchor-min-timestamp now baked into blockchain-constants.
 ++  checkpointed-digests
   ^-  (z-map page-number:t hash:t)
   %-  ~(gas z-by *(z-map page-number:t hash:t))
-  :~  [%16.128 (from-b58:hash:t 'ANjtb2YNFo3cAtLVkjkXXP2DJ2S5ZvByywpxgAa1UhxXM5f8YmiJLWX')]
+  :~  [%65.500 (from-b58:hash:t '4dr8f3hWcQfgSMUrKRcNb1Z4nwzECbbUuqDYUp8G4WF6G5ocFXzPp2')]
+      [%65.499 (from-b58:hash:t 'vYekzUpi6o95oA6qHfvcq9kVRzFMZLuUw33YxXQRqNCvBHwU7wys73')]
+      [%16.128 (from-b58:hash:t 'ANjtb2YNFo3cAtLVkjkXXP2DJ2S5ZvByywpxgAa1UhxXM5f8YmiJLWX')]
       [%4.032 (from-b58:hash:t 'DhaVTgMz6CMy3ZG3vsci1z9U2Gg7WZL6y3g7bZzfJLUbus1rd8j4BQU')]
       [%2.448 (from-b58:hash:t '9EChUtcNJumW5DDYgS6UP5UHfHtD6vFH7HoSqjmTuWP2Px6JdpxaR23')]
       [%720 (from-b58:hash:t 'C4vJRnFNHCLHKHVRJGiYeoiYXS7CyTGrVk2ibEv95HQiZoxRvtr5SRQ')]
@@ -208,13 +216,14 @@
   ^-  bignum:bignum:t
   =/  parent-min-ts=@
     (~(got z-by min-timestamps.c) parent-digest)
-  ::  anchor-min-ts is derived by walking parent-digest through .blocks
-  ::  back to the ancestor at asert-anchor-height and reading its
-  ::  median-of-11 from .min-timestamps. fork-correct by construction
-  ::  — every caller walks its own ancestry, with no shared mutable
-  ::  cache that competing forks could diverge. replaced by a hardcoded
-  ::  protocol constant post-65500 (phase 2 of 014-aletheia).
-  =/  anchor-min-ts=@  (find-anchor-min-ts parent-digest)
+  ::  phase 2 of 014-aletheia: the anchor's median-of-11 is a hardcoded
+  ::  protocol constant captured at the canonical anchor block (height
+  ::  65,499). paired with the [%65.499 ...] checkpoint in
+  ::  +checkpointed-digests, only one block at the anchor height is
+  ::  admissible network-wide, so reading the constant is consensus-
+  ::  identical to walking ancestry.
+  =/  anchor-min-ts=@
+    asert-anchor-min-timestamp.blockchain-constants
   %-  chunk:bignum:t
   %-  compute-target:asert
   :*  asert-anchor-target-atom.blockchain-constants
@@ -580,26 +589,6 @@
     ==
   ~>  %slog.[0 log-message]
   c
-::
-::  +find-anchor-min-ts: walk parent chain from .bid back to the block at
-::    asert-anchor-height, return that block's median-of-11 timestamp
-::    from .min-timestamps.
-::
-::    callers must guarantee that .bid's block is in .blocks and has height
-::    >= asert-anchor-height. fork-correct because .blocks and
-::    .min-timestamps are keyed by digest, so each caller walks its own
-::    ancestry with no shared mutable state that competing forks could
-::    diverge. replaced by a hardcoded protocol constant post-65500
-::    (phase 2 of 014-aletheia).
-++  find-anchor-min-ts
-  |=  bid=block-id:t
-  ^-  @
-  =/  anchor-height=@  asert-anchor-height.blockchain-constants
-  =/  cur=page:t  (to-page:local-page:t (~(got z-by blocks.c) bid))
-  |-
-  ?:  =(~(height get:page:t cur) anchor-height)
-    (~(got z-by min-timestamps.c) ~(digest get:page:t cur))
-  $(cur (to-page:local-page:t (~(got z-by blocks.c) ~(parent get:page:t cur))))
 ::
 ::  +check-fund-split: validate that a post-asert-activation coinbase pays
 ::  the consensus-known fund address exactly floor(emission/5) atoms.

@@ -224,20 +224,20 @@
           ::    .asert-phase: activation height. at or after, target is
           ::       computed per-block via aserti3-2d instead of epoch retarget.
           ::    .asert-anchor-height / -target-atom: the fixed anchor (height,
-          ::       target-atom) used as the aserti3-2d reference. the anchor's
-          ::       median-of-11 timestamp is not a constant here: it is
-          ::       derived at compute-target time by walking .blocks back
-          ::       from the parent-digest to the ancestor at
-          ::       asert-anchor-height and reading .min-timestamps. post-
-          ::       65500 the min-of-11 becomes a hardcoded constant (phase 2
-          ::       of 014-aletheia). anchor-target is 2^291: at constant hashrate H, expected
-          ::       blocks/sec is H*target/max, so to cut block time 600s →
-          ::       150s (4x more blocks per sec) we increase target by ~4x,
-          ::       which reduces per-block difficulty (max/target) by the
-          ::       same factor. 2^291 is the closest power of 2 to 4 * pre-
-          ::       activation mainnet target (~2^291.38); it yields ~3.2x
-          ::       faster blocks (expected ~187s) under the same hashrate,
-          ::       slightly conservative vs the ideal 150s.
+          ::       target-atom) used as the aserti3-2d reference. anchor-target
+          ::       is 2^291: at constant hashrate H, expected blocks/sec is
+          ::       H*target/max, so to cut block time 600s → 150s (4x more
+          ::       blocks per sec) we increase target by ~4x, which reduces
+          ::       per-block difficulty (max/target) by the same factor.
+          ::       2^291 is the closest power of 2 to 4 * pre-activation
+          ::       mainnet target (~2^291.38); it yields ~3.2x faster blocks
+          ::       (expected ~187s) under the same hashrate, slightly
+          ::       conservative vs the ideal 150s.
+          ::    .asert-anchor-min-timestamp: median-of-11 timestamp at the
+          ::       anchor block (height 65,499). pinned at phase-2 cutover
+          ::       to the value observed when the canonical mainnet block at
+          ::       asert-anchor-height was finalized. replaces phase-1's
+          ::       runtime parent-walk through .blocks / .min-timestamps.
           ::    .asert-ideal-block-time: post-asert-activation block time in seconds.
           ::    .asert-half-life: real-time seconds of drift to halve or double.
           ::    rbits is hardcoded to 16 in lib/asert.hoon (the polynomial
@@ -248,6 +248,7 @@
           asert-anchor-target-atom=^~((bex 291))
           asert-ideal-block-time=150
           asert-half-life=^~((mul 12 ^~((mul 60 60))))
+          asert-anchor-min-timestamp=9.223.372.093.639.027.842
       ==
   $:  v1-phase=@
       bythos-phase=@
@@ -260,6 +261,7 @@
       asert-anchor-target-atom=@
       asert-ideal-block-time=@
       asert-half-life=@
+      asert-anchor-min-timestamp=@
   ==
 :: $nname
 ++  nname

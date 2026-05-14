@@ -2,7 +2,6 @@
 /=  sp  /common/stark/prover
 /=  dumb-transact  /common/tx-engine
 /=  asert  /apps/dumbnet/lib/asert
-/=  dcon  /apps/dumbnet/lib/consensus
 /=  *  /common/zoon
 ::
 :: everything to do with mining and mining state
@@ -288,12 +287,13 @@
     ?:  (post-asert-activation:t candidate-height)
       =/  parent-min-ts=@
         (~(got z-by min-timestamps.c) u.heaviest-block.c)
-      ::  resolve the anchor's median-of-11 by walking .blocks back from
-      ::  heaviest to the ancestor at asert-anchor-height (shared helper
-      ::  in /lib/consensus). replaced by a hardcoded protocol constant
-      ::  post-65500 (phase 2 of 014-aletheia).
+      ::  phase 2 of 014-aletheia: the anchor's median-of-11 is a
+      ::  hardcoded protocol constant. paired with the [%65.499 ...]
+      ::  checkpoint, only the canonical anchor block is admissible
+      ::  at the anchor height, so reading the constant is consensus-
+      ::  identical to the phase-1 parent-walk.
       =/  anchor-min-ts=@
-        (~(find-anchor-min-ts dcon c blockchain-constants) u.heaviest-block.c)
+        asert-anchor-min-timestamp.blockchain-constants
       %-  chunk:bignum:t
       %-  compute-target:asert
       :*  asert-anchor-target-atom.blockchain-constants

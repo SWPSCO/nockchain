@@ -1,11 +1,11 @@
 +++
 version = "0.1.14"
-status = "draft"
+status = "activated"
 consensus_critical = true
 
 activation_height = 65500
 published = "2026-04-27"
-activation_target = ""
+activation_target = "2026-05-07"
 
 authors = ["@nockchain-core"]
 reviewers = ["@nockchain-core"]
@@ -934,58 +934,102 @@ genesis through activation and verify:
 
 ## Phase 2 — post-anchor cutover
 
-Once block 65,500 is mined on the canonical chain, a follow-up
-release replaces the runtime parent-walk with hardcoded values.
-This removes `+find-anchor-min-ts` from the hot path and makes any
-attempt to mine a competing block at 65,499 (anchor) or 65,500 (activation) inadmissible
-network-wide via a consensus checkpoint.
+Phase 2 was activated once block 65,500 was mined on the canonical
+chain (2026-05-07 15:11:01 EDT). The runtime parent-walk that
+derived the anchor's median-of-11 timestamp has been replaced with
+a hardcoded `asert-anchor-min-timestamp` field on
+`blockchain-constants`, and both the anchor (height 65,499) and the
+first ASERT block (height 65,500) are pinned in
+`checkpointed-digests`. `+find-anchor-min-ts` is deleted, removing
+the per-block ancestry walk from the hot path; any attempt to mine
+a competing block at either height is now rejected network-wide via
+the consensus checkpoint check in `+validate-page-without-txs`.
 
-### Values to bake in
+### Pinned values
 
-- `asert-anchor-digest`: the digest of the observed mainnet block
-  at height **65,499** — the ASERT anchor block (to be filled in
-  once that block is final). Added to `checkpointed-digests` at
-  height 65,499 so `+validate-page-without-txs` rejects any
-  competing block at the anchor.
-- `asert-anchor-min-timestamp` (constant): the median-of-11
-  timestamp at the canonical block **65,499** (equal to
-  `min-timestamps[asert-anchor-digest]`). This is exactly what
-  Phase 1's `+find-anchor-min-ts` returns — pinning it here
-  preserves bit-for-bit continuity across the cutover. Added as a
-  `blockchain-constants` field.
-- `asert-activation-digest` (checkpoint only): the digest of the
-  observed mainnet block at height **65,500** — the first ASERT
-  block. Added to `checkpointed-digests` at height 65,500
-  separately from the anchor, so no competing first-ASERT block is
-  admissible post-cutover. This value is not used in target
-  computation.
+The three canonical mainnet values, observed at phase-2 cutover and
+baked into the source:
 
-### Code changes at cutover
+| Field                         | Value                                                                 |
+|-------------------------------|-----------------------------------------------------------------------|
+| `asert-anchor-digest`         | `vYekzUpi6o95oA6qHfvcq9kVRzFMZLuUw33YxXQRqNCvBHwU7wys73` (height 65,499) |
+| `asert-anchor-min-timestamp`  | `9.223.372.093.639.027.842` (urbit-seconds = 2026-05-07 14:50:42 EDT)  |
+| `asert-activation-digest`     | `4dr8f3hWcQfgSMUrKRcNb1Z4nwzECbbUuqDYUp8G4WF6G5ocFXzPp2` (height 65,500) |
 
-- `open/hoon/common/tx-engine-1.hoon`: add
-  `asert-anchor-min-timestamp=@` to `blockchain-constants` and
-  set its value in the realnet constants.
+`asert-anchor-min-timestamp` equals exactly what Phase 1's
+`+find-anchor-min-ts` returned for the canonical anchor, preserving
+bit-for-bit continuity across the cutover. The activation digest
+is checkpoint-only and is not used in target computation.
+
+A reproducible fetcher for the three values from a public gRPC
+endpoint ships at `scripts/aletheia_phase2_params.rs`; its
+base58-encoding path was cross-checked against the existing
+height-16,128 checkpoint.
+
+### Code changes
+
+- `open/hoon/common/tx-engine-1.hoon`: appended
+  `asert-anchor-min-timestamp=@` to `blockchain-constants:v1` and
+  pinned the canonical mainnet value as the realnet bunt.
+- `open/hoon/apps/dumbnet/lib/types.hoon`: froze the previous
+  blockchain-constants shape as
+  `+$ blockchain-constants-v1-phase-1` and introduced
+  `+$ kernel-state-8` carrying the full post-phase-2 shape;
+  `+$ kernel-state-7` now references the frozen phase-1 snapshot
+  so old saved v7 states still decode.
+- `open/hoon/apps/dumbnet/inner.hoon`: added `++ state-7-to-8`,
+  renamed the upgrade loop to `state-n-to-8`. The 7-to-8 arm
+  discards the old constants noun and lets `+update-constants`
+  reseed from `*blockchain-constants:t` on mainnet.
 - `open/hoon/apps/dumbnet/lib/consensus.hoon`:
-  - `+compute-target-asert` reads the new constant directly; drop
-    the `+find-anchor-min-ts` call.
-  - Delete `+find-anchor-min-ts`.
-- `open/hoon/apps/dumbnet/lib/miner.hoon`: read the new constant
-  directly; drop the `+find-anchor-min-ts` call and the `dcon`
-  import if no longer needed.
-- Add `[65.499 asert-anchor-digest]` and
-  `[65.500 asert-activation-digest]` to the realnet
-  `checkpointed-digests` map.
+  `+compute-target-asert` now reads
+  `asert-anchor-min-timestamp.blockchain-constants` directly;
+  `+find-anchor-min-ts` is deleted; the realnet
+  `checkpointed-digests` map gains `[65.499 asert-anchor-digest]`
+  and `[65.500 asert-activation-digest]`.
+- `open/hoon/apps/dumbnet/lib/miner.hoon`: candidate-target path
+  reads the new constant directly; the `dcon` import is dropped
+  along with the deleted helper.
+- `open/hoon/apps/wallet/lib/types.hoon`,
+  `open/hoon/apps/wallet/wallet.hoon`: parallel `state-8` bump and
+  `++ state-7-8` upgrade arm so old persisted wallet states still
+  decode against the extended `blockchain-constants:v1`.
 
-### Tests at cutover
+### Tests
 
 - `test-asert-wrapper-matches-library` and
-  `test-asert-wrapper-past-anchor` still apply: they resolve
-  `anchor-min-ts` against the same mechanism the production code
-  uses, so they switch from "walks .blocks" to "reads constant"
-  automatically.
-- Add tests that competing blocks at height 65,499 (anchor) and
-  65,500 (first ASERT block) are each rejected by their respective
-  checkpoint entries.
+  `test-asert-wrapper-past-anchor` switched from
+  "`(find-anchor-min-ts …)`" to
+  "`asert-anchor-min-timestamp.bc`" — same value, different
+  source.
+- `test-asert-anchor-min-ts-matches-observed` (new) verifies the
+  bc constant equals `min-timestamps[anchor-digest]` after the
+  test chain runs (the load-bearing continuity property).
+- `test-asert-find-anchor-walk-fork-safety` deleted: the walk it
+  exercised is gone, so the fork-safety property no longer exists
+  in any form (the checkpoint at the anchor makes anchor-time
+  fork-divergence impossible network-wide).
+- `test-phase-2-checkpoint-65499-pinned`,
+  `test-phase-2-checkpoint-65500-pinned`,
+  `test-phase-2-checkpoint-anchor-and-activation-differ`,
+  `test-phase-2-asert-anchor-min-timestamp-pinned` (new, in
+  `closed/hoon/tests/dumb/mod/unit/review-fixes.hoon`) pin the
+  three baked values directly so reverting any of them fails CI.
+- `test-phase-2-kernel-state-7-constants-shape-phase-1` (new)
+  pins the noun-shape divergence between `kernel-state-7` and
+  `kernel-state-8`, mirroring the existing `test-fix3a` pin for
+  `kernel-state-6` ↔ `kernel-state-7`.
+- `test-phase-2-state-7-bc-shape-differs-from-state-8`,
+  `test-phase-2-state-8-bc-matches-transact-default`,
+  `test-phase-2-upgrade-7-to-8-produces-state-8` (new, in
+  `closed/hoon/tests/wallet/mod/state-upgrade.hoon`) cover the
+  parallel wallet bump.
+- The test bc-* helpers
+  (`bc-asert`, `bc-fund-split`, `bc-pre-activation-v1`, `bc-fix`)
+  now set
+  `asert-anchor-min-timestamp (add (time-in-secs:page:txe *@da) 1.200)`
+  — the median-of-11 those test chains actually produce at
+  anchor-height=4 with 600s/block spacing from genesis `*@da`.
 
 ## Reference Implementation
 

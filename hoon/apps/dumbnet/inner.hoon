@@ -36,16 +36,16 @@
     ~&  [%nockchain-state-version -.arg]
     ::  cut
     |^
-    =.  k  ~>  %bout  (update-constants (check-checkpoints (state-n-to-7 arg)))
+    =.  k  ~>  %bout  (update-constants (check-checkpoints (state-n-to-8 arg)))
     =.  c.k  ~>  %bout  check-and-repair:con
     ~|  %v1-phase-must-be-lte-asert-phase
     ?>  (lte v1-phase.constants.k asert-phase.constants.k)
     k
     ::  this arm should be renamed each state upgrade to state-n-to-[latest] and extended to loop through all upgrades
-    ++  state-n-to-7
+    ++  state-n-to-8
       |=  arg=load-kernel-state:dk
       ^-  kernel-state:dk
-      ?.  ?=(%7 -.arg)
+      ?.  ?=(%8 -.arg)
         ~>  %slog.[0 'load: State upgrade required']
         ?-  -.arg
             ::
@@ -56,16 +56,40 @@
           %4  $(arg (state-4-to-5 arg))
           %5  $(arg (state-5-to-6 arg))
           %6  $(arg (state-6-to-7 arg))
+          %7  $(arg (state-7-to-8 arg))
         ==
       arg
     ::
+    ::  upgrade kernel state 7 to kernel state 8
+    ::    blockchain-constants:v1 gained a sixth asert-* field
+    ::    (asert-anchor-min-timestamp) at phase 2 of 014-aletheia.
+    ::    kernel-state-7 uses the frozen phase-1 shape (five asert
+    ::    fields) so old %7 states still decode; kernel-state-8 uses
+    ::    the full post-phase-2 blockchain-constants:v1. we discard
+    ::    the old constants noun and let update-constants reseed it
+    ::    from *blockchain-constants:t (which now pins the canonical
+    ::    mainnet anchor median-of-11).
+    ++  state-7-to-8
+      |=  arg=kernel-state-7:dk
+      ^-  kernel-state-8:dk
+      :*  %8
+          c=c.arg
+          a=a.arg
+          ::  discard stale pre-upgrade candidate; miner will rebuild on next tick
+          m=m.arg(candidate-block *page:t, candidate-acc *tx-acc:t)
+          d=d.arg
+          constants=*blockchain-constants:t
+      ==
+    ::
     ::  upgrade kernel state 6 to kernel state 7
     ::    blockchain-constants:v1 was extended with five ASERT fields in
-    ::    this PR. kernel-state-6 uses blockchain-constants-v1-pre-asert
-    ::    (the frozen pre-ASERT shape) so that old %6 states can decode
-    ::    cleanly. kernel-state-7 uses the full blockchain-constants:v1.
-    ::    we discard the old constants and let update-constants fill in
-    ::    current defaults below.
+    ::    the original aletheia phase 1. kernel-state-6 uses
+    ::    blockchain-constants-v1-pre-asert (the frozen pre-ASERT shape) so
+    ::    that old %6 states can decode cleanly. kernel-state-7 uses the
+    ::    phase-1 snapshot of blockchain-constants:v1 (five asert-* fields,
+    ::    no asert-anchor-min-timestamp). we discard the old constants and
+    ::    let the chained state-7-to-8 upgrade plus update-constants fill
+    ::    in current defaults below.
     ++  state-6-to-7
       |=  arg=kernel-state-6:dk
       ^-  kernel-state-7:dk
@@ -90,7 +114,7 @@
           ::  discard stale pre-upgrade candidate; miner will rebuild on next tick
           m=m.arg(candidate-block *page:t, candidate-acc *tx-acc:t)
           d=d.arg
-          constants=*blockchain-constants:t
+          constants=*blockchain-constants-v1-phase-1:dk
       ==
     ::
     ::  upgrade kernel state 5 to kernel state 6
