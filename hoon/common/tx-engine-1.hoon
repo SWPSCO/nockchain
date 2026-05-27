@@ -1638,9 +1638,6 @@
   ++  check
     |=  [=form parent-firstname=^hash]
     ^-  ?
-    ?.  =(1 axis.form)
-      ~>  %slog.[0 'stub lmp axis must be 1']
-      %.n
     =/  spend-firstname
       (hash-hashable:tip5 [leaf+& hash+root.merk-proof.form])
     ?.  =(spend-firstname parent-firstname)
