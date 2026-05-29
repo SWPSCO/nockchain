@@ -8,6 +8,7 @@ pub mod fpoly;
 pub mod handle;
 pub mod mary;
 pub mod noun_ext;
+pub mod owned_based_noun;
 pub mod poly;
 pub mod shape;
 pub mod structs;

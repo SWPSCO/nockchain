@@ -1,0 +1,53 @@
+name: "Check kernel jams are not stale relative to hoon sources"
+
+# hoonc output bytes are not reproducible across runs (HashMap iteration order
+# leaks into the jam), so a byte-for-byte rebuild-and-diff cannot pass
+# reliably. Instead, use git history: if any hoon/ file was modified in a
+# commit newer than the most recent commit touching assets/*.jam, the jams
+# are stale and must be rebuilt. This is what we actually want to catch —
+# the trap that hid the duplicate +lock-merkle-proof-full arm and let the
+# pre-Aletheia kernel ship.
+
+on:
+  push:
+    branches:
+      - master
+      - "nockpool/**"
+  pull_request:
+    branches:
+      - master
+      - "nockpool/**"
+
+jobs:
+  jam-staleness:
+    name: hoon vs assets git-log staleness
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Need full history so `git log -- assets/*.jam` can find the
+          # commit that last touched the jams.
+          fetch-depth: 0
+
+      - name: Fail if hoon/ has changed since assets/*.jam was last rebuilt
+        run: |
+          set -euo pipefail
+          LAST_JAM_COMMIT=$(git log -1 --format=%H -- 'assets/*.jam')
+          if [ -z "$LAST_JAM_COMMIT" ]; then
+            echo "::error::No commit found that touches assets/*.jam — repo state is unexpected."
+            exit 1
+          fi
+          echo "Last commit touching assets/*.jam: $LAST_JAM_COMMIT"
+          STALE_HOON=$(git log --name-only --pretty=format: "${LAST_JAM_COMMIT}..HEAD" -- 'hoon/**' | sort -u | sed '/^$/d')
+          if [ -n "$STALE_HOON" ]; then
+            echo "::error::These hoon files were modified after assets/*.jam was last rebuilt:"
+            echo "$STALE_HOON"
+            echo
+            echo "::error::Rebuild the jams and commit them:"
+            echo "  make install-hoonc"
+            echo "  make build-hoon-all"
+            echo "  git add assets/*.jam && git commit -m 'bump jams'"
+            exit 1
+          fi
+          echo "OK: no hoon changes since last jam rebuild."

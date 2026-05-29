@@ -11,6 +11,7 @@ documentation = "https://docs.nockchain.org/"
 readme = "README.md"
 keywords = ["nockchain", "nockapp", "development", "cli"]
 categories = ["command-line-utilities", "development-tools"]
+exclude = ["templates/*/Cargo.toml"]
 
 [package.metadata.docs.rs]
 all-features = true

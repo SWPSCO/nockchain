@@ -23,6 +23,7 @@ fn ensure_protoc() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    println!("cargo:rerun-if-env-changed=BRIDGE_MANIFEST_DIR");
     println!("cargo:rerun-if-changed=contracts/out/MessageInbox.sol/MessageInbox.json");
     println!("cargo:rerun-if-changed=contracts/out/Nock.sol/Nock.json");
     println!("cargo:rerun-if-changed=contracts/MessageInbox.sol");
@@ -34,77 +35,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     ensure_protoc()?;
 
-    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let manifest_dir = bridge_manifest_dir()?;
 
-    // Helper to expand ${pwd} in paths from environment variables
-    let expand_path = |path_str: &str| -> PathBuf {
-        if path_str.contains("${pwd}") {
-            let pwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-            PathBuf::from(path_str.replace("${pwd}", &pwd.to_string_lossy()))
-        } else {
-            PathBuf::from(path_str)
-        }
-    };
-
-    // Try to get contract file paths from rustc_env first (they contain ${pwd} which we expand)
-    // If not available, search for them relative to CARGO_MANIFEST_DIR
-    let mut inbox_src = if let Some(path) = env::var_os("MESSAGE_INBOX_SOL") {
+    // Use explicit runtime paths when provided; otherwise fall back to the crate-local contracts/.
+    let inbox_src = if let Some(path) = env::var_os("MESSAGE_INBOX_SOL") {
         expand_path(&path.to_string_lossy())
     } else {
         manifest_dir.join("contracts/MessageInbox.sol")
     };
 
-    let mut nock_src = if let Some(path) = env::var_os("NOCK_SOL") {
+    let nock_src = if let Some(path) = env::var_os("NOCK_SOL") {
         expand_path(&path.to_string_lossy())
     } else {
         manifest_dir.join("contracts/Nock.sol")
     };
-
-    // If files don't exist at expected location, search more broadly
-    // compile_data files might be at different locations in the sandbox
-    if !inbox_src.exists() {
-        // Try searching from current directory (might be output directory)
-        if let Ok(current_dir) = env::current_dir() {
-            for ancestor in current_dir.ancestors() {
-                let candidate = ancestor.join("open/crates/bridge/contracts/MessageInbox.sol");
-                if candidate.exists() {
-                    inbox_src = candidate;
-                    break;
-                }
-            }
-        }
-        // Also try from manifest_dir
-        if !inbox_src.exists() {
-            for ancestor in manifest_dir.ancestors() {
-                let candidate = ancestor.join("open/crates/bridge/contracts/MessageInbox.sol");
-                if candidate.exists() {
-                    inbox_src = candidate;
-                    break;
-                }
-            }
-        }
-    }
-
-    if !nock_src.exists() {
-        if let Ok(current_dir) = env::current_dir() {
-            for ancestor in current_dir.ancestors() {
-                let candidate = ancestor.join("open/crates/bridge/contracts/Nock.sol");
-                if candidate.exists() {
-                    nock_src = candidate;
-                    break;
-                }
-            }
-        }
-        if !nock_src.exists() {
-            for ancestor in manifest_dir.ancestors() {
-                let candidate = ancestor.join("open/crates/bridge/contracts/Nock.sol");
-                if candidate.exists() {
-                    nock_src = candidate;
-                    break;
-                }
-            }
-        }
-    }
 
     // Determine contracts_root from where we found the source files
     let contracts_root = if let Some(parent) = inbox_src.parent() {
@@ -155,7 +99,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "forge binary not found at {:?} (FORGE_BIN={:?}, CARGO_MANIFEST_DIR={:?})",
                 forge,
                 env::var_os("FORGE_BIN"),
-                env!("CARGO_MANIFEST_DIR")
+                manifest_dir
             )
             .into());
         }
@@ -277,7 +221,7 @@ fn resolve_forge_bin() -> Result<PathBuf, Box<dyn std::error::Error>> {
 
     // In Bazel sandbox, compile_data files are available relative to CARGO_MANIFEST_DIR
     // Try to find forge relative to manifest dir
-    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let manifest_dir = bridge_manifest_dir()?;
     for ancestor in manifest_dir.ancestors() {
         let candidate = ancestor.join("tools/bin/forge_bin"); // genrule output name
         if candidate.is_file() {
@@ -295,6 +239,38 @@ fn resolve_forge_bin() -> Result<PathBuf, Box<dyn std::error::Error>> {
         manifest_dir
     )
     .into())
+}
+
+fn bridge_manifest_dir() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    if let Some(path) = dir_from_env("BRIDGE_MANIFEST_DIR")? {
+        return Ok(path);
+    }
+
+    if let Some(path) = dir_from_env("CARGO_MANIFEST_DIR")? {
+        return Ok(path);
+    }
+
+    Err("BRIDGE_MANIFEST_DIR and CARGO_MANIFEST_DIR are not set".into())
+}
+
+fn dir_from_env(key: &str) -> Result<Option<PathBuf>, Box<dyn std::error::Error>> {
+    let Some(raw) = env::var_os(key) else {
+        return Ok(None);
+    };
+    let path = expand_path(&raw.to_string_lossy());
+    if path.is_dir() {
+        return Ok(Some(path));
+    }
+    Err(format!("{key} is set but not a directory: {}", path.display()).into())
+}
+
+fn expand_path(path_str: &str) -> PathBuf {
+    if path_str.contains("${pwd}") {
+        let pwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        PathBuf::from(path_str.replace("${pwd}", &pwd.to_string_lossy()))
+    } else {
+        PathBuf::from(path_str)
+    }
 }
 
 fn create_unique_temp_dir(prefix: &str) -> std::io::Result<PathBuf> {

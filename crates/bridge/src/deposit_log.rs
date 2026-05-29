@@ -9,13 +9,14 @@ use diesel::prelude::*;
 use diesel::sqlite::SqliteConnection;
 use diesel::OptionalExtension;
 use nockchain_types::v1::Name;
+use nockvm::noun::NounAllocator;
 use tracing::{info, warn};
 
 use crate::bridge_status::BridgeStatus;
 use crate::config::NonceEpochConfig;
 use crate::errors::BridgeError;
-use crate::ethereum::BaseBridge;
 use crate::metrics;
+use crate::ports::BaseContractPort;
 use crate::schema::deposit_log;
 use crate::stop::StopHandle;
 use crate::tui::state::TuiStatus;
@@ -260,6 +261,18 @@ impl DepositLog {
         u64::try_from(count).map_err(|err| {
             BridgeError::ValueConversion(format!("deposit log count overflow: {err}"))
         })
+    }
+
+    /// Return the maximum nonce present in the log at/after the epoch start key.
+    pub async fn max_nonce_in_epoch(
+        &self,
+        epoch: &NonceEpochConfig,
+    ) -> Result<Option<u64>, BridgeError> {
+        let count = self.number_of_deposits_in_epoch(epoch).await?;
+        if count == 0 {
+            return Ok(None);
+        }
+        Ok(Some(epoch.first_epoch_nonce().saturating_add(count - 1)))
     }
 
     /// Fetch a single entry by nonce, if it exists in the epoch window.
@@ -664,11 +677,13 @@ pub async fn sync_deposit_log_from_hashchain(
         "deposit log sync from nock hashchain complete"
     );
 
+    metrics::advance_deposit_log_max_nonce(inserted, nonce_epoch.first_epoch_nonce());
+
     Ok(inserted)
 }
 
-pub async fn validate_deposit_log_against_chain_nonce_prefix(
-    base_bridge: Arc<BaseBridge>,
+pub async fn validate_deposit_log_against_chain_nonce_prefix<B: BaseContractPort>(
+    base_bridge: Arc<B>,
     deposit_log: Arc<DepositLog>,
     nonce_epoch: NonceEpochConfig,
 ) -> Result<(), BridgeError> {
@@ -806,6 +821,8 @@ pub async fn persist_commit_nock_deposits_requests(
         }
     }
 
+    metrics::advance_deposit_log_max_nonce(inserted, nonce_epoch.first_epoch_nonce());
+
     Ok(inserted)
 }
 
@@ -848,11 +865,14 @@ pub fn create_commit_nock_deposits_driver(
                 };
 
                 let root = unsafe { effect.root() };
-                let bridge_effect = match BridgeEffect::from_noun(root) {
-                    Ok(effect) => effect,
-                    Err(err) => {
-                        warn!("Failed to decode effect: {}", err);
-                        continue;
+                let bridge_effect = {
+                    let space = effect.noun_space();
+                    match BridgeEffect::from_noun(root, &space) {
+                        Ok(effect) => effect,
+                        Err(err) => {
+                            warn!("Failed to decode effect: {}", err);
+                            continue;
+                        }
                     }
                 };
 
@@ -1386,12 +1406,28 @@ mod tests {
         };
 
         assert_eq!(log.number_of_deposits_in_epoch(&epoch).await.unwrap(), 2);
+        assert_eq!(log.max_nonce_in_epoch(&epoch).await.unwrap(), Some(51));
         assert_eq!(log.max_block_height(&epoch).await.unwrap(), Some(11));
 
         let rows = log.records_from_nonce(50, 10, &epoch).await.unwrap();
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].1.tx_id, anchor.tx_id);
         assert_eq!(rows[1].1.tx_id, next.tx_id);
+    }
+
+    #[tokio::test]
+    async fn max_nonce_in_epoch_is_none_for_empty_epoch() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("deposit-log.sqlite");
+        let log = DepositLog::open(path).await.unwrap();
+
+        let epoch = NonceEpochConfig {
+            base: 50,
+            start_height: 10,
+            start_tx_id: None,
+        };
+
+        assert_eq!(log.max_nonce_in_epoch(&epoch).await.unwrap(), None);
     }
 
     #[tokio::test]

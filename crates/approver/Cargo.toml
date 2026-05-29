@@ -1,0 +1,16 @@
+[package]
+name = "approver"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+kernels = { workspace = true, features = ["approver"] }
+nockapp = { workspace = true }
+nockvm = { workspace = true }
+clap = { workspace = true, features = ["derive", "cargo", "color", "env"] }
+tokio = { workspace = true, features = ["full"] }
+zkvm-jetpack = { workspace = true }
+nockapp-grpc = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+bytes = { workspace = true }

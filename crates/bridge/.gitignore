@@ -36,6 +36,8 @@ contracts/txs/
 # Deployment outputs (contain addresses, regenerated on deploy)
 contracts/deployments/
 contracts/out
+contracts/cache
+contracts/broadcast/
 
 # Contract dependencies (must be built locally)
 contracts/lib

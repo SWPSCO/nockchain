@@ -171,6 +171,7 @@ impl FromStr for TimelockRangeCli {
     }
 }
 
+/// CLI-facing note selection strategy for create-tx ordering.
 #[derive(Copy, Clone, Debug, ValueEnum)]
 pub enum NoteSelectionStrategyCli {
     Ascending,
@@ -186,6 +187,7 @@ impl NoteSelectionStrategyCli {
     }
 }
 
+/// Top-level wallet CLI definition.
 #[derive(Parser, Debug, Clone)]
 #[command(author, version, about, long_about = None)]
 pub struct WalletCli {
@@ -202,6 +204,7 @@ pub struct WalletCli {
     pub command: Commands,
 }
 
+/// Supported watch subcommands for addresses and lock forms.
 #[derive(Subcommand, Debug, Clone)]
 pub enum WatchSubcommand {
     /// Add a watch-only address (base58 pkh or schnorr pubkey)
@@ -233,6 +236,7 @@ pub enum WatchSubcommand {
     },
 }
 
+/// gRPC client mode used for wallet network operations.
 #[derive(clap::ValueEnum, Debug, Clone, PartialEq, Eq)]
 pub enum ClientType {
     Public,
@@ -241,6 +245,7 @@ pub enum ClientType {
 
 #[derive(Debug)]
 #[allow(dead_code)]
+/// Internal wallet event wires used for nockapp routing.
 pub enum WalletWire {
     ListNotes,
     UpdateBalance,
@@ -270,6 +275,7 @@ impl Wire for WalletWire {
 /// Represents a Noun that the wallet kernel can handle
 pub type CommandNoun<T> = Result<(T, Operation), NockAppError>;
 
+/// Validates label strings accepted by key-derivation CLI paths.
 fn validate_label(s: &str) -> Result<String, String> {
     if s.chars()
         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
@@ -281,6 +287,7 @@ fn validate_label(s: &str) -> Result<String, String> {
 }
 
 #[derive(Subcommand, Debug, Clone)]
+/// Wallet command surface for key, note, and transaction operations.
 pub enum Commands {
     /// Generates a new version 1 key pair
     Keygen,
@@ -371,12 +378,12 @@ pub enum Commands {
     /// Create a transaction (use --refund-pkh when spending legacy v0 notes)
     #[command(
         name = "create-tx",
-        override_usage = "nockchain-wallet create-tx --names <NAMES> --recipient <RECIPIENT>... --fee <FEE> [--refund-pkh <REFUND_PKH>] [--include-data <BOOL>]\n\n# NOTE: --refund-pkh is required when spending from v0 notes. For v1 notes, the refund defaults to the note owner. --include-data defaults to true (pass 'false' to exclude note data).\n# RECIPIENT accepts either legacy '<p2pkh>:<amount>' strings or JSON objects like '{\"kind\":\"multisig\",\"threshold\":2,\"addresses\":[\"pkh-a\",\"pkh-b\"],\"amount\":9000}'.\n\nExamples:\n  # Pay a simple recipient\n  nockchain-wallet create-tx \\\n    --names \"[first1 last1],[first2 last2]\" \\\n    --recipient '{\"kind\":\"p2pkh\",\"address\":\"<p2pkh-b58>\",\"amount\":10000}' \\\n    --fee 10 \\\n    --refund-pkh <p2pkh-b58>\n\n  # Create a multisig recipient\n  nockchain-wallet create-tx \\\n    --names \"[first1 last1],[first2 last2]\" \\\n    --recipient '{\"kind\":\"multisig\",\"threshold\":2,\"addresses\":[\"<pkh-a>\",\"<pkh-b>\",\"<pkh-c>\"],\"amount\":9000}' \\\n    --fee 10"
+        override_usage = "nockchain-wallet create-tx [--names <NAMES>] --recipient <RECIPIENT>... [--fee <FEE>] [--refund-pkh <REFUND_PKH>] [--include-data <BOOL>]\n\n# NOTE: --refund-pkh is required when spending from legacy v0 notes. For v1 notes, the refund defaults to the note owner. --include-data defaults to true (pass 'false' to exclude note data).\n# NOTE: if --names is omitted, the planner auto-selects spendable v1 notes. If provided, names are treated as a manual selection set.\n# NOTE: manual selection may spend either an all-v1 set or an all-v0 set; mixed-version manual sets are rejected.\n# NOTE: --fee is optional. If omitted, the planner computes a fee. If provided, it overrides the planner fee (subject to --allow-low-fee).\n# RECIPIENT accepts either legacy '<p2pkh>:<amount>' strings or JSON objects like '{\"kind\":\"multisig\",\"threshold\":2,\"addresses\":[\"pkh-a\",\"pkh-b\"],\"amount\":9000}'.\n\nExamples:\n  # Auto-select spendable v1 notes and compute fee\n  nockchain-wallet create-tx \\\n    --recipient '{\"kind\":\"p2pkh\",\"address\":\"<p2pkh-b58>\",\"amount\":10000}'\n\n  # Manually pin notes and optionally override fee\n  nockchain-wallet create-tx \\\n    --names \"[first1 last1],[first2 last2]\" \\\n    --recipient '{\"kind\":\"p2pkh\",\"address\":\"<p2pkh-b58>\",\"amount\":10000}' \\\n    --fee 10"
     )]
     CreateTx {
-        /// Names of notes to spend (comma-separated)
+        /// Optional names of notes to spend (comma-separated) for manual selection.
         #[arg(long)]
-        names: String,
+        names: Option<String>,
         /// Recipient specifications (repeat --recipient for each output)
         #[arg(
             long = "recipient",
@@ -385,9 +392,9 @@ pub enum Commands {
             action = ArgAction::Append
         )]
         recipients: Vec<RecipientSpecToken>,
-        /// Transaction fee
+        /// Optional transaction fee override.
         #[arg(long)]
-        fee: u64,
+        fee: Option<u64>,
         /// Allow fees below the estimated minimum (unsafe, testing only)
         #[arg(long, default_value = "false")]
         allow_low_fee: bool,
@@ -418,6 +425,14 @@ pub enum Commands {
         /// Note selection strategy (ascending selects smallest notes first)
         #[arg(long = "note-selection", value_enum, default_value = "ascending")]
         note_selection_strategy: NoteSelectionStrategyCli,
+    },
+
+    /// Sweep all spendable legacy v0 notes into one v1 destination address.
+    #[command(name = "migrate-v0-notes")]
+    MigrateV0Notes {
+        /// Base58-encoded v1 pay-to-pubkey-hash address that receives the migrated funds.
+        #[arg(long = "destination", value_name = "DESTINATION")]
+        destination: String,
     },
 
     /// Sign a multisig transaction
@@ -579,6 +594,7 @@ impl Commands {
             Commands::ListNotesByAddressCsv { .. } => "list-notes-by-address-csv",
             Commands::SetActiveMasterAddress { .. } => "set-active-master-address",
             Commands::CreateTx { .. } => "create-tx",
+            Commands::MigrateV0Notes { .. } => "migrate-v0-notes",
             Commands::SignMultisigTx { .. } => "sign-multisig-tx",
             Commands::SendTx { .. } => "send-tx",
             Commands::ShowTx { .. } => "show-tx",
@@ -603,5 +619,76 @@ impl Commands {
                 WatchSubcommand::Multisig { .. } => "watch-address-multisig",
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SAMPLE_P2PKH: &str = "9yPePjfWAdUnzaQKyxcRXKRa5PpUzKKEwtpECBZsUYt9Jd7egSDEWoV";
+
+    #[test]
+    fn create_tx_defaults_to_ascending_note_selection() {
+        let cli = WalletCli::try_parse_from([
+            "nockchain-wallet",
+            "create-tx",
+            "--recipient",
+            &format!("{SAMPLE_P2PKH}:100"),
+        ])
+        .expect("create-tx CLI should parse");
+
+        let Commands::CreateTx {
+            note_selection_strategy,
+            ..
+        } = cli.command
+        else {
+            panic!("expected create-tx command");
+        };
+
+        assert!(matches!(
+            note_selection_strategy,
+            NoteSelectionStrategyCli::Ascending
+        ));
+    }
+
+    #[test]
+    fn create_tx_accepts_descending_note_selection_override() {
+        let cli = WalletCli::try_parse_from([
+            "nockchain-wallet",
+            "create-tx",
+            "--recipient",
+            &format!("{SAMPLE_P2PKH}:100"),
+            "--note-selection",
+            "descending",
+        ])
+        .expect("create-tx CLI should parse");
+
+        let Commands::CreateTx {
+            note_selection_strategy,
+            ..
+        } = cli.command
+        else {
+            panic!("expected create-tx command");
+        };
+
+        assert!(matches!(
+            note_selection_strategy,
+            NoteSelectionStrategyCli::Descending
+        ));
+    }
+
+    #[test]
+    fn migrate_v0_notes_requires_destination() {
+        let cli = WalletCli::try_parse_from([
+            "nockchain-wallet", "migrate-v0-notes", "--destination", SAMPLE_P2PKH,
+        ])
+        .expect("migrate-v0-notes CLI should parse");
+
+        let Commands::MigrateV0Notes { destination } = cli.command else {
+            panic!("expected migrate-v0-notes command");
+        };
+
+        assert_eq!(destination, SAMPLE_P2PKH);
     }
 }

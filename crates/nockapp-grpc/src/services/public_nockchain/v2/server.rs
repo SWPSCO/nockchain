@@ -9,7 +9,7 @@ use nockapp::nockapp::NockAppExit;
 use nockapp::noun::slab::NounSlab;
 use nockapp::wire::WireRepr;
 use nockchain_types::tx_engine::{v0, v1};
-use nockvm::noun::SIG;
+use nockvm::noun::{NounAllocator, SIG};
 use noun_serde::{NounDecode, NounEncode};
 use tokio::sync::RwLock;
 use tokio::time::{self, Duration};
@@ -22,6 +22,7 @@ use super::block_explorer::BlockExplorerCache;
 use super::cache::{
     AddressBalanceCache, DEFAULT_PAGE_BYTES, DEFAULT_PAGE_SIZE, MAX_PAGE_BYTES, MAX_PAGE_SIZE,
 };
+use super::ip_blocklist::{blocklist_layer, IpBlocklist};
 use super::metrics::{init_metrics, NockchainGrpcApiMetrics};
 use crate::error::{NockAppGrpcError, Result};
 use crate::pb::common::v1::{Acknowledged, ErrorCode, ErrorStatus};
@@ -44,6 +45,7 @@ use crate::v2::pagination::{
 use crate::wire_conversion::{create_grpc_wire, grpc_wire_to_nockapp};
 
 const DEFAULT_HEAVIEST_CHAIN_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
+const DEFAULT_BLOCK_EXPLORER_REFRESH_INTERVAL: Duration = Duration::from_secs(120);
 
 #[async_trait]
 pub trait BalanceHandle: Send + Sync {
@@ -175,7 +177,13 @@ impl PublicNockchainGrpcServer {
             self.metrics.clone(),
         ));
 
+        // Reject blocked client IPs (from the front proxy's x-forwarded-for)
+        // before requests reach any service. Configured via the
+        // NOCKCHAIN_API_IP_BLOCKLIST env var on top of compiled-in defaults.
+        let blocklist = IpBlocklist::from_env_and_defaults();
+
         Server::builder()
+            .layer(blocklist_layer(blocklist, self.metrics.clone()))
             .add_service(health_service)
             .add_service(reflection_service_v1)
             .add_service(nockchain_api)
@@ -221,7 +229,9 @@ impl PublicNockchainGrpcServer {
         let result = match peek_result {
             Ok(Some(result_slab)) => {
                 let result_noun = unsafe { result_slab.root() };
-                match <Option<Option<(v1::BlockHeight, v1::Hash)>>>::from_noun(&result_noun) {
+                let space = result_slab.noun_space();
+                match <Option<Option<(v1::BlockHeight, v1::Hash)>>>::from_noun(&result_noun, &space)
+                {
                     Ok(opt) => Ok(opt.flatten()),
                     // Peek either returned [~ ~] or ~
                     Err(_) => Err(NockAppGrpcError::PeekReturnedNoData),
@@ -273,7 +283,7 @@ impl PublicNockchainGrpcServer {
             };
 
             info!("Block explorer refresh worker starting");
-            let mut interval = time::interval(Duration::from_secs(15));
+            let mut interval = time::interval(DEFAULT_BLOCK_EXPLORER_REFRESH_INTERVAL);
             let mut initialized = false;
             let mut backfill_started = false;
 
@@ -758,7 +768,9 @@ impl NockchainService for PublicNockchainGrpcServer {
                 match peek_result {
                     Ok(Some(result_slab)) => {
                         let result_noun = unsafe { result_slab.root() };
-                        let result = <Option<Option<v0::BalanceUpdate>>>::from_noun(&result_noun);
+                        let space = result_slab.noun_space();
+                        let result =
+                            <Option<Option<v0::BalanceUpdate>>>::from_noun(&result_noun, &space);
 
                         match result {
                             Ok(update) => {
@@ -985,7 +997,9 @@ impl NockchainService for PublicNockchainGrpcServer {
                 match peek_result {
                     Ok(Some(result_slab)) => {
                         let result_noun = unsafe { result_slab.root() };
-                        let result = <Option<Option<v1::BalanceUpdate>>>::from_noun(&result_noun);
+                        let space = result_slab.noun_space();
+                        let result =
+                            <Option<Option<v1::BalanceUpdate>>>::from_noun(&result_noun, &space);
 
                         match result {
                             Ok(update) => {
@@ -1320,7 +1334,8 @@ impl NockchainService for PublicNockchainGrpcServer {
         match peek_result {
             Ok(Some(result_slab)) => {
                 let result_noun = unsafe { result_slab.root() };
-                match <Option<Option<bool>>>::from_noun(&result_noun) {
+                let space = result_slab.noun_space();
+                match <Option<Option<bool>>>::from_noun(&result_noun, &space) {
                     Ok(opt) => {
                         let accepted = opt.flatten().unwrap_or(false);
                         timed_return(
@@ -1914,8 +1929,9 @@ mod tests {
             &self,
             path: NounSlab,
         ) -> std::result::Result<Option<NounSlab>, nockapp::nockapp::error::NockAppError> {
+            let space = path.noun_space();
             let root = unsafe { path.root() };
-            if let Ok(segments) = <Vec<String>>::from_noun(&root) {
+            if let Ok(segments) = <Vec<String>>::from_noun(&root, &space) {
                 if segments.first().map(String::as_str) == Some("heaviest-chain") {
                     let mut slab = NounSlab::new();
                     let noun = Some(Some((
@@ -1950,8 +1966,9 @@ mod tests {
             &self,
             path: NounSlab,
         ) -> std::result::Result<Option<NounSlab>, nockapp::nockapp::error::NockAppError> {
+            let space = path.noun_space();
             let root = unsafe { path.root() };
-            if let Ok(segments) = <Vec<String>>::from_noun(&root) {
+            if let Ok(segments) = <Vec<String>>::from_noun(&root, &space) {
                 if segments.first().map(String::as_str) == Some("heaviest-chain") {
                     let mut slab = NounSlab::new();
                     let noun = Some(Some((
@@ -1980,7 +1997,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn wallet_get_balance_uses_cache_for_subsequent_pages() {
         let (update, expected_names) = fixtures_v1::make_balance_update(4);
         let handle = Arc::new(MockHandleV0::new(update));
@@ -2056,7 +2073,7 @@ mod tests {
         assert_eq!(handle.peek_calls(), 1, "cache should prevent second peek");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn wallet_get_balance_by_first_name_uses_cache_for_subsequent_pages() {
         // TODO: finish test
         let (update, expected_names) = fixtures::make_balance_update(4);

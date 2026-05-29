@@ -2,14 +2,15 @@ use nockapp::noun::slab::NounSlab;
 use nockapp::test::setup_nockapp;
 use nockapp::wire::{SystemWire, Wire};
 use nockapp::NockApp;
-use nockvm::noun::{Noun, Slots, D};
+use nockvm::mem::{NockStack, NOCK_STACK_SIZE_TINY};
+use nockvm::noun::{Noun, NounAllocator, D};
 use nockvm_macros::tas;
 use tracing::info;
 
 #[tracing::instrument(skip(nockapp))]
 fn run_once(nockapp: &mut NockApp, i: u64) {
     info!("before poke construction");
-    let poke = D(tas!(b"inc")).into();
+    let poke = make_inc_poke();
     info!("Poke constructed");
     let wire = SystemWire.to_wire();
     info!("Wire constructed");
@@ -34,15 +35,20 @@ fn run_once(nockapp: &mut NockApp, i: u64) {
             option_env!("GIT_SHA")
         )
     });
-    let root = unsafe { res.root() };
-    let val: Noun = root.slot(15).unwrap_or_else(|err| {
-        panic!(
-            "Panicked with {err:?} at {}:{} (git sha: {:?})",
-            file!(),
-            line!(),
-            option_env!("GIT_SHA")
-        )
-    });
+    let space = res.noun_space();
+    let root = unsafe { *res.root() };
+    let val: Noun = root
+        .in_space(&space)
+        .slot(15)
+        .map(|handle| handle.noun())
+        .unwrap_or_else(|err| {
+            panic!(
+                "Panicked with {err:?} at {}:{} (git sha: {:?})",
+                file!(),
+                line!(),
+                option_env!("GIT_SHA")
+            )
+        });
     unsafe {
         assert!(val.raw_equals(&D(i)), "Expected {} but got {:?}", i, val);
     }
@@ -83,8 +89,9 @@ async fn test_looped_sync_peek_and_poke() {
 async fn test_sync_peek_and_poke() {
     let (_temp, mut nockapp) = setup_nockapp("test-ker.jam").await;
     tokio::task::spawn_blocking(move || {
+        let _test_arena = install_test_arena();
         for i in 1..4 {
-            let poke = D(tas!(b"inc")).into();
+            let poke = make_inc_poke();
             let wire = SystemWire.to_wire();
             let _ = nockapp.poke_sync(wire, poke).unwrap_or_else(|err| {
                 panic!(
@@ -105,15 +112,20 @@ async fn test_sync_peek_and_poke() {
                     option_env!("GIT_SHA")
                 )
             });
-            let root = unsafe { res.root() };
-            let val: Noun = root.slot(15).unwrap_or_else(|err| {
-                panic!(
-                    "Panicked with {err:?} at {}:{} (git sha: {:?})",
-                    file!(),
-                    line!(),
-                    option_env!("GIT_SHA")
-                )
-            });
+            let space = res.noun_space();
+            let root = unsafe { *res.root() };
+            let val: Noun = root
+                .in_space(&space)
+                .slot(15)
+                .map(|handle| handle.noun())
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "Panicked with {err:?} at {}:{} (git sha: {:?})",
+                        file!(),
+                        line!(),
+                        option_env!("GIT_SHA")
+                    )
+                });
             unsafe {
                 assert!(val.raw_equals(&D(i)));
             }
@@ -121,4 +133,14 @@ async fn test_sync_peek_and_poke() {
     })
     .await
     .expect("Synchronous test thread failed");
+}
+
+fn install_test_arena() -> NockStack {
+    NockStack::new(NOCK_STACK_SIZE_TINY, 0)
+}
+
+fn make_inc_poke() -> NounSlab {
+    let mut poke = NounSlab::new();
+    poke.set_root(D(tas!(b"inc")));
+    poke
 }

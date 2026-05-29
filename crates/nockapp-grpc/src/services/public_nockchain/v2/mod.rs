@@ -2,6 +2,7 @@ pub mod block_explorer;
 mod cache;
 pub mod client;
 pub mod driver;
+pub mod ip_blocklist;
 pub mod metrics;
 pub mod server;
 

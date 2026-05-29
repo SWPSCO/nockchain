@@ -1,4 +1,7 @@
+use std::collections::HashSet;
+use std::net::IpAddr;
 use std::num::NonZero;
+use std::str::FromStr;
 use std::time::Duration;
 
 use config::{Config, ConfigError, Environment};
@@ -69,6 +72,21 @@ const POKE_TIMEOUT_SECS: u64 = 180;
 
 // Default max failed pings before closing connection
 const FAILED_PINGS_BEFORE_CLOSE: u64 = 4;
+
+const IP_HYGIENE_ENABLED: bool = true;
+const ADDRESS_COOLDOWN: Duration = Duration::from_secs(3600);
+const IP_EXCLUSION: Duration = Duration::from_secs(3600);
+const IP_EXTENDED_EXCLUSION: Duration = Duration::from_secs(21600);
+const EVIDENCE_WINDOW: Duration = Duration::from_secs(600);
+const IP_EXCLUSION_HISTORY: Duration = Duration::from_secs(86400);
+const PERMISSION_DENIED_COOLDOWN: Duration = Duration::from_secs(300);
+const WRONG_PEER_ID_IP_THRESHOLD: usize = 3;
+const DIAL_FAILURE_IP_THRESHOLD: usize = 5;
+const SAME_IP_KAD_ENTRY_THRESHOLD: usize = 8;
+const MAX_AUTO_EXCLUSION: Duration = Duration::from_secs(21600);
+const MAX_EXCLUSION_ENTRIES: usize = 4096;
+const REQUEST_PEER_COOLDOWN: Duration = Duration::from_secs(300);
+const FAIL2BAN_ON_TEMP_EXCLUSION: bool = false;
 
 /// Configuration struct that allows overriding default constants from environment variables
 #[derive(Debug, Deserialize, Clone)]
@@ -179,6 +197,66 @@ pub struct LibP2PConfig {
     /// Number of failed pings before closing connection
     #[serde(default = "default_failed_pings_before_close")]
     pub failed_pings_before_close: u64,
+
+    /// Whether temporary IP and endpoint hygiene is active
+    #[serde(default = "default_ip_hygiene_enabled")]
+    pub ip_hygiene_enabled: bool,
+
+    /// Address cooldown duration after endpoint-local evidence
+    #[serde(default = "default_address_cooldown_secs")]
+    pub address_cooldown_secs: u64,
+
+    /// First IP exclusion duration after same-IP evidence crosses a threshold
+    #[serde(default = "default_ip_exclusion_secs")]
+    pub ip_exclusion_secs: u64,
+
+    /// Recurrent IP exclusion duration
+    #[serde(default = "default_ip_extended_exclusion_secs")]
+    pub ip_extended_exclusion_secs: u64,
+
+    /// Evidence window for escalation
+    #[serde(default = "default_evidence_window_secs")]
+    pub evidence_window_secs: u64,
+
+    /// Time horizon for repeated exclusion escalation
+    #[serde(default = "default_ip_exclusion_history_secs")]
+    pub ip_exclusion_history_secs: u64,
+
+    /// Cooldown for local PermissionDenied transport failures
+    #[serde(default = "default_permission_denied_cooldown_secs")]
+    pub permission_denied_cooldown_secs: u64,
+
+    /// Distinct wrong peer IDs or ports needed before IP exclusion
+    #[serde(default = "default_wrong_peer_id_ip_threshold")]
+    pub wrong_peer_id_ip_threshold: usize,
+
+    /// Failed endpoints on one IP needed before IP exclusion
+    #[serde(default = "default_dial_failure_ip_threshold")]
+    pub dial_failure_ip_threshold: usize,
+
+    /// Local Kademlia cardinality that marks same-IP pollution
+    #[serde(default = "default_same_ip_kad_entry_threshold")]
+    pub same_ip_kad_entry_threshold: usize,
+
+    /// Upper bound for automatic exclusion duration
+    #[serde(default = "default_max_auto_exclusion_secs")]
+    pub max_auto_exclusion_secs: u64,
+
+    /// Max evidence events retained in memory
+    #[serde(default = "default_max_exclusion_entries")]
+    pub max_exclusion_entries: usize,
+
+    /// Peer request cooldown after request-response failure
+    #[serde(default = "default_request_peer_cooldown_secs")]
+    pub request_peer_cooldown_secs: u64,
+
+    /// Comma-separated IPs exempt from automatic exclusion
+    #[serde(default)]
+    pub exclusion_allow_ips: String,
+
+    /// Emit fail2ban-compatible lines for local peer blocks and temporary exclusions
+    #[serde(default = "default_fail2ban_on_temp_exclusion")]
+    pub fail2ban_on_temp_exclusion: bool,
 }
 
 // Default value functions
@@ -259,6 +337,48 @@ fn default_poke_timeout_secs() -> u64 {
 fn default_failed_pings_before_close() -> u64 {
     FAILED_PINGS_BEFORE_CLOSE // Number of failed pings before closing connection
 }
+fn default_ip_hygiene_enabled() -> bool {
+    IP_HYGIENE_ENABLED
+}
+fn default_address_cooldown_secs() -> u64 {
+    ADDRESS_COOLDOWN.as_secs()
+}
+fn default_ip_exclusion_secs() -> u64 {
+    IP_EXCLUSION.as_secs()
+}
+fn default_ip_extended_exclusion_secs() -> u64 {
+    IP_EXTENDED_EXCLUSION.as_secs()
+}
+fn default_evidence_window_secs() -> u64 {
+    EVIDENCE_WINDOW.as_secs()
+}
+fn default_ip_exclusion_history_secs() -> u64 {
+    IP_EXCLUSION_HISTORY.as_secs()
+}
+fn default_permission_denied_cooldown_secs() -> u64 {
+    PERMISSION_DENIED_COOLDOWN.as_secs()
+}
+fn default_wrong_peer_id_ip_threshold() -> usize {
+    WRONG_PEER_ID_IP_THRESHOLD
+}
+fn default_dial_failure_ip_threshold() -> usize {
+    DIAL_FAILURE_IP_THRESHOLD
+}
+fn default_same_ip_kad_entry_threshold() -> usize {
+    SAME_IP_KAD_ENTRY_THRESHOLD
+}
+fn default_max_auto_exclusion_secs() -> u64 {
+    MAX_AUTO_EXCLUSION.as_secs()
+}
+fn default_max_exclusion_entries() -> usize {
+    MAX_EXCLUSION_ENTRIES
+}
+fn default_request_peer_cooldown_secs() -> u64 {
+    REQUEST_PEER_COOLDOWN.as_secs()
+}
+fn default_fail2ban_on_temp_exclusion() -> bool {
+    FAIL2BAN_ON_TEMP_EXCLUSION
+}
 
 // Do _not_ use this default implementation in production code. It's just a fallback.
 // Use from_env() to load from environment variables with sensible defaults.
@@ -288,7 +408,135 @@ impl Default for LibP2PConfig {
             seen_tx_clear_interval: default_seen_tx_clear_interval(),
             poke_timeout_secs: default_poke_timeout_secs(),
             failed_pings_before_close: default_failed_pings_before_close(),
+            ip_hygiene_enabled: default_ip_hygiene_enabled(),
+            address_cooldown_secs: default_address_cooldown_secs(),
+            ip_exclusion_secs: default_ip_exclusion_secs(),
+            ip_extended_exclusion_secs: default_ip_extended_exclusion_secs(),
+            evidence_window_secs: default_evidence_window_secs(),
+            ip_exclusion_history_secs: default_ip_exclusion_history_secs(),
+            permission_denied_cooldown_secs: default_permission_denied_cooldown_secs(),
+            wrong_peer_id_ip_threshold: default_wrong_peer_id_ip_threshold(),
+            dial_failure_ip_threshold: default_dial_failure_ip_threshold(),
+            same_ip_kad_entry_threshold: default_same_ip_kad_entry_threshold(),
+            max_auto_exclusion_secs: default_max_auto_exclusion_secs(),
+            max_exclusion_entries: default_max_exclusion_entries(),
+            request_peer_cooldown_secs: default_request_peer_cooldown_secs(),
+            exclusion_allow_ips: String::new(),
+            fail2ban_on_temp_exclusion: default_fail2ban_on_temp_exclusion(),
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PeerExclusionConfig {
+    pub(crate) enabled: bool,
+    pub(crate) address_cooldown_secs: u64,
+    pub(crate) ip_exclusion_secs: u64,
+    pub(crate) ip_extended_exclusion_secs: u64,
+    pub(crate) evidence_window_secs: u64,
+    pub(crate) ip_exclusion_history_secs: u64,
+    pub(crate) permission_denied_cooldown_secs: u64,
+    pub(crate) wrong_peer_id_ip_threshold: usize,
+    pub(crate) dial_failure_ip_threshold: usize,
+    pub(crate) same_ip_kad_entry_threshold: usize,
+    pub(crate) max_auto_exclusion_secs: u64,
+    pub(crate) max_exclusion_entries: usize,
+    pub(crate) request_peer_cooldown_secs: u64,
+    pub(crate) allow_ips: HashSet<IpAddr>,
+    pub(crate) fail2ban_on_temp_exclusion: bool,
+}
+
+impl Default for PeerExclusionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_ip_hygiene_enabled(),
+            address_cooldown_secs: default_address_cooldown_secs(),
+            ip_exclusion_secs: default_ip_exclusion_secs(),
+            ip_extended_exclusion_secs: default_ip_extended_exclusion_secs(),
+            evidence_window_secs: default_evidence_window_secs(),
+            ip_exclusion_history_secs: default_ip_exclusion_history_secs(),
+            permission_denied_cooldown_secs: default_permission_denied_cooldown_secs(),
+            wrong_peer_id_ip_threshold: default_wrong_peer_id_ip_threshold(),
+            dial_failure_ip_threshold: default_dial_failure_ip_threshold(),
+            same_ip_kad_entry_threshold: default_same_ip_kad_entry_threshold(),
+            max_auto_exclusion_secs: default_max_auto_exclusion_secs(),
+            max_exclusion_entries: default_max_exclusion_entries(),
+            request_peer_cooldown_secs: default_request_peer_cooldown_secs(),
+            allow_ips: HashSet::new(),
+            fail2ban_on_temp_exclusion: default_fail2ban_on_temp_exclusion(),
+        }
+    }
+}
+
+impl PeerExclusionConfig {
+    pub(crate) fn from_libp2p_config(config: &LibP2PConfig) -> Result<Self, ConfigError> {
+        let mut allow_ips = HashSet::new();
+        for raw in config.exclusion_allow_ips.split(',') {
+            let raw = raw.trim();
+            if raw.is_empty() {
+                continue;
+            }
+            let ip = IpAddr::from_str(raw).map_err(|err| {
+                ConfigError::Message(format!(
+                    "invalid NOCKCHAIN_LIBP2P_EXCLUSION_ALLOW_IPS entry {raw}: {err}"
+                ))
+            })?;
+            allow_ips.insert(ip);
+        }
+
+        Ok(Self {
+            enabled: config.ip_hygiene_enabled,
+            address_cooldown_secs: config.address_cooldown_secs,
+            ip_exclusion_secs: config.ip_exclusion_secs,
+            ip_extended_exclusion_secs: config.ip_extended_exclusion_secs,
+            evidence_window_secs: config.evidence_window_secs,
+            ip_exclusion_history_secs: config.ip_exclusion_history_secs,
+            permission_denied_cooldown_secs: config.permission_denied_cooldown_secs,
+            wrong_peer_id_ip_threshold: config.wrong_peer_id_ip_threshold,
+            dial_failure_ip_threshold: config.dial_failure_ip_threshold,
+            same_ip_kad_entry_threshold: config.same_ip_kad_entry_threshold,
+            max_auto_exclusion_secs: config.max_auto_exclusion_secs,
+            max_exclusion_entries: config.max_exclusion_entries,
+            request_peer_cooldown_secs: config.request_peer_cooldown_secs,
+            allow_ips,
+            fail2ban_on_temp_exclusion: config.fail2ban_on_temp_exclusion,
+        })
+    }
+
+    pub(crate) fn address_cooldown(&self) -> Duration {
+        Duration::from_secs(self.address_cooldown_secs)
+    }
+
+    pub(crate) fn ip_exclusion(&self) -> Duration {
+        Duration::from_secs(self.ip_exclusion_secs)
+    }
+
+    pub(crate) fn ip_extended_exclusion(&self) -> Duration {
+        Duration::from_secs(self.ip_extended_exclusion_secs)
+    }
+
+    pub(crate) fn evidence_window(&self) -> Duration {
+        Duration::from_secs(self.evidence_window_secs)
+    }
+
+    pub(crate) fn ip_exclusion_history(&self) -> Duration {
+        Duration::from_secs(self.ip_exclusion_history_secs)
+    }
+
+    pub(crate) fn permission_denied_cooldown(&self) -> Duration {
+        Duration::from_secs(self.permission_denied_cooldown_secs)
+    }
+
+    pub(crate) fn max_auto_exclusion(&self) -> Duration {
+        Duration::from_secs(self.max_auto_exclusion_secs)
+    }
+
+    pub(crate) fn event_history(&self) -> Duration {
+        self.evidence_window().max(self.ip_exclusion_history())
+    }
+
+    pub(crate) fn request_peer_cooldown(&self) -> Duration {
+        Duration::from_secs(self.request_peer_cooldown_secs)
     }
 }
 
@@ -400,5 +648,62 @@ impl LibP2PConfig {
 
     pub fn failed_pings_before_close(&self) -> u64 {
         self.failed_pings_before_close
+    }
+
+    pub(crate) fn peer_exclusion_config(&self) -> Result<PeerExclusionConfig, ConfigError> {
+        PeerExclusionConfig::from_libp2p_config(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+    use crate::config::{LibP2PConfig, PeerExclusionConfig};
+
+    #[test]
+    fn peer_exclusion_config_parses_allow_ips_and_overrides() {
+        let config = LibP2PConfig {
+            ip_hygiene_enabled: false,
+            address_cooldown_secs: 7,
+            ip_exclusion_secs: 11,
+            ip_extended_exclusion_secs: 13,
+            evidence_window_secs: 17,
+            ip_exclusion_history_secs: 19,
+            permission_denied_cooldown_secs: 23,
+            wrong_peer_id_ip_threshold: 3,
+            dial_failure_ip_threshold: 5,
+            same_ip_kad_entry_threshold: 8,
+            max_auto_exclusion_secs: 29,
+            max_exclusion_entries: 31,
+            request_peer_cooldown_secs: 37,
+            exclusion_allow_ips: String::from("203.0.113.1,2001:db8::1"),
+            fail2ban_on_temp_exclusion: true,
+            ..LibP2PConfig::default()
+        };
+
+        let exclusion =
+            PeerExclusionConfig::from_libp2p_config(&config).expect("valid exclusion config");
+
+        assert!(!exclusion.enabled);
+        assert_eq!(exclusion.address_cooldown_secs, 7);
+        assert_eq!(exclusion.max_exclusion_entries, 31);
+        assert!(exclusion.fail2ban_on_temp_exclusion);
+        assert!(exclusion
+            .allow_ips
+            .contains(&IpAddr::V4(Ipv4Addr::new(203, 0, 113, 1))));
+        assert!(exclusion.allow_ips.contains(&IpAddr::V6(
+            "2001:db8::1".parse::<Ipv6Addr>().expect("valid ipv6")
+        )));
+    }
+
+    #[test]
+    fn peer_exclusion_config_rejects_invalid_allow_ip() {
+        let config = LibP2PConfig {
+            exclusion_allow_ips: String::from("203.0.113.1,nope"),
+            ..LibP2PConfig::default()
+        };
+
+        assert!(PeerExclusionConfig::from_libp2p_config(&config).is_err());
     }
 }

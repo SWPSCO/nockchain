@@ -9,6 +9,7 @@ use libp2p::{
 };
 
 use crate::config::LibP2PConfig;
+use crate::ip_block::{self, PeerExclusions};
 use crate::messages::{NockchainRequest, NockchainResponse};
 
 #[derive(NetworkBehaviour)]
@@ -20,9 +21,11 @@ pub(crate) struct NockchainBehaviour {
     /// Connectivity testing
     ping: ping::Behaviour,
     /// Peer discovery via a DHT
-    pub kad: kad::Behaviour<kad::store::MemoryStore>,
-    /// Peer banning
+    pub kad: ip_block::IpFilteredKad,
+    /// Peer banning (by peer id)
     pub allow_block_list: allow_block_list::Behaviour<allow_block_list::BlockedPeers>,
+    /// Connection gating by IP (deny banned IPs regardless of peer id)
+    pub ip_block: ip_block::Behaviour,
     /// Peer whitelisting
     pub allow_peers: Toggle<allow_block_list::Behaviour<allow_block_list::AllowedPeers>>,
     /// Connection limiting
@@ -41,6 +44,7 @@ impl NockchainBehaviour {
         allowed: Option<allow_block_list::Behaviour<allow_block_list::AllowedPeers>>,
         limits: connection_limits::ConnectionLimits,
         memory_limits: Option<memory_connection_limits::Behaviour>,
+        peer_exclusions: PeerExclusions,
     ) -> impl FnOnce(&libp2p::identity::Keypair) -> Self {
         move |keypair: &libp2p::identity::Keypair| {
             let peer_id = libp2p::identity::PeerId::from_public_key(&keypair.public());
@@ -92,8 +96,9 @@ impl NockchainBehaviour {
             NockchainBehaviour {
                 ping: ping::Behaviour::default(),
                 identify: identify_behaviour,
-                kad: kad_behaviour,
+                kad: ip_block::IpFilteredKad::new(kad_behaviour, peer_exclusions.clone()),
                 allow_block_list: allow_block_list::Behaviour::default(),
+                ip_block: ip_block::Behaviour::new(peer_exclusions),
                 allow_peers,
                 request_response: request_response_behaviour,
                 connection_limits: connection_limits_behaviour,

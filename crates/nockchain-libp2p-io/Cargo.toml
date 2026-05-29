@@ -44,5 +44,7 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 cbor4ii = { workspace = true, features = ["serde1", "use_std"] }
+hex = { workspace = true }
 quickcheck = { workspace = true }
 serde_cbor = { workspace = true }
+serde_json = { workspace = true }

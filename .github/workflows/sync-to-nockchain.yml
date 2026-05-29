@@ -4,6 +4,19 @@ on:
   push:
     branches:
       - master
+  workflow_dispatch:
+    inputs:
+      force_sync:
+        description: Force sync even if master heads already match
+        required: false
+        default: false
+        type: boolean
+  schedule:
+    - cron: "*/30 * * * *"
+
+concurrency:
+  group: sync-to-nockchain-master
+  cancel-in-progress: false
 
 jobs:
   sync:
@@ -14,7 +27,55 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Plan sync
+        id: plan
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          FORCE_SYNC: ${{ inputs.force_sync || 'false' }}
+        run: |
+          set -euo pipefail
+          staging_sha="$(git rev-parse HEAD)"
+          nockchain_sha="$(git ls-remote https://github.com/nockchain/nockchain.git refs/heads/master | awk '{print $1}')"
+
+          if [ -z "$nockchain_sha" ]; then
+            echo "failed to resolve nockchain/nockchain master SHA" >&2
+            exit 1
+          fi
+
+          should_sync=false
+          reason="already-in-sync"
+
+          if [ "$EVENT_NAME" = "push" ]; then
+            should_sync=true
+            reason="push-to-master"
+          elif [ "$FORCE_SYNC" = "true" ]; then
+            should_sync=true
+            reason="manual-force"
+          elif [ "$staging_sha" != "$nockchain_sha" ]; then
+            should_sync=true
+            reason="heads-diverged"
+          fi
+
+          echo "staging_sha=$staging_sha" >> "$GITHUB_OUTPUT"
+          echo "nockchain_sha=$nockchain_sha" >> "$GITHUB_OUTPUT"
+          echo "should_sync=$should_sync" >> "$GITHUB_OUTPUT"
+          echo "reason=$reason" >> "$GITHUB_OUTPUT"
+
+      - name: Sync plan summary
+        run: |
+          echo "event=${{ github.event_name }}"
+          echo "reason=${{ steps.plan.outputs.reason }}"
+          echo "staging master=${{ steps.plan.outputs.staging_sha }}"
+          echo "nockchain master=${{ steps.plan.outputs.nockchain_sha }}"
+          echo "should_sync=${{ steps.plan.outputs.should_sync }}"
+
       - name: Push to nockchain/nockchain
+        if: steps.plan.outputs.should_sync == 'true'
         run: |
           git remote add nockchain https://bitemyapp:${{ secrets.NOCKCHAIN_SYNC_TOKEN }}@github.com/nockchain/nockchain.git
           git push nockchain master:master
+
+      - name: Skip sync
+        if: steps.plan.outputs.should_sync != 'true'
+        run: |
+          echo "Skipping sync: staging and nockchain master are already aligned"

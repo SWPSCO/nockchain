@@ -36,6 +36,8 @@ message NoteV1 {
 }
 
 message NoteData {
+  // TODO(grpc): Add an optional typed/decoded representation (e.g. DecodedNoteData)
+  // so clients can consume known note-data payloads without re-decoding `blob`.
   repeated NoteDataEntry entries = 1;
 }
 

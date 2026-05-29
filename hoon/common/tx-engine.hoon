@@ -1,19 +1,36 @@
 /=  v0  /common/tx-engine-0
 /=  v1  /common/tx-engine-1
 /=  *  /common/zeke
-/=  *  /common/zoon
+/=  *  /common/h-zoon
 /=  *  /common/zose
 =>  |%
     ++  blockchain-constants  blockchain-constants:v1
     --
 |_  blockchain-constants
-+*  v0  ~(. ^v0 +63:+<)
++*  v0  ~(. ^v0 +126:+<)
 ::  constants
 ++  quarter-ted  ^~((div target-epoch-duration 4))
 ++  quadruple-ted  ^~((mul target-epoch-duration 4))
 ++  genesis-target  ^~((chunk:bignum genesis-target-atom))
 ++  max-target  ^~((chunk:bignum max-target-atom))
 ++  nicks-per-nock  ^~((bex 16))
+::
+::  +post-asert-activation / +pre-asert-activation: 1-arg activation
+::    predicates, bound to the kernel's blockchain-constants. The
+::    boundary semantics also live in the 2-arg
+::    +post-asert-activation:v1 (used by +new-candidate); the inline
+::    `gte` here is the canonical definition for callers that read
+::    asert-phase from blockchain-constants. See
+::    014-aletheia-emissions-audit.md finding #3.
+++  post-asert-activation
+  |=  height=@
+  ^-  ?
+  (gte height asert-phase)
+::
+++  pre-asert-activation
+  |=  height=@
+  ^-  ?
+  (lth height asert-phase)
 ::
 ++  bignum  bignum:v0
 ++  block-commitment  block-commitment:v0
@@ -41,6 +58,7 @@
     |%
     +$  form  $|(^form |=(* %&))
     ++  new  ^new
+    ++  new-with-fund-share  ^new-with-fund-share
     --
   ++  based
     |=  =form
@@ -64,6 +82,9 @@
 ++  genesis-seal  genesis-seal:v0
 ++  genesis-template  genesis-template:v0
 ++  hash  hash:v0
+::  $fund-address: lock-script hash receiving the 20% protocol-fund
+::  share of every post-asert-activation coinbase. See tx-engine-1.hoon.
+++  fund-address  fund-address:v1
 ++  local-page
   =<  form
   |%
@@ -76,6 +97,12 @@
     ^-  page
     ?^  -.lp  (to-page:local-page:v0 lp)
     (to-page:local-page:v1 lp)
+  ::
+  ++  to-page-no-pow
+    |=  lp=form
+    ^-  page
+    ?^  -.lp  (to-page-no-pow:local-page:v0 lp)
+    (to-page-no-pow:local-page:v1 lp)
   ::
   ++  get
     |_  =form
@@ -224,69 +251,6 @@
   =+  witness:v1
   |%
   +$  form  $|(^form |=(* %&))
-  ::
-  ::  +make-pkh: build witness with pkh signatures for sig-hash
-  ++  make-pkh
-    |=  $:  root=^hash
-            sc=spend-condition
-            sig-hash=^hash
-            keys=(list [schnorr-seckey schnorr-pubkey])
-        ==
-    ^-  form
-    =/  pmap=pkh-signature:v1
-      %+  roll  keys
-      |=  $:  kp=[sk=schnorr-seckey pk=schnorr-pubkey]
-              acc=pkh-signature:v1
-          ==
-      =/  sig=schnorr-signature
-        %+  sign:affine:belt-schnorr:cheetah
-          sk.kp
-        sig-hash
-      (~(put z-by acc) (hash:schnorr-pubkey pk.kp) [pk.kp sig])
-    %*  .  *^form
-      lmp  (build-lock-merkle-proof:lock sc 1)
-      pkh  pmap
-      hax  *(z-map ^hash *)
-      tim  ~
-    ==
-  ::
-  ::  +make-hax: build witness for %hax lock with preimage
-  ++  make-hax
-    |=  [root=^hash sc=spend-condition h=^hash pre=*]
-    ^-  form
-    %*  .  *^form
-      lmp  (build-lock-merkle-proof:lock sc 1)
-      pkh  *(z-map ^hash [pk=schnorr-pubkey sig=schnorr-signature])
-      hax  (~(put z-by *(z-map ^hash *)) h pre)
-      tim  ~
-    ==
-  ::
-  ::  +make-hax-pkh: build witness for combined %hax AND %pkh
-  ++  make-hax-pkh
-    |=  $:  root=^hash
-            sc=spend-condition
-            sig-hash=^hash
-            keys=(list [schnorr-seckey schnorr-pubkey])
-            h=^hash
-            pre=*
-        ==
-    ^-  form
-    =/  pmap=pkh-signature:v1
-      %+  roll  keys
-      |=  $:  kp=[sk=schnorr-seckey pk=schnorr-pubkey]
-              acc=pkh-signature:v1
-          ==
-      =/  sig=schnorr-signature
-        %+  sign:affine:belt-schnorr:cheetah
-          sk.kp
-        sig-hash
-      (~(put z-by acc) (hash:schnorr-pubkey pk.kp) [pk.kp sig])
-    %*  .  *^form
-      lmp  (build-lock-merkle-proof:lock sc 1)
-      pkh  pmap
-      hax  (~(put z-by *(z-map ^hash *)) h pre)
-      tim  ~
-    ==
   --::+witness
 ::
 ::  TODO: remove
@@ -386,11 +350,13 @@
   ::
   ::  +new-candidate: build candidate page for mining with v1 shares
   ::
-  ::    creates a v1 page with hash-based coinbase-split.
+  ::    creates a v1 page with hash-based coinbase-split. `asert-phase`
+  ::    threads through so post-asert-activation candidates carry the 80/20
+  ::    miner/fund split (014-aletheia).
   ++  new-candidate
-    |=  [par=form now=@da target-bn=bignum:bn =shares]
+    |=  [par=form now=@da target-bn=bignum:bn =shares asert-phase=@]
     ^-  form
-    (new-candidate:page:v1 par now target-bn shares)
+    (new-candidate:page:v1 par now target-bn shares asert-phase)
   ::
   ++  get
     |_  =form
@@ -1116,7 +1082,7 @@
 ++  txs
   =<  form
   |%
-  +$  form  (z-map tx-id tx)
+  +$  form  (h-map tx-id tx)
   --
 ::
 ::  $tx-acc: accumulate transactions against a balance to create a new balance
@@ -1124,26 +1090,26 @@
   =<  form
   |%
   +$  form
-    $:  balance=(z-map nname nnote)                     ::  current balance
+    $:  balance=(h-map nname nnote)                     ::  current balance
         height=page-number                              ::  origin height
         fees=coins                                      ::  total fee
         =size                                           ::  total size
         =txs                                            ::  valid txs
     ==
   ++  new
-    |=  $:  initial-balance=(unit (z-map nname nnote))
+    |=  $:  initial-balance=(unit (h-map nname nnote))
             initial-height=page-number
         ==
     ^-  form
     %*  .  *form
-      balance  ?~  initial-balance  *(z-map nname nnote)
+      balance  ?~  initial-balance  *(h-map nname nnote)
                u.initial-balance
       height   initial-height
     ==
   ::
   ++  txs-size-by-set
     |=  form
-    %-  ~(rep z-by txs)
+    %-  ~(rep h-by txs)
     |=  [[=tx-id =tx] sum-sizes=^size]
     %+  add  sum-sizes
     ~(size get:raw-tx raw-tx.tx)
@@ -1215,7 +1181,7 @@
     :-  %.y
     %_  form
       size  (add size.form computed-size)
-      txs   (~(put z-by txs.form) id.tx0 agg-tx)
+      txs   (~(put h-by txs.form) id.tx0 agg-tx)
     ==
     ::
     ++  add-outputs
@@ -1225,9 +1191,9 @@
       |:  [op=*output:v0 acc=`(reason _form)`[%.y form]]
       ?.  ?=(%.y -.acc)  acc
       =/  f=_form  p.acc
-      ?:  (~(has z-by balance.f) name.note.op)
+      ?:  (~(has h-by balance.f) name.note.op)
         [%.n %v0-output-already-exists]
-      [%.y f(balance (~(put z-by balance.f) name.note.op note.op))]
+      [%.y f(balance (~(put h-by balance.f) name.note.op note.op))]
     ::
     ++  consume-inputs
       |=  [ips=(z-map nname input:v0) page-num=page-number]
@@ -1238,7 +1204,7 @@
           ==
       ?.  ?=(%.y -.acc)  acc
       =/  [tir=timelock-range f=^form]  p.acc
-      ?.  =(`note.ip (~(get z-by balance.f) name.note.ip))
+      ?.  =(`note.ip (~(get h-by balance.f) name.note.ip))
         [%.n %v0-input-missing]
       =/  new-tir=timelock-range
         %+  merge:timelock-range  tir
@@ -1248,7 +1214,7 @@
       :-  %.y
       :-  new-tir
       %_  f
-        balance  (~(del z-by balance.f) name.note.ip)
+        balance  (~(del h-by balance.f) name.note.ip)
         fees     (add fees.f fee.spend.ip)
       ==
     --
@@ -1282,7 +1248,7 @@
     :-  %.y
     %_  form
       size  (add size.form ~(size get:raw-tx raw1))
-      txs   (~(put z-by txs.form) (compute-id:raw-tx raw1) tx1)
+      txs   (~(put h-by txs.form) (compute-id:raw-tx raw1) tx1)
     ==
     ::
     ++  add-outputs
@@ -1295,9 +1261,9 @@
       =/  note=nnote  note.op
       ?.  ?=(@ -.note)  [%.n %v1-output-wrong-note-version]
       =/  nam=nname  name.note
-      ?:  (~(has z-by balance.f) nam)
+      ?:  (~(has h-by balance.f) nam)
         [%.n %v1-output-already-exists]
-      [%.y f(balance (~(put z-by balance.f) nam note))]
+      [%.y f(balance (~(put h-by balance.f) nam note))]
     ::
     ++  consume-inputs
       |=  sps=spends
@@ -1308,9 +1274,9 @@
         |:  [nam=*nname acc=`(reason ^form)`[%.y form]]
         ?.  ?=(%.y -.acc)  acc
         =/  f=^form  p.acc
-        ?.  (~(has z-by balance.f) nam)
+        ?.  (~(has h-by balance.f) nam)
           [%.n %v1-input-missing]
-        [%.y f(balance (~(del z-by balance.f) nam))]
+        [%.y f(balance (~(del h-by balance.f) nam))]
       ?.  ?=(%.y -.remove-result)  remove-result
       [%.y p.remove-result(fees (add fees.p.remove-result fees-add))]
     --

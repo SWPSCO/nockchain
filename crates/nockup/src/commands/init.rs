@@ -159,7 +159,11 @@ fn copy_dir_recursive(
         let entry = entry?;
         let src_path = entry.path();
         let file_name = entry.file_name();
-        let dest_path = dest_dir.join(&file_name);
+        let file_name_str = file_name.to_string_lossy();
+        let dest_file_name = file_name_str
+            .strip_suffix(".template")
+            .unwrap_or(file_name_str.as_ref());
+        let dest_path = dest_dir.join(dest_file_name);
 
         if src_path.is_dir() {
             // Create subdirectory and recurse

@@ -76,20 +76,36 @@ pub fn spawn_broadcast_stop_to_peers(
     }
 }
 
-pub struct IngressService {
+struct IngressRuntimeDeps {
     runtime: Arc<BridgeRuntimeHandle>,
-    node_id: u64,
-    start_time: Instant,
     /// Signer for creating Ethereum signatures on proposals
     signer: Arc<BridgeSigner>,
     /// Cache for aggregating signatures from multiple bridge nodes
     proposal_cache: Arc<ProposalCache>,
+}
+
+struct IngressNodeState {
+    node_id: u64,
+    start_time: Instant,
+}
+
+struct IngressControl {
     /// Shared TUI state for updating proposal display on peer broadcasts
     bridge_status: BridgeStatus,
-    /// Mapping from Ethereum address to node ID for TUI signature display
-    address_to_node_id: std::collections::HashMap<Address, u64>,
     stop_controller: crate::stop::StopController,
-    peers: Vec<crate::health::PeerEndpoint>,
+}
+
+struct IngressPeerState {
+    /// Mapping from Ethereum address to node ID for TUI signature display
+    address_to_node_id: Arc<std::collections::HashMap<Address, u64>>,
+    peers: Arc<Vec<crate::health::PeerEndpoint>>,
+}
+
+pub struct IngressService {
+    deps: IngressRuntimeDeps,
+    node: IngressNodeState,
+    control: IngressControl,
+    peers: IngressPeerState,
 }
 
 impl IngressService {
@@ -105,20 +121,28 @@ impl IngressService {
         peers: Vec<crate::health::PeerEndpoint>,
     ) -> Self {
         Self {
-            runtime,
-            node_id,
-            start_time: Instant::now(),
-            signer,
-            proposal_cache,
-            bridge_status,
-            address_to_node_id,
-            stop_controller,
-            peers,
+            deps: IngressRuntimeDeps {
+                runtime,
+                signer,
+                proposal_cache,
+            },
+            node: IngressNodeState {
+                node_id,
+                start_time: Instant::now(),
+            },
+            control: IngressControl {
+                bridge_status,
+                stop_controller,
+            },
+            peers: IngressPeerState {
+                address_to_node_id: Arc::new(address_to_node_id),
+                peers: Arc::new(peers),
+            },
         }
     }
 
     fn uptime_millis(&self) -> u64 {
-        self.start_time.elapsed().as_millis() as u64
+        self.node.start_time.elapsed().as_millis() as u64
     }
 
     async fn trigger_stop(
@@ -137,7 +161,7 @@ impl IngressService {
 
         let resolved_last = match last {
             Some(last) => Some(last),
-            None => match self.runtime.peek_stop_info().await {
+            None => match self.deps.runtime.peek_stop_info().await {
                 Ok(last) => last,
                 Err(err) => {
                     warn!(
@@ -157,11 +181,11 @@ impl IngressService {
             at: SystemTime::now(),
         };
 
-        if !self.stop_controller.trigger(info) {
+        if !self.control.stop_controller.trigger(info) {
             return;
         }
 
-        self.bridge_status.push_alert(
+        self.control.bridge_status.push_alert(
             AlertSeverity::Error,
             "Bridge Stopped".to_string(),
             reason.clone(),
@@ -173,7 +197,7 @@ impl IngressService {
         );
 
         if let Some(last) = resolved_last.clone() {
-            if let Err(err) = self.runtime.send_stop(last).await {
+            if let Err(err) = self.deps.runtime.send_stop(last).await {
                 warn!(
                     target: "bridge.ingress",
                     error=%err,
@@ -209,7 +233,7 @@ impl IngressService {
             };
 
         let msg = StopBroadcast {
-            sender_node_id: self.node_id,
+            sender_node_id: self.node.node_id,
             reason: reason.clone(),
             last_base_hash,
             last_base_height,
@@ -218,7 +242,7 @@ impl IngressService {
             timestamp,
         };
 
-        spawn_broadcast_stop_to_peers(&self.peers, msg, "bridge.ingress");
+        spawn_broadcast_stop_to_peers(self.peers.peers.as_ref(), msg, "bridge.ingress");
     }
 
     /// Verify an Ethereum signature and recover the signer address.
@@ -295,7 +319,7 @@ impl BridgeIngress for IngressService {
             .map(|d| d.as_millis() as u64)
             .unwrap_or_default();
         let response = HealthCheckResponse {
-            responder_node_id: self.node_id,
+            responder_node_id: self.node.node_id,
             uptime_millis: self.uptime_millis(),
             status: "healthy".into(),
             timestamp_millis,
@@ -379,7 +403,7 @@ impl BridgeIngress for IngressService {
         let mut proposal_hash = [0u8; 32];
         proposal_hash.copy_from_slice(&req.proposal_hash);
 
-        if signer_address == self.signer.address() {
+        if signer_address == self.deps.signer.address() {
             metrics.ingress_broadcast_signature_ignored_self.increment();
             tracing::debug!(
                 target: "bridge.ingress",
@@ -392,7 +416,7 @@ impl BridgeIngress for IngressService {
             }));
         }
 
-        let signer_is_known = self.address_to_node_id.contains_key(&signer_address);
+        let signer_is_known = self.peers.address_to_node_id.contains_key(&signer_address);
         if signer_is_known {
             metrics.ingress_broadcast_signature_known_signer.increment();
         } else {
@@ -411,7 +435,7 @@ impl BridgeIngress for IngressService {
             "received signature broadcast"
         );
 
-        let existing_state = match self.proposal_cache.get_state(&deposit_id) {
+        let existing_state = match self.deps.proposal_cache.get_state(&deposit_id) {
             Ok(state) => state,
             Err(err) => {
                 warn!(
@@ -446,7 +470,7 @@ impl BridgeIngress for IngressService {
                     received_hash = %received_hex,
                     "peer signature proposal hash mismatch, possible nonce divergence"
                 );
-                self.bridge_status.push_alert(
+                self.control.bridge_status.push_alert(
                     AlertSeverity::Error,
                     "Nonce Divergence Suspected".to_string(),
                     format!(
@@ -474,7 +498,7 @@ impl BridgeIngress for IngressService {
 
         // Add signature to cache (or queue if we haven't processed this deposit yet)
         // The verify_fn will check that signature recovers to claimed signer
-        let result = self.proposal_cache.add_signature(
+        let result = self.deps.proposal_cache.add_signature(
             &deposit_id,
             crate::proposal_cache::SignatureData {
                 signer_address,
@@ -499,10 +523,13 @@ impl BridgeIngress for IngressService {
                     "signature added to cache"
                 );
 
-                if let Ok(Some(state)) = self.proposal_cache.get_state(&deposit_id) {
-                    self.bridge_status.sync_proposal_signatures_from_cache(
-                        &proposal_hash_hex, &state, &self.address_to_node_id, self.node_id,
-                    );
+                if let Ok(Some(state)) = self.deps.proposal_cache.get_state(&deposit_id) {
+                    self.control
+                        .bridge_status
+                        .sync_proposal_signatures_from_cache(
+                            &proposal_hash_hex, &state, &self.peers.address_to_node_id,
+                            self.node.node_id,
+                        );
                 }
 
                 Ok(Response::new(SignatureBroadcastResponse {
@@ -521,10 +548,13 @@ impl BridgeIngress for IngressService {
                     "signature added - threshold reached!"
                 );
 
-                if let Ok(Some(state)) = self.proposal_cache.get_state(&deposit_id) {
-                    self.bridge_status.sync_proposal_signatures_from_cache(
-                        &proposal_hash_hex, &state, &self.address_to_node_id, self.node_id,
-                    );
+                if let Ok(Some(state)) = self.deps.proposal_cache.get_state(&deposit_id) {
+                    self.control
+                        .bridge_status
+                        .sync_proposal_signatures_from_cache(
+                            &proposal_hash_hex, &state, &self.peers.address_to_node_id,
+                            self.node.node_id,
+                        );
                 }
 
                 Ok(Response::new(SignatureBroadcastResponse {
@@ -616,6 +646,7 @@ impl BridgeIngress for IngressService {
 
         // Get proposal state from cache
         let state = self
+            .deps
             .proposal_cache
             .get_state(&deposit_id)
             .map_err(|e| Status::internal(format!("failed to get proposal state: {}", e)))?;
@@ -636,9 +667,9 @@ impl BridgeIngress for IngressService {
                     as u32;
 
                 // Collect signer addresses
-                let mut signers = Vec::new();
+                let mut signers: Vec<Vec<u8>> = Vec::new();
                 if state.my_signature.is_some() {
-                    signers.push(self.signer.address().to_vec());
+                    signers.push(self.deps.signer.address().to_vec());
                 }
                 for addr in state.peer_signatures.keys() {
                     signers.push(addr.to_vec());
@@ -712,7 +743,7 @@ impl BridgeIngress for IngressService {
         );
 
         // Mark the proposal as confirmed in our cache
-        match self.proposal_cache.mark_confirmed(&deposit_id) {
+        match self.deps.proposal_cache.mark_confirmed(&deposit_id) {
             Ok(()) => {
                 info!(
                     target: "bridge.ingress",
@@ -723,11 +754,13 @@ impl BridgeIngress for IngressService {
 
                 // Update TUI to show Executed status
                 // Try to find existing proposal and update it
-                if let Some(mut tui_proposal) = self.bridge_status.find_proposal(&proposal_hash) {
+                if let Some(mut tui_proposal) =
+                    self.control.bridge_status.find_proposal(&proposal_hash)
+                {
                     tui_proposal.status = ProposalStatus::Executed;
                     tui_proposal.tx_hash = Some(tx_hash.clone());
                     tui_proposal.executed_at_block = Some(req.block_number);
-                    self.bridge_status.update_proposal(tui_proposal);
+                    self.control.bridge_status.update_proposal(tui_proposal);
                     info!(
                         target: "bridge.ingress",
                         proposal_hash = %proposal_hash,
@@ -760,7 +793,7 @@ impl BridgeIngress for IngressService {
                         is_my_turn: false,
                         time_until_takeover: None,
                     };
-                    self.bridge_status.update_proposal(placeholder);
+                    self.control.bridge_status.update_proposal(placeholder);
                     info!(
                         target: "bridge.ingress",
                         proposal_hash = %proposal_hash,

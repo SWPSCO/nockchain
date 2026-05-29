@@ -2,11 +2,11 @@ use std::collections::HashSet;
 
 use anyhow::Result;
 use nockapp::Noun;
-use nockchain_math::noun_ext::NounMathExt;
+use nockchain_math::noun_ext::NounMathExtHandle;
 use nockchain_math::structs::HoonMapIter;
-use nockchain_math::zoon::common::DefaultTipHasher;
-use nockchain_math::zoon::{zmap, zset};
-use nockvm::noun::{NounAllocator, D, SIG};
+use nockchain_math::zoon::zmap::ZMap;
+use nockchain_math::zoon::zset::ZSet;
+use nockvm::noun::{NounAllocator, NounSpace, SIG};
 use noun_serde::{NounDecode, NounDecodeError, NounEncode};
 
 use crate::tx_engine::common::{
@@ -46,29 +46,29 @@ pub struct Lock {
 impl NounEncode for Lock {
     fn to_noun<A: NounAllocator>(&self, stack: &mut A) -> Noun {
         let m = u64::to_noun(&self.keys_required, stack);
-        let keys_noun_map = self
-            .pubkeys
-            .iter()
-            .fold(SIG, |map, pubkey: &SchnorrPubkey| {
-                let mut val = pubkey.to_noun(stack);
-                zset::z_set_put(stack, &map, &mut val, &DefaultTipHasher)
-                    .expect("Failed to put public key into set")
-            });
+        let keys_noun_map = if self.pubkeys.is_empty() {
+            SIG
+        } else {
+            ZSet::try_from_items(self.pubkeys.clone())
+                .expect("lock pubkey set should encode")
+                .to_noun(stack)
+        };
         nockvm::noun::T(stack, &[m, keys_noun_map])
     }
 }
 
 impl NounDecode for Lock {
-    fn from_noun(noun: &Noun) -> Result<Self, NounDecodeError> {
-        let cell = noun.as_cell()?;
+    fn from_noun(noun: &Noun, space: &NounSpace) -> Result<Self, NounDecodeError> {
+        let cell = noun.in_space(space).as_cell()?;
         let keys_required = cell.head().as_atom()?.as_u64()?;
 
         // It is called HoonMapIter, but it can be used for sets as well
-        let pubkeys_iter = HoonMapIter::from(cell.tail());
+        let tail = cell.tail();
+        let pubkeys_iter = HoonMapIter::new(&tail);
 
         let mut pubkeys = Vec::new();
         for pubkey in pubkeys_iter {
-            let schnorr = SchnorrPubkey::from_noun(&pubkey)?;
+            let schnorr = SchnorrPubkey::from_noun_handle(&pubkey)?;
             pubkeys.push(schnorr);
         }
 
@@ -121,23 +121,21 @@ pub struct Balance(pub Vec<(Name, NoteV0)>);
 
 impl NounEncode for Balance {
     fn to_noun<A: NounAllocator>(&self, stack: &mut A) -> Noun {
-        self.0.iter().fold(D(0), |map, (name, note)| {
-            let mut key = name.to_noun(stack);
-            let mut value = note.to_noun(stack);
-            zmap::z_map_put(stack, &map, &mut key, &mut value, &DefaultTipHasher)
-                .expect("Failed to put into z_map")
-        })
+        ZMap::try_from_entries(self.0.clone())
+            .expect("balance z-map should encode")
+            .to_noun(stack)
     }
 }
 
 impl NounDecode for Balance {
-    fn from_noun(noun: &Noun) -> Result<Self, NounDecodeError> {
-        let notes = HoonMapIter::from(*noun)
+    fn from_noun(noun: &Noun, space: &NounSpace) -> Result<Self, NounDecodeError> {
+        let noun_handle = noun.in_space(space);
+        let notes = HoonMapIter::new(&noun_handle)
             .filter(|kv| kv.is_cell())
             .map(|kv| {
                 let [k, v] = kv.uncell()?;
-                let name = Name::from_noun(&k)?;
-                let note = NoteV0::from_noun(&v)?;
+                let name = Name::from_noun_handle(&k)?;
+                let note = NoteV0::from_noun_handle(&v)?;
                 Ok((name, note))
             })
             .collect::<Result<Vec<_>, NounDecodeError>>()?;
@@ -189,8 +187,10 @@ mod test {
     fn try_path(jam: &str) -> Result<Bytes, Box<dyn std::error::Error>> {
         let possible_paths = [
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("jams/v0")
+                .join("jams")
+                .join("v0")
                 .join(jam),
+            std::path::Path::new("open/crates/nockchain-types/jams").join(jam),
             std::path::Path::new("open/crates/nockchain-types/jams/v0").join(jam),
         ];
 
@@ -206,7 +206,8 @@ mod test {
         let balance_jam = try_path("balance.jam")?;
         let mut slab: NounSlab = NounSlab::new();
         let mut balance_noun = slab.cue_into(balance_jam)?;
-        let balance = Balance::from_noun(&balance_noun)?;
+        let space = slab.noun_space();
+        let balance = Balance::from_noun(&balance_noun, &space)?;
         let mut balance_noun_from_struct = Balance::to_noun(&balance, &mut slab);
         unsafe { slab.equals(&mut balance_noun, &mut balance_noun_from_struct) };
         Ok(())
@@ -217,7 +218,8 @@ mod test {
         let note_jam = try_path("note.jam")?;
         let mut slab: NounSlab = NounSlab::new();
         let mut note_noun = slab.cue_into(note_jam)?;
-        let note = NoteV0::from_noun(&note_noun)?;
+        let space = slab.noun_space();
+        let note = NoteV0::from_noun(&note_noun, &space)?;
         let mut note_noun_from_struct = NoteV0::to_noun(&note, &mut slab);
         assert!(unsafe { slab.equals(&mut note_noun, &mut note_noun_from_struct) });
         //eprintln!("{:?}", utxo);
@@ -229,7 +231,8 @@ mod test {
         let timelock_jam = try_path("timelock.jam")?;
         let mut slab: NounSlab = NounSlab::new();
         let timelock_noun = slab.cue_into(timelock_jam)?;
-        let _ = <Option<TimelockIntent>>::from_noun(&timelock_noun);
+        let space = slab.noun_space();
+        let _ = <Option<TimelockIntent>>::from_noun(&timelock_noun, &space);
         Ok(())
     }
 
@@ -245,7 +248,8 @@ mod test {
         let mut slab: NounSlab = NounSlab::new();
         let tl = Timelock(None);
         let mut n1 = Timelock::to_noun(&tl, &mut slab);
-        let tl2 = Timelock::from_noun(&n1).expect("decode");
+        let space = slab.noun_space();
+        let tl2 = Timelock::from_noun(&n1, &space).expect("decode");
         let mut n2 = Timelock::to_noun(&tl2, &mut slab);
         assert!(unsafe { slab.equals(&mut n1, &mut n2) });
     }
@@ -258,7 +262,8 @@ mod test {
             relative: TimelockRangeRelative::none(),
         }));
         let mut n1 = Timelock::to_noun(&tl, &mut slab);
-        let tl2 = Timelock::from_noun(&n1).expect("decode");
+        let space = slab.noun_space();
+        let tl2 = Timelock::from_noun(&n1, &space).expect("decode");
         let mut n2 = Timelock::to_noun(&tl2, &mut slab);
         assert!(unsafe { slab.equals(&mut n1, &mut n2) });
     }
@@ -291,7 +296,8 @@ mod test {
             relative: TimelockRangeRelative::new(Some(dh(5)), Some(dh(50))),
         }));
         let mut n1 = Timelock::to_noun(&tl, &mut slab);
-        let tl2 = Timelock::from_noun(&n1).expect("decode");
+        let space = slab.noun_space();
+        let tl2 = Timelock::from_noun(&n1, &space).expect("decode");
         let mut n2 = Timelock::to_noun(&tl2, &mut slab);
         assert!(unsafe { slab.equals(&mut n1, &mut n2) });
     }
@@ -304,7 +310,8 @@ mod test {
             relative: TimelockRangeRelative::new(Some(dh(1)), Some(dh(2))),
         }));
         let mut n1 = Timelock::to_noun(&tl, &mut slab);
-        let tl2 = Timelock::from_noun(&n1).expect("decode");
+        let space = slab.noun_space();
+        let tl2 = Timelock::from_noun(&n1, &space).expect("decode");
         let mut n2 = Timelock::to_noun(&tl2, &mut slab);
         assert!(unsafe { slab.equals(&mut n1, &mut n2) });
     }
@@ -489,7 +496,8 @@ mod test {
         fn prop(update: BalanceUpdate) -> bool {
             let mut slab: NounSlab = NounSlab::new();
             let mut n1 = BalanceUpdate::to_noun(&update, &mut slab);
-            let decoded = match BalanceUpdate::from_noun(&n1) {
+            let space = slab.noun_space();
+            let decoded = match BalanceUpdate::from_noun(&n1, &space) {
                 Ok(v) => v,
                 Err(_) => return false,
             };

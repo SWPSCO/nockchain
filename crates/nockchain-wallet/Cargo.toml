@@ -30,4 +30,5 @@ tokio = { workspace = true, features = ["full"] }
 tonic = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+wallet-tx-builder = { path = "../wallet-tx-builder" }
 zkvm-jetpack = { workspace = true }

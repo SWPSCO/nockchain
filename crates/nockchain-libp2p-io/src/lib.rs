@@ -7,6 +7,7 @@
 mod behaviour; // Nockchain libp2p behavior type
 pub mod config; // Configurable values for the Nockchain libp2p driver
 pub mod driver; // Nockchain libp2p driver for NockApp
+mod ip_block; // IP-level connection gating (deny banned IPs)
 mod key_fair_queue; // Fair queue for key-value pairs, allowing replacement
 mod messages; // Messages exchanged between Nockchain nodes
 pub mod metrics; // Nockchain libp2p metrics (gnort)

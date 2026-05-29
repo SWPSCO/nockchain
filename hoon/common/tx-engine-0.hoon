@@ -266,7 +266,7 @@
   ++  hashable
     |=  =form
     ^-  hashable:tip5
-    ?~  form  leaf+form
+    ?@  form  leaf+form
     :+  [hash+(hash:schnorr-pubkey p.n.form) (hashable:schnorr-signature q.n.form)]
       $(form l.form)
     $(form r.form)
@@ -541,7 +541,7 @@
   ++  hashable-tx-ids
     |=  tx-ids=(z-set tx-id)
     ^-  hashable:tip5
-    ?~  tx-ids  leaf+tx-ids
+    ?@  tx-ids  leaf+tx-ids
     :+  hash+n.tx-ids
       $(tx-ids l.tx-ids)
     $(tx-ids r.tx-ids)
@@ -719,7 +719,8 @@
     |=  target-bn=bignum:bn
     ^-  bignum:bn
     =/  target-atom=@  (merge:bn target-bn)
-    (chunk:bn (div max-target-atom +(target-atom)))
+    =/  raw=@  (div max-target-atom +(target-atom))
+    (chunk:bn ?:(=(0 raw) 1 raw))
   ::
   ++  to-page-summary
     |=  pag=form
@@ -767,6 +768,11 @@
     |=  lp=form
     ^-  page
     lp(pow (biff pow.lp |=(j=@ ((soft proof) (cue j)))))
+  ::
+  ++  to-page-no-pow
+    |=  lp=form
+    ^-  page
+    lp(pow ~)
   --
 ::
 ::  +page-msg: (list belt) that enforces that each elt is a belt
@@ -938,7 +944,7 @@
   ++  hashable
     |=  =form
     ^-  hashable:tip5
-    ?~  form  leaf+form
+    ?@  form  leaf+form
     :+  [(hashable:nname p.n.form) (hashable:input q.n.form)]
       $(form l.form)
     $(form r.form)
@@ -1604,7 +1610,7 @@
     ++  hashable-pubkeys
       |=  pubkeys=(z-set schnorr-pubkey)
       ^-  hashable:tip5
-      ?~  pubkeys  leaf+pubkeys
+      ?@  pubkeys  leaf+pubkeys
       :+  hash+(hash:schnorr-pubkey n.pubkeys)
         $(pubkeys l.pubkeys)
       $(pubkeys r.pubkeys)
@@ -1839,7 +1845,7 @@
   ++  hashable
     |=  =form
     ^-  hashable:tip5
-    ?~  form  leaf+form
+    ?@  form  leaf+form
     :+  [(hashable:sig p.n.form) leaf+q.n.form]
       $(form l.form)
     $(form r.form)
@@ -2013,7 +2019,7 @@
   ++  hashable
     |=  =form
     ^-  hashable:tip5
-    ?~  form  leaf+form
+    ?@  form  leaf+form
     :+  (hashable:seed n.form)
       $(form l.form)
     $(form r.form)
@@ -2021,7 +2027,7 @@
   ++  sig-hashable
     |=  =form
     ^-  hashable:tip5
-    ?~  form  leaf+form
+    ?@  form  leaf+form
     :+  (sig-hashable:seed n.form)
       $(form l.form)
     $(form r.form)
