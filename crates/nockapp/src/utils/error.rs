@@ -1,6 +1,8 @@
 use noun_serde::NounDecodeError;
 use thiserror::Error;
 
+use crate::noun::slab::NounSlab;
+
 #[derive(Debug, Error)]
 pub enum ExternalError {
     #[error("unknown error: {0}")]
@@ -27,7 +29,7 @@ pub enum CrownError<T = ExternalError> {
     #[error("{0}")]
     InterpreterError(#[from] SwordError),
     #[error("kernel error")]
-    KernelError(Option<nockvm::noun::Noun>),
+    KernelError(Option<NounSlab>),
     #[error("{0}")]
     Utf8FromError(#[from] std::string::FromUtf8Error),
     #[error("{0}")]

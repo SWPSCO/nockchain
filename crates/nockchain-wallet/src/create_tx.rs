@@ -1,8 +1,10 @@
 use std::path::{Path, PathBuf};
 
 use nockapp::Bytes;
+use nockchain_math::noun_ext::NounMathExtHandle;
 use nockchain_math::zoon::zmap::ZMap;
 use nockchain_types::tx_engine::common::Signature;
+use nockvm::noun::NounSpace;
 use wallet_tx_builder::types::CandidateNote;
 
 use super::*;
@@ -40,7 +42,7 @@ pub(crate) struct PlannerNoteDataConstantsNoun {
     pub(crate) min_fee: u64,
 }
 
-#[derive(Debug, Clone, NounEncode, NounDecode)]
+#[derive(Debug, Clone, NounEncode)]
 /// Blockchain constants payload extracted from wallet state for planning.
 pub(crate) struct PlannerBlockchainConstantsNoun {
     pub(crate) _v1_phase: u64,
@@ -48,25 +50,35 @@ pub(crate) struct PlannerBlockchainConstantsNoun {
     pub(crate) data: PlannerNoteDataConstantsNoun,
     pub(crate) base_fee: u64,
     pub(crate) input_fee_divisor: u64,
-    pub(crate) _legacy_constants: Noun,
+    pub(crate) coinbase_timelock_min: u64,
 }
 
-#[derive(Debug, Clone, NounEncode, NounDecode)]
-/// Embedded v0 constants payload carried inside wallet blockchain constants.
-struct PlannerV0BlockchainConstantsNoun {
-    _max_block_size: Noun,
-    _blocks_per_epoch: Noun,
-    _target_epoch_duration: Noun,
-    _update_candidate_timestamp_interval: Noun,
-    _max_future_timestamp: Noun,
-    _min_past_blocks: Noun,
-    _genesis_target_atom: Noun,
-    _max_target_atom: Noun,
-    _check_pow_flag: bool,
-    coinbase_timelock_min: u64,
-    _pow_len: Noun,
-    _max_coinbase_split: Noun,
-    _first_month_coinbase_min: Noun,
+impl NounDecode for PlannerBlockchainConstantsNoun {
+    fn from_noun(noun: &Noun, space: &NounSpace) -> Result<Self, NounDecodeError> {
+        let fields = noun.in_space(space).uncell::<6>()?;
+        let legacy_or_timelock = fields[5];
+        let coinbase_timelock_min = if let Ok(value) = u64::from_noun_handle(&legacy_or_timelock) {
+            value
+        } else {
+            let legacy_fields = match legacy_or_timelock.uncell::<13>() {
+                Ok(fields) => fields,
+                Err(_) => {
+                    let wrapped = legacy_or_timelock.as_cell()?;
+                    wrapped.head().uncell::<13>()?
+                }
+            };
+            u64::from_noun_handle(&legacy_fields[9])?
+        };
+
+        Ok(Self {
+            _v1_phase: u64::from_noun_handle(&fields[0])?,
+            bythos_phase: u64::from_noun_handle(&fields[1])?,
+            data: PlannerNoteDataConstantsNoun::from_noun_handle(&fields[2])?,
+            base_fee: u64::from_noun_handle(&fields[3])?,
+            input_fee_divisor: u64::from_noun_handle(&fields[4])?,
+            coinbase_timelock_min,
+        })
+    }
 }
 
 #[derive(Debug, Clone, NounEncode, NounDecode, PartialEq, Eq)]
@@ -270,23 +282,7 @@ impl PreparedMigrateV0Notes {
 impl PlannerBlockchainConstantsNoun {
     /// Returns the consensus coinbase relative timelock minimum.
     pub(crate) fn coinbase_timelock_min(&self) -> Result<u64, NockAppError> {
-        // _legacy_constants is [v0_constants [asert_fields...]] since asert fields were
-        // appended after v0_constants in BlockchainConstants::to_noun().
-        let v0_noun = self
-            ._legacy_constants
-            .as_cell()
-            .map_err(|err| {
-                NockAppError::OtherError(format!(
-                    "wallet blockchain-constants payload missing coinbase timelock min: {err}"
-                ))
-            })?
-            .head();
-        let parsed = PlannerV0BlockchainConstantsNoun::from_noun(&v0_noun).map_err(|err| {
-            NockAppError::OtherError(format!(
-                "wallet blockchain-constants payload missing coinbase timelock min: {err}"
-            ))
-        })?;
-        Ok(parsed.coinbase_timelock_min)
+        Ok(self.coinbase_timelock_min)
     }
 }
 
@@ -444,8 +440,9 @@ impl Wallet {
         slab.set_root(path);
 
         let result = self.app.peek(slab).await?;
+        let space = result.noun_space();
         let maybe_balance: Option<Option<v1::BalanceUpdate>> =
-            unsafe { <Option<Option<v1::BalanceUpdate>>>::from_noun(result.root())? };
+            unsafe { <Option<Option<v1::BalanceUpdate>>>::from_noun(result.root(), &space)? };
         match maybe_balance {
             Some(Some(balance)) => Ok(balance),
             _ => Err(NockAppError::OtherError(
@@ -464,8 +461,10 @@ impl Wallet {
         slab.set_root(path);
 
         let result = self.app.peek(slab).await?;
-        let maybe_constants: Option<Option<PlannerBlockchainConstantsNoun>> =
-            unsafe { <Option<Option<PlannerBlockchainConstantsNoun>>>::from_noun(result.root())? };
+        let space = result.noun_space();
+        let maybe_constants: Option<Option<PlannerBlockchainConstantsNoun>> = unsafe {
+            <Option<Option<PlannerBlockchainConstantsNoun>>>::from_noun(result.root(), &space)?
+        };
         let Some(constants) = maybe_constants.flatten() else {
             return Err(NockAppError::OtherError(
                 "wallet blockchain-constants peek returned no payload".to_string(),
@@ -482,8 +481,9 @@ impl Wallet {
         slab.set_root(path);
 
         let result = self.app.peek(slab).await?;
+        let space = result.noun_space();
         let maybe_signing_key: Option<Option<Hash>> =
-            unsafe { <Option<Option<Hash>>>::from_noun(result.root())? };
+            unsafe { <Option<Option<Hash>>>::from_noun(result.root(), &space)? };
         maybe_signing_key.flatten().ok_or_else(|| {
             NockAppError::OtherError(
                 "wallet master-signing-key peek returned no payload".to_string(),
@@ -498,8 +498,9 @@ impl Wallet {
         slab.set_root(path);
 
         let result = self.app.peek(slab).await?;
+        let space = result.noun_space();
         let maybe_signing_pubkey: Option<Option<SchnorrPubkey>> =
-            unsafe { <Option<Option<SchnorrPubkey>>>::from_noun(result.root())? };
+            unsafe { <Option<Option<SchnorrPubkey>>>::from_noun(result.root(), &space)? };
         maybe_signing_pubkey.flatten().ok_or_else(|| {
             NockAppError::OtherError(
                 "wallet master-signing-pubkey peek returned no payload".to_string(),
@@ -514,8 +515,10 @@ impl Wallet {
         slab.set_root(path);
 
         let result = self.app.peek(slab).await?;
-        let maybe_signers: Option<Option<Vec<ActiveSignerEntryNoun>>> =
-            unsafe { <Option<Option<Vec<ActiveSignerEntryNoun>>>>::from_noun(result.root())? };
+        let space = result.noun_space();
+        let maybe_signers: Option<Option<Vec<ActiveSignerEntryNoun>>> = unsafe {
+            <Option<Option<Vec<ActiveSignerEntryNoun>>>>::from_noun(result.root(), &space)?
+        };
         let mut signers = maybe_signers.flatten().unwrap_or_default();
         signers.sort_by_key(ActiveSignerEntryNoun::sort_key);
         signers.dedup_by(|left, right| {
@@ -544,11 +547,12 @@ impl Wallet {
         let mut applied = AppliedWalletEffects::default();
 
         for effect in effects {
+            let space = effect.noun_space();
             let noun = unsafe { effect.root() };
-            let Ok(cell) = noun.as_cell() else {
+            let Ok(cell) = noun.in_space(&space).as_cell() else {
                 continue;
             };
-            let Ok(tag) = <String>::from_noun(&cell.head()) else {
+            let Ok(tag) = <String>::from_noun(&cell.head().noun(), &space) else {
                 continue;
             };
 
@@ -559,11 +563,11 @@ impl Wallet {
                             "wallet file effect payload did not decode as a cell: {err}"
                         ))
                     })?;
-                    let operation = <String>::from_noun(&file_cell.head())?;
+                    let operation = <String>::from_noun(&file_cell.head().noun(), &space)?;
                     match operation.as_str() {
                         "write" => {
                             let (path, contents): (String, Bytes) =
-                                <(String, Bytes)>::from_noun(&file_cell.tail())?;
+                                <(String, Bytes)>::from_noun(&file_cell.tail().noun(), &space)?;
                             let resolved_path = Self::resolve_effect_write_path(&path, output_path);
                             if let Some(parent) = resolved_path.parent() {
                                 tokio_fs::create_dir_all(parent)
@@ -583,7 +587,7 @@ impl Wallet {
                         }
                         "batch-write" => {
                             let entries: Vec<BatchWriteRequestEntry> =
-                                Vec::from_noun(&file_cell.tail())?;
+                                Vec::from_noun(&file_cell.tail().noun(), &space)?;
                             for entry in entries {
                                 let resolved_path =
                                     Self::resolve_effect_write_path(&entry.path, output_path);
@@ -608,7 +612,7 @@ impl Wallet {
                     }
                 }
                 "exit" => {
-                    let code = <u64 as NounDecode>::from_noun(&cell.tail())?;
+                    let code = <u64 as NounDecode>::from_noun(&cell.tail().noun(), &space)?;
                     if code != 0 {
                         return Err(NockAppError::OtherError(format!(
                             "wallet command exited with code {code} while running migrate-v0-notes"
@@ -677,12 +681,14 @@ impl Wallet {
     fn decode_transaction_spends_from_bytes(tx_bytes: &[u8]) -> Result<v1::Spends, NockAppError> {
         let mut slab: NounSlab = NounSlab::new();
         let transaction_noun = slab.cue_into(Bytes::copy_from_slice(tx_bytes))?;
-        let transaction_cell = transaction_noun.as_cell().map_err(|err| {
+        let space = slab.noun_space();
+        let transaction_cell = transaction_noun.in_space(&space).as_cell().map_err(|err| {
             NockAppError::OtherError(format!("transaction jam root not a cell: {err}"))
         })?;
-        let version = <u64 as NounDecode>::from_noun(&transaction_cell.head()).map_err(|err| {
-            NockAppError::OtherError(format!("transaction version did not decode: {err}"))
-        })?;
+        let version = <u64 as NounDecode>::from_noun(&transaction_cell.head().noun(), &space)
+            .map_err(|err| {
+                NockAppError::OtherError(format!("transaction version did not decode: {err}"))
+            })?;
         if version != 1 {
             return Err(NockAppError::OtherError(format!(
                 "expected saved transaction version 1, got {version}"
@@ -694,9 +700,10 @@ impl Wallet {
         let spends_and_rest = name_and_rest.tail().as_cell().map_err(|err| {
             NockAppError::OtherError(format!("transaction jam missing spends/rest cell: {err}"))
         })?;
-        let mut spends = v1::Spends::from_noun(&spends_and_rest.head()).map_err(|err| {
-            NockAppError::OtherError(format!("saved transaction spends did not decode: {err}"))
-        })?;
+        let mut spends =
+            v1::Spends::from_noun(&spends_and_rest.head().noun(), &space).map_err(|err| {
+                NockAppError::OtherError(format!("saved transaction spends did not decode: {err}"))
+            })?;
         let display_and_witness = spends_and_rest.tail().as_cell().map_err(|err| {
             NockAppError::OtherError(format!(
                 "transaction jam missing display/witness-data cell: {err}"
@@ -706,17 +713,19 @@ impl Wallet {
         let witness_cell = witness_data.as_cell().map_err(|err| {
             NockAppError::OtherError(format!("transaction jam witness-data not a cell: {err}"))
         })?;
-        let witness_tag = <u64 as NounDecode>::from_noun(&witness_cell.head()).map_err(|err| {
-            NockAppError::OtherError(format!("witness-data tag did not decode: {err}"))
-        })?;
+        let witness_tag = <u64 as NounDecode>::from_noun(&witness_cell.head().noun(), &space)
+            .map_err(|err| {
+                NockAppError::OtherError(format!("witness-data tag did not decode: {err}"))
+            })?;
         match witness_tag {
             0 => {
                 let signatures =
-                    ZMap::<Name, Signature>::from_noun(&witness_cell.tail()).map_err(|err| {
-                        NockAppError::OtherError(format!(
-                            "legacy witness-data signature map did not decode: {err}"
-                        ))
-                    })?;
+                    ZMap::<Name, Signature>::from_noun(&witness_cell.tail().noun(), &space)
+                        .map_err(|err| {
+                            NockAppError::OtherError(format!(
+                                "legacy witness-data signature map did not decode: {err}"
+                            ))
+                        })?;
                 for (name, signature) in signatures.into_entries() {
                     let Some((_, v1::Spend::Legacy(spend0))) = spends
                         .0
@@ -733,12 +742,13 @@ impl Wallet {
                 }
             }
             1 => {
-                let witnesses = ZMap::<Name, v1::Witness>::from_noun(&witness_cell.tail())
-                    .map_err(|err| {
-                        NockAppError::OtherError(format!(
-                            "v1 witness-data map did not decode: {err}"
-                        ))
-                    })?;
+                let witnesses =
+                    ZMap::<Name, v1::Witness>::from_noun(&witness_cell.tail().noun(), &space)
+                        .map_err(|err| {
+                            NockAppError::OtherError(format!(
+                                "v1 witness-data map did not decode: {err}"
+                            ))
+                        })?;
                 for (name, witness) in witnesses.into_entries() {
                     let Some((_, v1::Spend::Witness(spend1))) = spends
                         .0
@@ -1726,8 +1736,9 @@ impl Wallet {
             request_index = request_index.wrapping_add(1);
 
             let balance = slab.cue_into(response.as_bytes()?)?;
+            let space = slab.noun_space();
             let payload: Option<Option<v1::BalanceUpdate>> =
-                <Option<Option<v1::BalanceUpdate>>>::from_noun(&balance)?;
+                <Option<Option<v1::BalanceUpdate>>>::from_noun(&balance, &space)?;
             results.push(Self::update_balance_grpc_poke_from_payload(payload));
         }
 
@@ -1745,8 +1756,9 @@ impl Wallet {
             request_index = request_index.wrapping_add(1);
 
             let balance = slab.cue_into(response.as_bytes()?)?;
+            let space = slab.noun_space();
             let payload: Option<Option<v1::BalanceUpdate>> =
-                <Option<Option<v1::BalanceUpdate>>>::from_noun(&balance)?;
+                <Option<Option<v1::BalanceUpdate>>>::from_noun(&balance, &space)?;
             results.push(Self::update_balance_grpc_poke_from_payload(payload));
         }
 

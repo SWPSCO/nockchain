@@ -42,6 +42,7 @@ curve25519-dalek = { version = "4.1.1", default-features = false }
 dashmap = "6.1.0"
 deadpool-diesel = { version = "0.6.1", features = ["rt_tokio_1", "sqlite"] }
 diesel = { version = "2.1.4", features = ["sqlite"] }
+diesel_migrations = { version = "2.3.2", features = ["sqlite"] }
 dirs = "6.0.0"
 divan = "0.1.21"
 ed25519-dalek = { version = "2.1.0", default-features = false }
@@ -111,6 +112,8 @@ reqwest = { version = "0.12", default-features = false, features = [
     "blocking",
 ] }
 rkyv = "0.8.13"
+rusqlite = { version = "0.37.0", features = ["bundled"] }
+rustix = { version = "0.38", features = ["fs", "mm"] }
 rustls = "0.23.0"
 rustls-pemfile = "2.0.0"
 rustls-pki-types = "1.13.1"
@@ -172,6 +175,7 @@ tracing-test = "0.2.5"
 tracing-tracy = { version = "0.11.4" }
 tracy-client = { version = "0.18.2" }
 unroll = "0.1.5"
+uuid = { version = "1.23.1", features = ["v4"] }
 vergen = "8.3.2"
 void = "1.0.2"
 walkdir = "2.5.0"
@@ -274,6 +278,10 @@ path = "crates/zkvm-jetpack"
 op-alloy-consensus = { git = "https://github.com/ethereum-optimism/optimism", rev = "0c6a03eac768122819c05b71f233bba1e90cf426", package = "op-alloy-consensus" }
 op-alloy-network = { git = "https://github.com/ethereum-optimism/optimism", rev = "0c6a03eac768122819c05b71f233bba1e90cf426", package = "op-alloy-network" }
 op-alloy-rpc-types = { git = "https://github.com/ethereum-optimism/optimism", rev = "0c6a03eac768122819c05b71f233bba1e90cf426", package = "op-alloy-rpc-types" }
+
+# [lints.clippy]
+# pedantic = { level = "warn", priority = -1 }
+# restriction = { level = "warn", priority = -2 }
 
 # Comment out this block if gdb is lacking info
 [profile.dev]

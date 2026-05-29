@@ -8,3 +8,5 @@ test-follower
 target
 !crates/nockapp/test-jams
 keys.export
+replay-checkpoints-51094
+nockchain-api-checkpoints-backup

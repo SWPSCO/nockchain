@@ -8,49 +8,48 @@
 use std::collections::HashMap;
 
 use nockapp::driver::{make_driver, IODriverFn};
-use nockapp::AtomExt;
-use nockvm::noun::{Noun, Slots, D};
+use nockchain_math::structs::HoonList;
+use nockvm::noun::{Noun, NounAllocator};
 use nockvm_macros::tas;
 use tracing::{debug, error, field, info, span, Level};
 
 const NEW_HEAVIEST_CHAIN: &str = "new_heaviest_chain";
 const NEW_HEAVIEST_MINER: &str = "new_heaviest_miner";
 
-/// Walk a Hoon list (right-nested cells terminated by `~`) into a Vec<Noun>.
-fn hoon_list_to_vec(list: Noun) -> Vec<Noun> {
-    let mut out = Vec::new();
-    let mut cur = list;
-    while let Ok(cell) = cur.as_cell() {
-        out.push(cell.head());
-        cur = cell.tail();
-    }
-    out
-}
-
 pub fn traces_driver() -> IODriverFn {
     make_driver(|handle| async move {
         loop {
             match handle.next_effect().await {
                 Ok(effect) => {
-                    let Ok(effect_cell) = unsafe { effect.root() }.as_cell() else {
+                    let space = effect.noun_space();
+                    let effect_noun = unsafe { *effect.root() };
+                    let Ok(effect_cell) = effect_noun.in_space(&space).as_cell() else {
                         continue;
                     };
 
-                    if unsafe { effect_cell.head().raw_equals(&D(tas!(b"log"))) } {
+                    if effect_cell.head().as_atom().and_then(|atom| atom.as_u64())
+                        == Ok(tas!(b"log"))
+                    {
                         let log_msg = effect_cell.tail().as_atom()?.into_string()?;
                         info!(log_msg);
-                    } else if unsafe { effect_cell.head().raw_equals(&D(tas!(b"span"))) } {
+                    } else if effect_cell.head().as_atom().and_then(|atom| atom.as_u64())
+                        == Ok(tas!(b"span"))
+                    {
                         let span_eff = effect_cell.tail();
                         let name = span_eff.slot(2)?.as_atom()?.into_string()?;
 
-                        let raw_fields = hoon_list_to_vec(span_eff.slot(3)?);
+                        let raw_fields: Vec<Noun> =
+                            HoonList::try_from(span_eff.slot(3)?.noun(), &space)?
+                                .into_iter()
+                                .collect();
 
                         let mut str_fields: HashMap<String, String> = HashMap::new();
                         let mut num_fields: HashMap<String, u64> = HashMap::new();
                         let mut parse_ok = true;
                         for n in raw_fields {
-                            let key = n.as_cell()?.head().as_atom()?.into_string()?;
-                            let raw_val = n.as_cell()?.tail().as_cell()?;
+                            let cell = n.in_space(&space).as_cell()?;
+                            let key = cell.head().as_atom()?.into_string()?;
+                            let raw_val = cell.tail().as_cell()?;
                             let typ = raw_val.head().as_atom()?.into_string()?;
                             let val_atom = raw_val.tail().as_atom()?;
                             if typ == "n" {

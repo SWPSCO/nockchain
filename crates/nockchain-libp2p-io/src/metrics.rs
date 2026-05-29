@@ -170,6 +170,28 @@ metrics_struct![
     (request_failed, "nockchain-libp2p-io.request_failed", Count),
     (response_failed_not_dropped, "nockchain-libp2p-io.response_failed_not_dropped", Count),
     (response_dropped, "nockchain-libp2p-io.response_dropped", Count),
+    (ip_exclusions_active, "nockchain-libp2p-io.ip_exclusions_active", Gauge),
+    (address_cooldowns_active, "nockchain-libp2p-io.address_cooldowns_active", Gauge),
+    (ip_exclusions_created, "nockchain-libp2p-io.ip_exclusions_created", Count),
+    (ip_exclusions_expired, "nockchain-libp2p-io.ip_exclusions_expired", Count),
+    (ip_exclusion_dial_denied, "nockchain-libp2p-io.ip_exclusion_dial_denied", Count),
+    (address_cooldown_dial_denied, "nockchain-libp2p-io.address_cooldown_dial_denied", Count),
+    (
+        kad_addresses_pruned_for_exclusion,
+        "nockchain-libp2p-io.kad_addresses_pruned_for_exclusion", Count
+    ),
+    (kad_peers_pruned_for_exclusion, "nockchain-libp2p-io.kad_peers_pruned_for_exclusion", Count),
+    (
+        identify_addresses_skipped_for_exclusion,
+        "nockchain-libp2p-io.identify_addresses_skipped_for_exclusion", Count
+    ),
+    (
+        fast_sync_peers_skipped_for_health,
+        "nockchain-libp2p-io.fast_sync_peers_skipped_for_health", Count
+    ),
+    (request_peer_cooldowns_created, "nockchain-libp2p-io.request_peer_cooldowns_created", Count),
+    (wrong_peer_id_observed, "nockchain-libp2p-io.wrong_peer_id_observed", Count),
+    (same_ip_kad_cardinality, "nockchain-libp2p-io.same_ip_kad_cardinality", Gauge),
     // Per-cause poke timings
     (timer_poke_time, "nockchain-libp2p-io.timer_poke_time", TimingCount),
     (heard_tx_poke_time, "nockchain-libp2p-io.heard_tx_poke_time", TimingCount),

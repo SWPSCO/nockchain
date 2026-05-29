@@ -15,7 +15,7 @@ pub mod traces;
 
 use std::error::Error;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub use config::NockchainCli;
 use libp2p::identity::Keypair;
@@ -226,10 +226,11 @@ pub async fn init_with_kernel<J: Jammer + Send + 'static>(
     let mut nockapp =
         boot::setup::<J>(kernel_jam, nockapp_cli, hot_state, "nockchain", None).await?;
 
-    let keypair = {
-        let keypair_path = Path::new(config::IDENTITY_PATH);
-        load_keypair(keypair_path, cli.no_new_peer_id)?
-    };
+    let identity_path = cli
+        .identity_path
+        .clone()
+        .unwrap_or_else(|| PathBuf::from(config::IDENTITY_PATH));
+    let keypair = { load_keypair(identity_path.as_path(), cli.no_new_peer_id)? };
     info!("allowed_peers_path: {:?}", cli.allowed_peers_path);
     let allowed = cli.allowed_peers_path.as_ref().map(|path| {
         let contents = fs::read_to_string(path).expect("failed to read allowed peers file: {}");

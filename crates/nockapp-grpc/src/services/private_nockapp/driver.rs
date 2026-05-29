@@ -4,7 +4,7 @@ use nockapp::driver::{make_driver, IODriverFn, NockAppHandle};
 use nockapp::noun::slab::NounSlab;
 use nockapp::wire::{WireRepr, WireTag as AppWireTag};
 use nockapp::{Bytes, NockAppError, Noun};
-use nockvm::noun::{D, T};
+use nockvm::noun::{NounAllocator, NounSpace, D, T};
 use nockvm_macros::tas;
 use noun_serde::prelude::*;
 use noun_serde::NounDecodeError;
@@ -67,33 +67,37 @@ pub enum PrivateGrpcEffect {
 }
 
 impl NounDecode for PrivateGrpcEffect {
-    fn from_noun(effect: &Noun) -> Result<Self, NounDecodeError> {
-        let Ok(effect_cell) = effect.as_cell() else {
+    fn from_noun(effect: &Noun, space: &NounSpace) -> Result<Self, NounDecodeError> {
+        let Ok(effect_cell) = effect.in_space(space).as_cell() else {
             return Err(NounDecodeError::ExpectedCell);
         };
-        if unsafe { effect_cell.head().raw_equals(&D(tas!(b"grpc"))) } {
+        if unsafe { effect_cell.head().noun().raw_equals(&D(tas!(b"grpc"))) } {
             let effect_payload = effect_cell.tail().as_cell()?;
 
-            match effect_payload.head().as_direct() {
+            match effect_payload.head().noun().as_direct() {
                 // [%grpc %poke pid payload]
                 Ok(tag) if tag.data() == tas!(b"poke") => {
                     let eff = effect_payload.tail().as_cell()?;
-                    let pid = u64::from_noun(&eff.head())?;
+                    let pid_noun = eff.head().noun();
+                    let pid = u64::from_noun(&pid_noun, space)?;
 
                     let mut slab: NounSlab = NounSlab::new();
-                    slab.copy_into(eff.tail());
+                    slab.copy_into(eff.tail().noun(), space);
                     let payload = slab.jam().to_vec();
                     Ok(PrivateGrpcEffect::Poke { pid, payload })
                 }
                 // [%grpc %peek pid [%type path]]
                 Ok(tag) if tag.data() == tas!(b"peek") => {
                     let peek_tail = effect_payload.tail().as_cell()?;
-                    let pid: u64 = <u64>::from_noun(&peek_tail.head())?;
+                    let pid_noun = peek_tail.head().noun();
+                    let pid: u64 = <u64>::from_noun(&pid_noun, space)?;
 
                     let meta = peek_tail.tail().as_cell()?; // [%type path]
-                    let typ = String::from_noun(&meta.head())?;
+                    let typ_noun = meta.head().noun();
+                    let typ = String::from_noun(&typ_noun, space)?;
 
-                    let path_vec: Vec<String> = <Vec<String>>::from_noun(&meta.tail())?;
+                    let path_vec: Vec<String> =
+                        <Vec<String>>::from_noun(&meta.tail().noun(), space)?;
                     Ok(PrivateGrpcEffect::Peek {
                         pid,
                         typ,
@@ -119,13 +123,16 @@ pub fn grpc_listener_driver(addr: String) -> IODriverFn {
         loop {
             match handle.next_effect().await {
                 Ok(effect) => {
-                    let effect_noun = unsafe { effect.root() };
-                    let grpc_effect = PrivateGrpcEffect::from_noun(&effect_noun).map_err(|err| {
-                        NockAppError::OtherError(format!(
-                            "Failed to decode gRPC effect noun: {}",
-                            err
-                        ))
-                    });
+                    let grpc_effect = {
+                        let effect_noun = unsafe { effect.root() };
+                        let space = effect.noun_space();
+                        PrivateGrpcEffect::from_noun(&effect_noun, &space).map_err(|err| {
+                            NockAppError::OtherError(format!(
+                                "Failed to decode gRPC effect noun: {}",
+                                err
+                            ))
+                        })
+                    };
                     let grpc_effect = match grpc_effect {
                         Ok(effect) => effect,
                         Err(_) => continue,

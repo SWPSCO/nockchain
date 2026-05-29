@@ -1,11 +1,14 @@
+use std::time::Instant;
+
 use bincode::{config, encode_to_vec, Decode, Encode};
 use blake3::Hash;
 use bytes::Bytes;
 use nockvm_macros::tas;
+use tracing::info;
 
 use super::artifact::{ArtifactError, CheckedReader};
 use crate::kernel::form::LoadState;
-use crate::noun::slab::NounSlab;
+use crate::noun::slab::{Jammer, NounSlab};
 use crate::{JammedNoun, NockAppError};
 
 const EXPORTED_STATE_MAGIC_BYTES: u64 = tas!(b"EXPJAM");
@@ -68,22 +71,58 @@ impl ExportedState {
         })
     }
 
-    pub fn from_loadstate(state: LoadState) -> Self {
-        let jam = JammedNoun::new(state.kernel_state.jam());
+    pub fn from_loadstate<J: Jammer>(state: LoadState) -> Self {
+        let LoadState {
+            kernel_state,
+            ker_hash,
+            event_num,
+        } = state;
+
+        info!(
+            event_num = event_num,
+            ker_hash = %ker_hash,
+            jammer = std::any::type_name::<J>(),
+            "state jam jamming kernel state start"
+        );
+        let jam_start = Instant::now();
+        let jam = JammedNoun::new(kernel_state.coerce_jammer::<J>().jam());
+        info!(
+            event_num = event_num,
+            ker_hash = %ker_hash,
+            jammer = std::any::type_name::<J>(),
+            jam_bytes = jam.0.len(),
+            elapsed_ms = jam_start.elapsed().as_secs_f64() * 1000.0,
+            "state jam jamming kernel state done"
+        );
 
         Self {
             magic_bytes: EXPORTED_STATE_MAGIC_BYTES,
             version: EXPORTED_STATE_VERSION,
-            ker_hash: state.ker_hash,
-            event_num: state.event_num,
+            ker_hash,
+            event_num,
             jam,
         }
     }
 
-    pub fn to_loadstate(self) -> Result<LoadState, NockAppError> {
-        let mut kernel_state = NounSlab::new();
+    pub fn to_loadstate<J: Jammer>(self) -> Result<LoadState, NockAppError> {
+        info!(
+            event_num = self.event_num,
+            ker_hash = %self.ker_hash,
+            jammer = std::any::type_name::<J>(),
+            "state jam cueing kernel state start"
+        );
+        let cue_start = Instant::now();
+        let mut kernel_state = NounSlab::<J>::new();
         let kernel_state_noun = kernel_state.cue_into(self.jam.0)?;
         kernel_state.set_root(kernel_state_noun);
+        let kernel_state: NounSlab = kernel_state.coerce_jammer();
+        info!(
+            event_num = self.event_num,
+            ker_hash = %self.ker_hash,
+            jammer = std::any::type_name::<J>(),
+            elapsed_ms = cue_start.elapsed().as_secs_f64() * 1000.0,
+            "state jam cueing kernel state done"
+        );
 
         Ok(LoadState {
             kernel_state,
