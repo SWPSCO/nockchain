@@ -958,6 +958,17 @@
         ::  heard genesis block
         ~>  %slog.[0 leaf+"heard-block: Heard genesis block"]
         (heard-genesis-block wir now eny pag)
+      ::  Reject the retired legacy %3 proof shape before any path reads its
+      ::  digest. Its proof hash is undefined, so digest validation would crash.
+      =/  legacy-v3=?
+        =/  pow=(unit pow-artifact:t)  ~(pow get:page:t pag)
+        ?~  pow
+          %.n
+        (legacy-v3-proof-artifact:con u.pow)
+      ?:  legacy-v3
+        :_  k
+        [(liar-effect wir %legacy-v3-proof-artifact)]~
+      ::
       ?~  heaviest-block.c.k
         =/  peer-id=(unit @)  (get-peer-id wir)
         ?~  peer-id
@@ -1160,6 +1171,8 @@
        =/  pow=(unit pow-artifact:t)  ~(pow get:page:t pag)
        ?~  pow
          %.n
+       ?:  (legacy-v3-proof-artifact:con u.pow)
+         %.n
        ?:  ?=([%ai-pow *] u.pow)
          %.n
        =/  prf=(unit proof:sp)  ((soft proof:sp) u.pow)
@@ -1233,6 +1246,8 @@
       ^-  ?
       =/  pow  ~(pow get:page:t pag)
       ?~  pow
+        %.n
+      ?:  (legacy-v3-proof-artifact:con u.pow)
         %.n
       ?:  ?=([%ai-pow *] u.pow)
         %+  ai-pow-verify:mine  u.pow

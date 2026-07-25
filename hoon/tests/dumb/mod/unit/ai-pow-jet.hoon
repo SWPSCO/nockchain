@@ -7,9 +7,15 @@
 /=  helpers  /tests/dumb/helpers
 /=  txe  /common/tx-engine
 /=  mine  /common/pow
+/=  *  /common/zeke
 /=  *  /common/test
 |%
+++  bc-ai-pow-v1-provable
+  %*  .  bc-ai-pow-provable:helpers
+    v1-phase  1
+  ==
 ++  h  ~(. helpers bc-ai-pow-provable:helpers)
+++  h-v1  ~(. helpers bc-ai-pow-v1-provable)
 ++  t  ~(. txe bc-ai-pow-provable:helpers)
 ::
 ::  A hostile %ai-pow artifact must be rejected CLEANLY -- a liar-block-id, never
@@ -37,6 +43,17 @@
       =(expected cause.e)
   ==
 ::
+::  Invalid wire data has no trustworthy block ID. Peer-origin malformed
+::  artifacts must therefore identify the sender rather than the claimed digest.
+++  has-liar-peer-cause
+  |=  [expected=term effs=(list effect:h)]
+  ^-  ?
+  %+  lien  effs
+  |=  e=effect:h
+  ?&  ?=([%liar-peer *] e)
+      =(expected cause.e)
+  ==
+::
 ++  sample-ai-pow-cert
   |=  cert-len=@ud
   ^-  ai-pow-certificate:t
@@ -57,6 +74,20 @@
   ?^  -.pag
     pag(digest (compute-digest:page:t pag))
   pag(digest (compute-digest:page:t pag))
+::  A legacy proof mold admits %3 even though that tag is reserved for AI. The
+::  retained digest is deliberately stale: hashing this representation crashes.
+++  make-legacy-v3-proof-page
+  |=  parent=page:t
+  ^-  page:t
+  =/  pag=page:t  (prove-page:h-v1 (make-empty-page:h-v1 parent))
+  =/  prf=proof
+    (need ((soft proof) (need ~(pow get:page:t pag))))
+  =.  pag
+    ?^  -.pag
+      pag
+    pag(pow `[%3 objects.prf hashes.prf read-index.prf])
+  pag
+::
 ::
   ++  make-oversized-ai-page
   |=  parent=page:t
@@ -116,5 +147,17 @@
   =^  effs=(list effect:h)  nockchain
     (~(heard-block k-by:h nockchain) block1)
   =/  rejected=?  (cleanly-rejected effs)
+  (expect-eq !>(%.y) !>(rejected))
+::
+::  A peer can encode %3 in the legacy proof mold. It must be rejected before
+::  the undefined proof hash can process the untrusted page digest.
+++  test-legacy-v3-proof-cleanly-rejected
+  ^-  tang
+  =+  [nockchain genesis]=init-nockchain:h-v1
+  =/  block1=page:t  (make-legacy-v3-proof-page genesis)
+  =/  =cause:h-v1  [%fact %0 %heard-block block1]
+  =^  effs=(list effect:h-v1)  nockchain
+    (pok-on-wire:h-v1 libp2p-gossip-wire:h-v1 cause nockchain)
+  =/  rejected=?  (has-liar-peer-cause %legacy-v3-proof-artifact effs)
   (expect-eq !>(%.y) !>(rejected))
 --

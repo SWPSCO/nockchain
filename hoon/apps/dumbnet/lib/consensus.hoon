@@ -141,6 +141,18 @@
   =/  prf=(unit proof:sp)  ((soft proof:sp) pow)
   ?~  prf  %0
   version.u.prf
+::  Version %3 is reserved for the structured AI artifact. A legacy ZK proof
+::  carrying that tag has no valid verifier and must never enter consensus.
+++  legacy-v3-proof-artifact
+  |=  pow=*
+  ^-  ?
+  ?:  ?=([%ai-pow *] pow)
+    %.n
+  =/  prf=(unit proof:sp)  ((soft proof:sp) pow)
+  ?~  prf
+    %.n
+  ?=(%3 version.u.prf)
+::
 ::
 ::  +block-compute-work: a block's heaviness contribution.
 ::
@@ -610,6 +622,9 @@
   ~/  %validate-page-without-txs
   |=  [pag=page:t now-secs=@]
   ^-  (reason:dk ~)
+  ?:  (legacy-v3-proof-artifact (need ~(pow get:page:t pag)))
+    [%.n %legacy-v3-proof-artifact]
+  ::
   ::  Version check: pow is always verified (the no-pow testing path
   ::  was removed — see below). A powless block fails the `need`,
   ::  which is correct: every accepted block must carry a proof.
