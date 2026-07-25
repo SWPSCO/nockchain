@@ -2713,6 +2713,14 @@ fn precheck_moe_certificate_metadata(
     if certificate.zk_params.tile != h {
         return Err(CertificateNounError::PearlMergeUnsupportedTileShape);
     }
+    // The MoE canonical program fixes its block coordinate to zero. Certificate
+    // metadata must identify that same block coordinate.
+    if certificate.found_idx != 0 {
+        return Err(CertificateNounError::PearlMergePublicInputMismatch(
+            "found-idx",
+        ));
+    }
+
     // Shared envelope backstop (k, rank, stripe count) the dense path applies.
     validate_pearl_merge_recursive_params(params)?;
 

@@ -981,9 +981,9 @@ mod jet_tests {
     }
 
     /// KAT (real proving, ~25s): a real MoE `%ai-pow` block artifact verifies
-    /// through the jet CORE; a wrong commitment and an unmet difficulty are
-    /// rejected (`Ok(false)`, not a jet error). Validates the artifact decode-from-
-    /// noun + verify dispatch over the already-validated `verify_ai_pow_block_artifact`.
+    /// through the jet CORE; a wrong commitment, forged found index, and unmet
+    /// difficulty are rejected (`Ok(false)`, not a jet error). Validates the artifact
+    /// decode-from-noun + verify dispatch over `verify_ai_pow_block_artifact`.
     #[test]
     #[ignore = "real MoE compact proof (~25s); opt-in"]
     fn ai_pow_verify_jet_core_accepts_real_block_and_rejects_tampering() {
@@ -1034,6 +1034,15 @@ mod jet_tests {
                 Ok(false)
             ),
             "wrong block commitment must be rejected",
+        );
+        let mut forged_found_idx = artifact.clone();
+        forged_found_idx.certificate.found_idx = 1;
+        assert!(
+            matches!(
+                ai_pow_verify_core(&forged_found_idx, commit, target, &setup),
+                Ok(false)
+            ),
+            "MoE certificate metadata must bind the fixed found index",
         );
         assert!(
             matches!(
