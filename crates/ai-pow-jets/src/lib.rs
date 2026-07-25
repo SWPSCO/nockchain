@@ -821,13 +821,15 @@ mod tests {
 
 #[cfg(test)]
 mod jet_tests {
+    use ai_pow::difficulty::{attempt_wins, shape_work_factor_for, AI_POW_MAX_CONSENSUS_TARGET};
     use ai_pow::params::MatmulParams;
+    use ai_pow_miner::canonical::evaluate_canonical_moe_jackpot;
     use ai_pow_miner::certificate_noun::build_ai_pow_pearl_merge_moe_artifact_noun_from_node;
     use nockapp::noun::slab::NounSlab;
     use nockvm::noun::NounAllocator;
 
     use super::*;
-    use crate::setup::{prove_canonical_moe_block, CANONICAL_SETUP_COMMIT};
+    use crate::setup::{prove_canonical_moe_block, CanonicalBlock, CANONICAL_SETUP_COMMIT};
 
     /// Cue a jammed artifact into a fresh slab and return `(slab, root)`.
     fn cue_artifact(jammed: nockapp::Bytes) -> NounSlab {
@@ -844,6 +846,42 @@ mod jet_tests {
             crate::VerifierSetupLookup::NoSuchBucket => panic!("expected Found, got NoSuchBucket"),
             crate::VerifierSetupLookup::LoadFailed => panic!("expected Found, got LoadFailed"),
         }
+    }
+
+    /// Return a canonical artifact that clears the largest consensus-minable target.
+    ///
+    /// The target is scaled by the shape work factor, so `[0xff; 32]` overflows
+    /// and is deliberately unminable. A fixed commitment search makes the
+    /// acceptance KAT exercise a real winning ticket.
+    fn target_hitting_canonical_moe_block() -> (CanonicalBlock, [u8; 32]) {
+        let params = MatmulParams {
+            m: 64,
+            k: 1024,
+            n: 64,
+            noise_rank: 64,
+            tile: 8,
+            spot_checks: 1,
+            difficulty_bits: 0,
+        };
+        let target = AI_POW_MAX_CONSENSUS_TARGET;
+        let work_factor =
+            shape_work_factor_for(8, 8, params.k, params.noise_rank).expect("valid shape");
+        let commit = (0u64..4096)
+            .find_map(|attempt| {
+                let mut commit = [0u8; 32];
+                commit[..8].copy_from_slice(&attempt.to_le_bytes());
+                let jackpot = evaluate_canonical_moe_jackpot(&params, 8, 2, 1, commit, 0)
+                    .expect("evaluate canonical MoE ticket");
+                attempt_wins(&jackpot, &target, work_factor)
+                    .expect("max consensus target is minable")
+                    .then_some(commit)
+            })
+            .expect("canonical commitment search must find a target-winning ticket");
+        (
+            prove_canonical_moe_block(&params, 8, 2, 1, commit)
+                .expect("prove target-winning canonical MoE block"),
+            target,
+        )
     }
 
     /// **Soundness KAT (fast, no proving): the commit representation binding.**
@@ -949,17 +987,7 @@ mod jet_tests {
     #[test]
     #[ignore = "real MoE compact proof (~25s); opt-in"]
     fn ai_pow_verify_jet_core_accepts_real_block_and_rejects_tampering() {
-        let params = MatmulParams {
-            m: 64,
-            k: 1024,
-            n: 64,
-            noise_rank: 64,
-            tile: 8,
-            spot_checks: 1,
-            difficulty_bits: 0,
-        };
-        let block = prove_canonical_moe_block(&params, 8, 2, 1, CANONICAL_SETUP_COMMIT)
-            .expect("prove canonical MoE block");
+        let (block, target) = target_hitting_canonical_moe_block();
 
         let jammed = build_ai_pow_pearl_merge_moe_artifact_noun_from_node(
             &block.statement, &block.aux_inclusion, &block.moe_art, &block.certificate.zk_params,
@@ -985,8 +1013,6 @@ mod jet_tests {
             digest_bytes,
         };
         let commit = block.commit;
-        let loose_target = [0xffu8; 32];
-
         // Decode the artifact noun to the shape (what the jet does before verify).
         let slab = cue_artifact(jammed);
         let space = slab.noun_space();
@@ -997,14 +1023,14 @@ mod jet_tests {
 
         assert!(
             matches!(
-                ai_pow_verify_core(&artifact, commit, loose_target, &setup),
+                ai_pow_verify_core(&artifact, commit, target, &setup),
                 Ok(true)
             ),
             "real MoE block must verify through the jet core",
         );
         assert!(
             matches!(
-                ai_pow_verify_core(&artifact, [0x99u8; 32], loose_target, &setup),
+                ai_pow_verify_core(&artifact, [0x99u8; 32], target, &setup),
                 Ok(false)
             ),
             "wrong block commitment must be rejected",
@@ -1028,19 +1054,8 @@ mod jet_tests {
     #[test]
     #[ignore = "real MoE compact proof (~25s); opt-in"]
     fn slimmed_verifier_only_context_verifies_identically() {
-        let params = MatmulParams {
-            m: 64,
-            k: 1024,
-            n: 64,
-            noise_rank: 64,
-            tile: 8,
-            spot_checks: 1,
-            difficulty_bits: 0,
-        };
-        let block = prove_canonical_moe_block(&params, 8, 2, 1, CANONICAL_SETUP_COMMIT)
-            .expect("prove canonical MoE block");
+        let (block, target) = target_hitting_canonical_moe_block();
         let commit = block.commit;
-        let loose_target = [0xffu8; 32];
 
         let jammed = build_ai_pow_pearl_merge_moe_artifact_noun_from_node(
             &block.statement, &block.aux_inclusion, &block.moe_art, &block.certificate.zk_params,
@@ -1115,14 +1130,14 @@ mod jet_tests {
         // ACCEPT: the real block verifies against BOTH contexts.
         assert!(
             matches!(
-                ai_pow_verify_core(&artifact, commit, loose_target, &full_setup),
+                ai_pow_verify_core(&artifact, commit, target, &full_setup),
                 Ok(true)
             ),
             "real block verifies against the FULL context",
         );
         assert!(
             matches!(
-                ai_pow_verify_core(&artifact, commit, loose_target, &slim_setup),
+                ai_pow_verify_core(&artifact, commit, target, &slim_setup),
                 Ok(true)
             ),
             "real block verifies IDENTICALLY against the SLIMMED context",
@@ -1130,14 +1145,14 @@ mod jet_tests {
         // REJECT: a wrong commitment is rejected by BOTH contexts.
         assert!(
             matches!(
-                ai_pow_verify_core(&artifact, [0x99u8; 32], loose_target, &full_setup),
+                ai_pow_verify_core(&artifact, [0x99u8; 32], target, &full_setup),
                 Ok(false)
             ),
             "wrong commitment rejected by the FULL context",
         );
         assert!(
             matches!(
-                ai_pow_verify_core(&artifact, [0x99u8; 32], loose_target, &slim_setup),
+                ai_pow_verify_core(&artifact, [0x99u8; 32], target, &slim_setup),
                 Ok(false)
             ),
             "wrong commitment rejected IDENTICALLY by the SLIMMED context",
@@ -1157,19 +1172,8 @@ mod jet_tests {
             !crate::ai_pow_verifier_setup_initialized(),
             "run in a fresh process (installs the process-global setup)",
         );
-        let params = MatmulParams {
-            m: 64,
-            k: 1024,
-            n: 64,
-            noise_rank: 64,
-            tile: 8,
-            spot_checks: 1,
-            difficulty_bits: 0,
-        };
-        let block = prove_canonical_moe_block(&params, 8, 2, 1, CANONICAL_SETUP_COMMIT)
-            .expect("prove canonical MoE block");
+        let (block, target) = target_hitting_canonical_moe_block();
         let commit = block.commit;
-        let loose_target = [0xffu8; 32];
         let setup_key = VerifierSetupShapeKey::from_zk_params(
             &block.certificate.zk_params, block.certificate.trace_height,
         )
@@ -1203,14 +1207,14 @@ mod jet_tests {
 
         assert!(
             matches!(
-                ai_pow_verify_core(&artifact, commit, loose_target, &setup),
+                ai_pow_verify_core(&artifact, commit, target, &setup),
                 Ok(true)
             ),
             "a lazily-built setup verifies a real block",
         );
         assert!(
             matches!(
-                ai_pow_verify_core(&artifact, [0x99u8; 32], loose_target, &setup),
+                ai_pow_verify_core(&artifact, [0x99u8; 32], target, &setup),
                 Ok(false)
             ),
             "wrong commitment rejected",
@@ -1549,23 +1553,34 @@ mod jet_tests {
             spot_checks: 1,
             difficulty_bits: 0,
         };
+        let target = AI_POW_MAX_CONSENSUS_TARGET;
+        let work_factor =
+            shape_work_factor_for(8, 8, params.k, params.noise_rank).expect("valid shape");
 
-        // A realistic block-commitment noun: a tip5 noun-digest is 5 belts.
+        // A realistic block-commitment noun: a tip5 noun-digest is 5 belts. The
+        // first belt is a deterministic counter so this KAT proves a ticket that
+        // clears the consensus-minable target.
         let mut stack = NockStack::new(8 << 20, 0);
-        // Arbitrary belts (< 2^63 so they are valid direct atoms; the noun is
-        // only jammed+hashed, so the exact values don't matter).
-        let commit_noun = T(
-            &mut stack,
-            &[
-                D(0x0123_4567_89ab_cdef),
-                D(0x1122_3344_5566_7788),
-                D(0x2233_4455_6677_8899),
-                D(0x3344_5566_7788_99aa),
-                D(0x4455_6677_8899_aabb),
-            ],
-        );
-        // The jet's own commitment derivation (BLAKE3 of the nockvm jam).
-        let commit = commit_from_noun(&mut stack, commit_noun);
+        let commit = (0u64..4096)
+            .find_map(|counter| {
+                let commit_noun = T(
+                    &mut stack,
+                    &[
+                        D(counter),
+                        D(0x1122_3344_5566_7788),
+                        D(0x2233_4455_6677_8899),
+                        D(0x3344_5566_7788_99aa),
+                        D(0x4455_6677_8899_aabb),
+                    ],
+                );
+                let commit = commit_from_noun(&mut stack, commit_noun);
+                let jackpot = evaluate_canonical_moe_jackpot(&params, 8, 2, 1, commit, 0)
+                    .expect("evaluate noun-derived canonical ticket");
+                attempt_wins(&jackpot, &target, work_factor)
+                    .expect("max consensus target is minable")
+                    .then_some(commit)
+            })
+            .expect("noun-derived commitment search must find a target-winning ticket");
 
         // Prove a real cert bound to that noun-derived commit (the miner's job).
         let block = prove_canonical_moe_block(&params, 8, 2, 1, commit)
@@ -1606,11 +1621,10 @@ mod jet_tests {
             decode_ai_pow_pearl_merge_artifact_noun(root, &space, CertificateNounLimits::default())
                 .expect("decode artifact noun");
 
-        let loose_target = [0xffu8; 32];
         // ACCEPT: the jet-derived commit matches the cert's commitment.
         assert!(
             matches!(
-                ai_pow_verify_core(&artifact, commit, loose_target, &setup),
+                ai_pow_verify_core(&artifact, commit, target, &setup),
                 Ok(true)
             ),
             "real block must verify when the commit is derived from its commitment noun",
@@ -1622,7 +1636,7 @@ mod jet_tests {
         assert_ne!(other_commit, commit, "distinct nouns ⇒ distinct commits");
         assert!(
             matches!(
-                ai_pow_verify_core(&artifact, other_commit, loose_target, &setup),
+                ai_pow_verify_core(&artifact, other_commit, target, &setup),
                 Ok(false)
             ),
             "a block committed to a different noun must be rejected",
@@ -1640,20 +1654,9 @@ mod jet_tests {
     #[test]
     #[ignore = "real MoE compact proof + rebuild (~30s); opt-in"]
     fn moe_verifier_setup_seed_roundtrip_rebuilds_working_setup() {
-        use crate::setup::{
-            prove_canonical_moe_block, rebuild_verifier_setup_from_seed, CANONICAL_SETUP_COMMIT,
-        };
-        let params = MatmulParams {
-            m: 64,
-            k: 1024,
-            n: 64,
-            noise_rank: 64,
-            tile: 8,
-            spot_checks: 1,
-            difficulty_bits: 0,
-        };
-        let block = prove_canonical_moe_block(&params, 8, 2, 1, CANONICAL_SETUP_COMMIT)
-            .expect("prove canonical MoE block");
+        use crate::setup::rebuild_verifier_setup_from_seed;
+
+        let (block, target) = target_hitting_canonical_moe_block();
         let commit = block.commit;
 
         // Serialize the SMALL seed; assert it is small (vs the ~866 MB context).
@@ -1700,17 +1703,16 @@ mod jet_tests {
             decode_ai_pow_pearl_merge_artifact_noun(root, &space, CertificateNounLimits::default())
                 .expect("decode artifact noun");
 
-        let loose_target = [0xffu8; 32];
         assert!(
             matches!(
-                ai_pow_verify_core(&artifact, commit, loose_target, &setup),
+                ai_pow_verify_core(&artifact, commit, target, &setup),
                 Ok(true)
             ),
             "real MoE block must verify against the REBUILT (cached-seed) setup",
         );
         assert!(
             matches!(
-                ai_pow_verify_core(&artifact, [0x99u8; 32], loose_target, &setup),
+                ai_pow_verify_core(&artifact, [0x99u8; 32], target, &setup),
                 Ok(false)
             ),
             "wrong block commitment must still be rejected against the rebuilt setup",
@@ -1735,7 +1737,7 @@ mod jet_tests {
         );
         assert!(
             matches!(
-                ai_pow_verify_core(&artifact, commit, loose_target, &table[0]),
+                ai_pow_verify_core(&artifact, commit, target, &table[0]),
                 Ok(true)
             ),
             "real MoE block must verify against the DISK-loaded rebuilt setup",
@@ -1747,7 +1749,7 @@ mod jet_tests {
         artifact.certificate.trace_height = ai_pow::params::AI_POW_MAX_TRACE_HEIGHT + 1;
         assert!(
             matches!(
-                ai_pow_verify_core(&artifact, commit, loose_target, &setup),
+                ai_pow_verify_core(&artifact, commit, target, &setup),
                 Ok(false)
             ),
             "a block claiming trace_height above the consensus cap must be rejected",
