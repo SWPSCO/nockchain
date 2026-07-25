@@ -63,13 +63,21 @@ Consensus therefore never emits a target above
 AI_POW_MAX_CONSENSUS_TARGET = floor((2^256 − 1) / F_max) = 2^232 − 1
 ```
 
-with `F_max = 2^24`. Three constants encode this and must move together:
+with `F_max = 2^24`. Consensus enforces it on **every** path, not just the ASERT
+one: `+compute-target-ai-asert` caps its own output, but a block below the ASERT
+phase inherits the epoch target, which is uncapped and on a fresh chain is the
+genesis target. `+validate-page-without-txs` rejects an `%ai-pow` block whose
+target exceeds the cap (`%ai-pow-target-outside-minable-domain`) rather than
+letting it surface as an opaque pow failure.
+
+Four constants encode this and must move together:
 
 - `ai_pow::difficulty::AI_POW_MAX_CONSENSUS_TARGET`
 - Hoon `+max-ai-target-atom` (`hoon/common/tx-engine-0.hoon`), the ceiling
   passed to `+compute-target:asert` by `+compute-target-ai-asert`
 - `AI_ASERT_MAX_BEX` (`crates/nockchain/src/config.rs`), the fakenet
   `--fakenet-ai-asert-anchor-target-bex` bound
+- the `%ai-pow` target gate in `+validate-page-without-txs`
 
 ### I4 — fork choice weights every block equally
 
@@ -168,7 +176,7 @@ rejects.
 |---|---|
 | I1 | `ai-pow-miner`: `canonical_grind_threshold_matches_the_consensus_verifier` |
 | I2 | `ai-pow`: `difficulty::tests::expected_work_is_shape_invariant` |
-| I3 | `ai-pow`: `difficulty::tests::max_consensus_target_never_overflows`, `..._is_the_tight_bound`; `ai-pow-miner`: `canonical_grind_threshold_covers_the_whole_consensus_target_domain`; Hoon: `test-max-ai-target-atom-keeps-every-shape-representable`, `test-max-ai-target-atom-is-the-tight-bound`; `nockchain`: `validate_rejects_ai_asert_bex_above_the_minable_domain` |
+| I3 | `nockchain`: `ai_pow_valid_block_is_admitted` (real block admitted through the kernel); `ai-pow`: `difficulty::tests::max_consensus_target_never_overflows`, `..._is_the_tight_bound`; `ai-pow-miner`: `canonical_grind_threshold_covers_the_whole_consensus_target_domain`; Hoon: `test-max-ai-target-atom-keeps-every-shape-representable`, `test-max-ai-target-atom-is-the-tight-bound`; `nockchain`: `validate_rejects_ai_asert_bex_above_the_minable_domain` |
 | I4 | Hoon: `test-equal-weight-starts-at-the-asert-phase-not-admission`, `test-post-activation-blocks-weigh-the-same`, `test-post-activation-weight-is-difficulty-independent`, `test-single-block-cannot-outweigh-a-run`, `test-dual-puzzle-mixed-accumulated-work`, `test-block-work-continuous-at-activation`, `test-pre-ai-heaviness-uses-zk-normalizer` |
 | I5 | Hoon: `test-ai-anchor-sets-the-launch-block-interval`, `test-mainnet-ai-anchor-is-inside-the-minable-domain`; `nockchain-types`: `ai_anchor_sets_the_launch_block_interval` |
 
