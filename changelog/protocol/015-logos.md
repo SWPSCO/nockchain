@@ -145,7 +145,7 @@ ai-pow-activation-height=114.300   :: AI-PoW activation height
 +$  ai-asert                      :: AI-puzzle aserti3-2d params
   phase=114.300                    :: == ai-pow-activation-height
   anchor-height=114.300            :: == phase (the first AI block IS the anchor)
-  anchor-target-atom=^~((bex 227)):: 2^227 (< 2^256, see below)
+  anchor-target-atom=^~((bex 193)):: 2^193 (see below)
   ideal-block-time=250            :: seconds; AI wins ~60% of blocks
   half-life=^~((mul 12 (mul 60 60))) :: 12 h
 
@@ -171,12 +171,28 @@ phase` and `--fakenet-asert-*`/`--fakenet-zk-asert-*` validates `anchor-height =
 phase − 1`. A `--fakenet-ai-pow-activation-height 0` is rejected (it would make
 `phase − 1` underflow).
 
-The AI anchor target is `2^227`, **not** `2^291`. The AI jackpot is a 256-bit
-BLAKE3 keyed-hash, so an anchor `≥ 2^256` would be cleared by every jackpot —
-i.e. no proof-of-work at the anchor. `2^227` is chosen so that, under the
-equal-weight normalizer below, a block at `2^227` in the AI space contributes
-exactly the same fork-choice weight as a block at `2^291` in the ZK space
-(`291 − 227 = 64`).
+The AI anchor target is `2^193`, and it sets the AI puzzle's **launch block
+interval** — nothing else. Every post-activation block contributes the same
+heaviness whichever puzzle produced it (see *Equal-weight heaviness* below), so
+the anchor carries no fork-choice weight and is not calibrated against the ZK
+anchor.
+
+An `%ai-pow` target prices one MAC-equivalent of matmul, so
+`expected-MAC-equivalents-per-block == 2^256 / anchor`; `2^193` is `2^63`
+MAC-equivalents per block, i.e. ~3.7e16 MAC/s at the 250 s ideal — about a
+hundred consumer GPUs at the 200–400 TeraMAC/s a 4090/5090 does in Pearl pools.
+Erring hard is the safe direction: too hard costs a slow AI ramp that ASERT heals
+at one doubling per half-life of *elapsed* time, while too easy mints blocks at
+the wrong rate and ASERT only heals that at one doubling per ~173 *accepted* AI
+blocks.
+
+The anchor must also stay at or below `+max-ai-target-atom` (`2^232 − 1`). The
+verifier compares the jackpot against a *shape-scaled* threshold `target ·
+h·w·dot_product_length`, whose largest admissible shape factor is `2^24`; above
+`2^232 − 1` that product leaves the 256 bits it is computed in and fail-closes,
+which would make every block at such a target unminable rather than easy.
+`validate-page-without-txs` rejects an `%ai-pow` block above the cap outright
+(`%ai-pow-target-outside-minable-domain`).
 
 ### The AI-PoW puzzle
 
@@ -212,27 +228,49 @@ verify jet + verifier-setup residency), and the miner-side `ai-pow-miner` +
 
 ### Equal-weight heaviness
 
-`block-compute-work` (in `consensus.hoon`) dispatches on the block's proven
-puzzle-type and adds the puzzle's normalized work to the parent's accumulated
-work. `check-heaviness` requires `accumulated-work == parent + block-compute-work`
-exactly, and `check-target` requires the block's target to equal the
-ASERT-recomputed target — both deterministic, so a forged easy target or inflated
-work is rejected.
-
-The two work functions (`+tx-engine-0`):
+From `dual-puzzle-phase` (`== phase.ai-asert == phase.zk-asert-post-ai`) on,
+**every block contributes the same heaviness**, whichever puzzle produced it.
+`block-compute-work` (in `consensus.hoon`) is `+block-work-at` on the block's
+height and target (`+tx-engine`):
 
 ```
-compute-work(T)    = max-target-atom / (T + 1)          :: expected ZK attempts
-compute-work-ai(T) = max-target-atom / (T·2^64 + 1)     :: = 2^256 / T
-                   = compute-work(T · 2^64)              :: exact integer identity
+block-work-at(height, T) = dual-puzzle-block-work            if height >= dual-puzzle-phase
+                         = compute-work:page:v0(T)           otherwise
+
+dual-puzzle-block-work   = compute-work:page:v0(2^291)       :: a constant
 ```
 
-`compute-work-ai(T) == compute-work(T · 2^64)` is an exact integer identity, so
-at AI-target `T` and ZK-target `T·2^64` the two puzzles have equal solve
-probability and their work sums meaningfully. Work rises as the target tightens,
-so mining the easier puzzle yields *less* work per block — there is no cheap-weight
-coin-hopping. At the anchors, `2^227` (AI) and `2^291` (ZK) satisfy `227 + 64 =
-291`, so each anchor block contributes identical weight.
+Heaviness therefore does not read the pow artifact at all. Below the phase the
+rule is the unchanged ZK formula on the block's own target, so every block
+already on the chain keeps the accumulated work it was accepted with, and
+`dual-puzzle-block-work` is exactly what a ZK block at its own post-activation
+ASERT anchor contributed under that rule — so accumulated work is continuous
+across the boundary.
+
+Two puzzles' targets are not comparable numbers: they price different
+computations, in different spaces, optimized independently, and each puzzle's
+ASERT pins its own target to its own capacity. A heaviness that scaled as
+`1/target` would therefore make one puzzle's per-block weight track its capacity
+*relative* to the other's, and a single block of the heavier puzzle could
+displace as many blocks of the lighter one as that ratio — at every height both
+puzzles reached, the lighter block would lose. Weighting every block the same is
+what makes a block of either puzzle worth a block of the other, so neither
+puzzle's blocks are systematically orphaned and no single block can reorg more
+than one block of history.
+
+Each puzzle's *share* of accumulated work is then the ratio of its block rate,
+which its own ASERT holds at its own ideal-block-time: the 250 s / 375 s pair
+splits fork-choice weight exactly as it splits block production, and neither
+share depends on how either puzzle's work happens to be counted.
+
+Difficulty is still enforced, just not accumulated. `check-target` requires the
+block's target to equal the ASERT-recomputed target and `check-heaviness`
+requires `accumulated-work == parent + block-compute-work` exactly — both
+deterministic, so a forged easy target or inflated work is rejected
+(`%page-target-invalid` / `%page-heaviness-invalid`). Every branch's ASERT drives
+that branch to the same block rate, so a minority miner's private branch
+retargets down to the same *cadence* but starts and stays behind on count; it can
+match the honest chain, not outpace it.
 
 ### Per-puzzle ASERT
 
@@ -256,7 +294,9 @@ the jet is absent — so a node without the jet fails closed rather than admitti
 unverified AI blocks.
 
 The jet (`crates/ai-pow-jets`) binds the certificate to
-`(block-commitment, target)`, enforces `jackpot ≤ target`, verifies the compact
+`(block-commitment, target)`, enforces `jackpot ≤ target · h·w·dot_product_length`
+(the consensus target prices one MAC-equivalent; the jackpot is compared against
+that target scaled by the tile shape, never against the target directly), verifies the compact
 recursive certificate against a verifier-owned setup, and returns a loobean.
 **It is impossible to panic the node from this jet**: the two attacker-controlled
 steps (decoding the artifact and running the recursion verifier) are wrapped in
@@ -390,9 +430,10 @@ the v1 10-slot layout, whose Rust encode/decode round-trip is regression-pinned.
 ### Rollback
 
 Rollback to a pre-Logos binary is safe only before `ai-pow-activation-height`.
-After the first `%ai-pow` block, a pre-Logos node will reject it (unknown block
-variant / no verify jet) and compute divergent heaviness (no
-`compute-work-ai` normalizer), so it forks off.
+From `dual-puzzle-phase` on, a pre-Logos node computes divergent heaviness for
+*every* block (it applies the old `1/target` formula where Logos applies the
+constant `dual-puzzle-block-work`), and it rejects the first `%ai-pow` block
+outright (unknown block variant / no verify jet), so it forks off.
 
 ## Backward Compatibility
 
@@ -402,8 +443,9 @@ This is a **consensus-critical** upgrade. After activation:
 
 - Pre-0.1.15 nodes cannot decode or verify `%ai-pow` blocks (unknown block
   variant; no `%ai-pow-verify` jet) and will reject them.
-- Heaviness diverges: pre-0.1.15 nodes lack `compute-work-ai`, so they cannot
-  reproduce the accumulated work of any chain containing an `%ai-pow` block.
+- Heaviness diverges: pre-0.1.15 nodes apply the `1/target` work formula to
+  post-`dual-puzzle-phase` blocks, so they cannot reproduce the accumulated work
+  of any post-activation chain — including one containing only `%pow` blocks.
 - Per-puzzle ASERT changes ZK target computation for candidate height 114,300,
   using block 114,299 as the new regime's anchor; pre-0.1.15 nodes will not
   reproduce it.
@@ -436,13 +478,18 @@ structurally valid across the boundary.
   rotation from one IP escalates through the bounded IP-exclusion policy. Other
   liar reasons remain peer-scoped because protocol-version skew can produce
   honest disagreement at an upgrade boundary.
-- **Equal-weight soundness.** `compute-work-ai(T) == compute-work(T·2^64)` is an
-  exact identity, so the two puzzles sum work faithfully; `check-heaviness` and
-  `check-target` re-derive both deterministically, so a forged easy target or
-  inflated work is rejected (`%page-target-invalid` / `%page-heaviness-invalid`).
-- **256-bit AI target, no saturation.** The AI anchor is `2^227 < 2^256`. An
-  anchor `≥ 2^256` would be cleared by every jackpot (trivial PoW); `2^227`
-  keeps a real work margin and equal-weights the ZK anchor.
+- **Equal-weight soundness.** Post-activation heaviness is a constant per block
+  and never reads the pow artifact, so no choice of puzzle or target buys extra
+  weight; `check-heaviness` and `check-target` re-derive both deterministically,
+  so a forged easy target or inflated work is rejected
+  (`%page-target-invalid` / `%page-heaviness-invalid`).
+- **AI target stays in the minable domain.** The jackpot is compared against
+  `target · h·w·dot_product_length`, and the largest admissible shape factor is
+  `2^24`, so any target above `+max-ai-target-atom` (`2^232 − 1`) pushes that
+  product out of its 256-bit domain and fail-closes — unminable, not easy.
+  `validate-page-without-txs` rejects such a block on every path
+  (`%ai-pow-target-outside-minable-domain`), and `+compute-target-ai-asert` caps
+  its own output at the same bound. The `2^193` anchor sits well inside it.
 - **One PoW ⇒ one Nockchain block (merge mining).** `verify_pearl_aux_inclusion`
   enforces exactly one `NOCKCHAIN-AI-POW-AUX` tag in the Pearl coinbase, and the
   aux commitment must equal the consensus block commitment — so a single Pearl
