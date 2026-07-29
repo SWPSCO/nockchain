@@ -141,12 +141,15 @@ jobs:
         RUN cargo build --release --locked --target x86_64-unknown-linux-gnu --bin nockchain
         RUN cargo build --release --locked --target x86_64-unknown-linux-gnu \
             -p ai-pow-miner --features node --bin ai-pow-mine
+        RUN cargo build --release --locked --target x86_64-unknown-linux-gnu \
+            -p zk-pow-miner --bin zk-pow-mine
         FROM debian:bullseye-slim
         WORKDIR /nc
         RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
         COPY --from=builder /build/target/x86_64-unknown-linux-gnu/release/nockchain /usr/local/bin/nockchain
         COPY --from=builder /build/target/x86_64-unknown-linux-gnu/release/ai-pow-mine /usr/local/bin/ai-pow-mine
-        RUN nockchain --version && ai-pow-mine --version
+        COPY --from=builder /build/target/x86_64-unknown-linux-gnu/release/zk-pow-mine /usr/local/bin/zk-pow-mine
+        RUN nockchain --version && ai-pow-mine --version && zk-pow-mine --version
         ENTRYPOINT ["/usr/local/bin/nockchain"]
         EOF
         
