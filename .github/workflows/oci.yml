@@ -113,8 +113,13 @@ jobs:
         ARG UPSTREAM_COMMIT=master
         RUN apt-get update && apt-get install -y \
             build-essential \
+            clang \
+            cmake \
+            libclang-dev \
+            libssl-dev \
             musl-tools \
             git \
+            pkg-config \
             unzip \
             curl \
             && rm -rf /var/lib/apt/lists/*
@@ -133,12 +138,19 @@ jobs:
         RUN cp .env_example .env
         RUN cargo install --target x86_64-unknown-linux-gnu --locked --force --path crates/hoonc --bin hoonc
         RUN make build-hoon-all
-        RUN cargo build --release --target x86_64-unknown-linux-gnu --bin nockchain
+        RUN cargo build --release --locked --target x86_64-unknown-linux-gnu --bin nockchain
+        RUN cargo build --release --locked --target x86_64-unknown-linux-gnu \
+            -p ai-pow-miner --features node --bin ai-pow-mine
+        RUN cargo build --release --locked --target x86_64-unknown-linux-gnu \
+            -p zk-pow-miner --bin zk-pow-mine
         FROM debian:bullseye-slim
         WORKDIR /nc
         RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
         COPY --from=builder /build/target/x86_64-unknown-linux-gnu/release/nockchain /usr/local/bin/nockchain
-        ENTRYPOINT ["nockchain", "--help"]
+        COPY --from=builder /build/target/x86_64-unknown-linux-gnu/release/ai-pow-mine /usr/local/bin/ai-pow-mine
+        COPY --from=builder /build/target/x86_64-unknown-linux-gnu/release/zk-pow-mine /usr/local/bin/zk-pow-mine
+        RUN nockchain --version && ai-pow-mine --version && zk-pow-mine --version
+        ENTRYPOINT ["/usr/local/bin/nockchain"]
         EOF
         
     - name: Build and push
