@@ -99,7 +99,7 @@ jobs:
     - name: Create Dockerfile
       run: |
         cat << 'EOF' > Dockerfile
-        FROM rust:1.87-slim-bullseye as builder
+        FROM rust:1.87-slim-bookworm as builder
         ARG BUILD_LABEL="production"
         ARG BUILD_HOST
         ARG BUILD_USER
