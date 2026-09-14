@@ -1203,7 +1203,8 @@
           %1  [%mine-zk %1 commit zk-target pow-len:t]
           %2  [%mine-zk %2 commit zk-target pow-len:t]
           %3  [%mine-zk %3 commit zk-target pow-len:t]
-          %4  ~|(%unexpected-v4-in-zk-candidate !!)
+          %4  ~|(%unexpected-v4-ai-in-zk-candidate !!)
+          %5  [%mine-zk %5 commit zk-target pow-len:t]
         ==
       ?:  (gte candidate-height ai-pow-activation-height.constants.k)
         =/  ai-cand=page:t  (build-ai-candidate:con candidate-block.m.k shares.m.k)
@@ -1282,9 +1283,10 @@
         [%seen %block ~(digest get:page:t pag) ~]~
       ::
       ::  check to see if the .digest is valid. if it is not, we
-      ::  emit a %liar-peer. if it is, then any further %liar effects
-      ::  should be %liar-block-id. this tells the runtime that
-      ::  anybody who sends us this block id is a liar
+      ::  emit a %liar-peer. Most later failures are semantic block failures and
+      ::  may use %liar-block-id. A v5 proof suffix is only a witness, however,
+      ::  so its failure must remain peer-specific: another envelope with the
+      ::  same proof-independent block ID may be valid.
       ?.  (check-digest:page:t pag)
         ~>  %slog.[1 leaf+"heard-block: Digest is not valid"]
         :_  k
@@ -1322,6 +1324,13 @@
       ::
       ?.  (check-pow pag)
         ~>  %slog.[1 leaf+"heard-block: Failed PoW check"]
+        =/  pow  (need ~(pow get:page:t pag))
+        ?:  =(%5 (pow-artifact-to-proof-version:con pow))
+          ::  Do not emit the earlier %track %add or poison this shared block
+          ::  ID. The exact v5 envelope failed, not necessarily the semantic
+          ::  block represented by object 0.
+          :_  k
+          [(liar-effect wir %failed-pow-witness)]~
         :_  k
         %+  snoc  block-effs
         [%liar-block-id ~(digest get:page:t pag) %failed-pow-check]
@@ -2305,7 +2314,8 @@
             %1  [%1 commit zk-target pow-len:t]
             %2  [%2 commit zk-target pow-len:t]
             %3  [%3 commit zk-target pow-len:t]
-            %4  ~|(%unexpected-v4-in-zk-mine-start !!)
+            %4  ~|(%unexpected-v4-ai-in-zk-mine-start !!)
+            %5  [%5 commit zk-target pow-len:t]
           ==
         =/  zk-effect  [%mine-zk zk-mine-start]
         :_  k

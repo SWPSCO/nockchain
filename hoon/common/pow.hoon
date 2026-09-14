@@ -41,9 +41,19 @@
       %1  (prove:np version header nonce pow-len)
       %2  (prove:np version header nonce pow-len)
       %3  (prove:np version header nonce pow-len)
+      %5  (prove:np version header nonce pow-len)
     ==
   ?>  ?=(%& -.prove-result)
   =/  =proof:sp  p.prove-result
   =/  proof-hash=tip5-hash-atom  (proof-to-pow proof)
   [proof proof-hash]
+::
+++  v5-nonce-pow
+  |=  [header=noun-digest:tip5 nonce=noun-digest:tip5 pow-len=@]
+  ^-  [object-zero=proof-data:sp digest=tip5-hash-atom]
+  =/  object-zero=proof-data:sp
+    (puzzle-proof-data:sp header nonce pow-len)
+  =/  probe=proof:sp
+    [%5 [object-zero ~] ~ 0]
+  [object-zero (proof-to-pow:sp probe)]
 --

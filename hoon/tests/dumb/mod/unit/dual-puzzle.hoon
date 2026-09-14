@@ -1,18 +1,17 @@
 ::  tests/dumb/mod/unit/dual-puzzle.hoon
 ::
-::    Dual-puzzle (ZK-PoW %3 + AI-PoW %4) consensus mechanism tests.
+::    Dual-puzzle (ZK-PoW + AI-PoW %4) consensus mechanism tests.
 ::
-::    Focus: fork choice must not favour either puzzle at calibration and must
-::    not reward a discount. Once both are live every block contributes the
-::    expected work at its own target, priced per puzzle in
-::    ZKPoW-attempt-equivalents at the +mac-equivalents-per-zk-attempt
-::    exchange rate. At the launch anchors both lanes produce the same heaviness
-::    per second, so a block of one is worth a block of the other; a block
-::    whose target is cheap for its puzzle earns proportionally less, so an
-::    ASERT discount can never subsidize a reorg.
+::    Focus: fork choice must price both puzzles in shared hardware units and
+::    must not reward a difficulty discount. Once both are live every block
+::    contributes expected work at its own target, priced per puzzle in
+::    height-selected ZK work-unit equivalents.
+::    ASERT block shares follow each lane's ideal interval, while normalized
+::    work rates follow the declared capacity anchors.
 ::
 /=  helpers  /tests/dumb/helpers
 /=  dcon     /apps/dumbnet/lib/consensus
+/=  dder     /apps/dumbnet/lib/derived
 /=  asert    /apps/dumbnet/lib/asert
 /=  txe      /common/tx-engine
 /=  *        /apps/dumbnet/lib/types
@@ -27,9 +26,9 @@
 ++  ht  ~(. helpers bc-tandem:helpers)
 ::
 ::  Post-activation heaviness is the expected work at the block's own target,
-::  priced per puzzle in ZKPoW-attempt-equivalents. ZK blocks keep the
-::  pre-activation formula exactly; AI blocks contribute 2^256/(target+1)
-::  MAC-equivalents over the +mac-equivalents-per-zk-attempt exchange rate.
+::  priced per puzzle in height-selected ZK work-unit equivalents. ZK blocks
+::  keep the pre-activation formula exactly; AI blocks contribute
+::  2^256/(target+1) MAC-equivalents over the selected exchange rate.
 ++  test-post-activation-work-is-puzzle-priced
   ^-  tang
   =/  pt  ~(. txe bc-dual-post:helpers)
@@ -46,9 +45,9 @@
     ::  ZK keeps the pre-activation formula on its own target
     %+  expect-eq  !>(zk-w)
     !>((merge:bignum (compute-work:page:pt ~(target get:page:t tip.zk-built))))
-    ::  AI contributes its MAC-equivalents in attempt-equivalents
+    ::  AI contributes its MAC-equivalents in ZK work-unit equivalents
     %+  expect-eq  !>(ai-w)
-    !>((merge:bignum (ai-pow-work:page:pt ~(target get:page:t tip.ai-built))))
+    !>((merge:bignum (ai-pow-work:page:pt ~(height get:page:t tip.ai-built) ~(target get:page:t tip.ai-built))))
   ==
 ::
 ::  ...and the weight tracks difficulty: of two AI blocks whose ASERT targets
@@ -98,7 +97,7 @@
     ::  height 1 (pre-phase): the ZK formula on the block's own target
     (expect-eq !>(w1) !>((merge:bignum (compute-work:page:pt ~(target get:page:t h1)))))
     ::  height 2 (post-phase): MAC-equivalents over the exchange rate
-    (expect-eq !>(w2) !>((merge:bignum (ai-pow-work:page:pt ~(target get:page:t tip.built)))))
+    (expect-eq !>(w2) !>((merge:bignum (ai-pow-work:page:pt ~(height get:page:t tip.built) ~(target get:page:t tip.built)))))
     ::  ...and the two rules genuinely differ here, so both pins are meaningful
     (expect-eq !>(%.y) !>(!=(w1 w2)))
   ==
@@ -119,6 +118,139 @@
     (expect-eq !>(125.999) !>(anchor-height.ai-asert.mainnet))
     (expect-eq !>(500) !>(ideal-block-time.ai-asert.mainnet))
     (expect-eq !>((bex 192)) !>(anchor-target-atom.ai-asert.mainnet))
+  ==
+::
+::  Version %5 re-anchors both lanes at height 147,500. AI and ZK swap their
+::  Logos ideal intervals: 214s AI / 500s ZK gives 70.028% / 29.972% and keeps
+::  the combined cadence at 149.86s.
+++  test-mainnet-v5-dual-puzzle-schedule
+  ^-  tang
+  =/  mainnet  *blockchain-constants:txe
+  =/  mt  ~(. txe mainnet)
+  =/  dc  ~(. dcon *consensus-state *derived-state mainnet)
+  =/  zk-before  (need (active-asert-anchor:dc %zk 147.499))
+  =/  ai-before  (need (active-asert-anchor:dc %ai 147.499))
+  =/  zk-v5  (need (active-asert-anchor:dc %zk 147.500))
+  =/  ai-v5  (need (active-asert-anchor:dc %ai 147.500))
+  ;:  weld
+    (expect-eq !>(147.500) !>(zk-pow-v5-phase:page:mt))
+    (expect-eq !>(214) !>(ideal-block-time.zk-before))
+    (expect-eq !>(500) !>(ideal-block-time.zk-v5))
+    (expect-eq !>(500) !>(ideal-block-time.ai-before))
+    (expect-eq !>(214) !>(ideal-block-time.ai-v5))
+    (expect-eq !>(147.500) !>(activation-height.zk-v5))
+    (expect-eq !>(147.500) !>(activation-height.ai-v5))
+  ==
+::
+::  The first child at the version-%5 boundary starts both ASERT lineages at
+::  their new anchor target. No pre-cutover derived lineage is required, but
+::  the shared predecessor's puzzle-keyed median timestamp must be present.
+++  test-mainnet-v5-first-child-uses-new-asert-anchors
+  ^-  tang
+  =/  mainnet  *blockchain-constants:txe
+  =/  mt  ~(. txe mainnet)
+  =/  parent-id=block-id:t  *block-id:t
+  =/  anchor-min-ts=@  123.456
+  =/  timestamps=(h-map block-id:t @)
+    (~(put h-by *(h-map block-id:t @)) parent-id anchor-min-ts)
+  =/  caches=(map @tas (h-map block-id:t @))
+    *(map @tas (h-map block-id:t @))
+  =.  caches  (~(put by caches) %zk timestamps)
+  =.  caches  (~(put by caches) %ai timestamps)
+  =/  con=consensus-state  *consensus-state
+  =.  asert-anchor-min-timestamps.con  caches
+  =/  dc  ~(. dcon con *derived-state mainnet)
+  =/  zk-target=@
+    (merge:bignum (compute-target-zk-asert:dc 147.500 parent-id))
+  =/  ai-target=@
+    (merge:bignum (compute-target-ai-asert:dc 147.500 parent-id))
+  %+  expect-eq
+    !>([zk-pow-v5-zk-anchor-target:page:mt zk-pow-v5-ai-anchor-target:page:mt])
+  !>([zk-target ai-target])
+::
+::  Accepting either puzzle at height 147,500 discards all Logos lineage
+::  counters and heads. The reset happens once: height 147,501 extends the
+::  freshly-created branch-local state rather than zeroing it again.
+++  test-mainnet-v5-derived-lineages-reset-once
+  ^-  tang
+  =/  mainnet  *blockchain-constants:txe
+  =/  mt  ~(. txe mainnet)
+  =/  hm  ~(. helpers mainnet)
+  =/  parent=page:t  default-genesis-page:hm
+  =.  parent
+    ?^  -.parent
+      parent(height 147.499, digest *block-id:t)
+    parent(height 147.499, digest *block-id:t)
+  =/  parent-id=block-id:t  ~(digest get:page:mt parent)
+  =/  con=consensus-state  *consensus-state
+  =.  blocks.con
+    (~(put h-by blocks.con) parent-id (to-local-page:page:mt parent))
+  =/  prior-state=puzzle-asert-state
+    [zk-count=91 ai-count=73 zk-head=`parent-id ai-head=`parent-id]
+  =/  prior=derived-state  *derived-state
+  =.  puzzle-asert-states.prior
+    (~(put h-by puzzle-asert-states.prior) parent-id prior-state)
+  =/  zk-page=page:t  (make-empty-page:hm parent)
+  =/  zk-id=block-id:t  ~(digest get:page:mt zk-page)
+  =/  zk-derived=derived-state
+    (~(update-puzzle-asert-state dder prior mainnet) con zk-page)
+  =/  zk-state=puzzle-asert-state
+    (~(got h-by puzzle-asert-states.zk-derived) zk-id)
+  =/  ai-page=page:t  (make-empty-page:hm parent)
+  =.  ai-page
+    ?^  -.ai-page
+      ai-page
+    ai-page(pow `(sample-ai-pow-artifact:hm 4))
+  =.  ai-page
+    ?^  -.ai-page
+      ai-page(digest (compute-digest:page:mt ai-page))
+    ai-page(digest (compute-digest:page:mt ai-page))
+  =/  ai-id=block-id:t  ~(digest get:page:mt ai-page)
+  =/  ai-derived=derived-state
+    (~(update-puzzle-asert-state dder prior mainnet) con ai-page)
+  =/  ai-state=puzzle-asert-state
+    (~(got h-by puzzle-asert-states.ai-derived) ai-id)
+  =/  after-con=consensus-state  con
+  =.  blocks.after-con
+    (~(put h-by blocks.after-con) ai-id (to-local-page:page:mt ai-page))
+  =/  after-page=page:t  (make-empty-page:hm ai-page)
+  =/  after-id=block-id:t  ~(digest get:page:mt after-page)
+  =/  after-derived=derived-state
+    (~(update-puzzle-asert-state dder ai-derived mainnet) after-con after-page)
+  =/  after-state=puzzle-asert-state
+    (~(got h-by puzzle-asert-states.after-derived) after-id)
+  %+  expect-eq
+    !>  :*  [1 0 `zk-id ~]
+            [0 1 ~ `ai-id]
+            [1 1 `after-id `ai-id]
+        ==
+  !>  [zk-state ai-state after-state]
+::
+::  The version-%5 ASERT anchors price 2,000 RTX 5090 ZK miners and
+::  10 ExaMAC/s of AI-PoW capacity.
+++  test-mainnet-v5-anchor-calibration
+  ^-  tang
+  =/  mt  ~(. txe *blockchain-constants:txe)
+  =/  zk-work=@
+    %-  merge:bignum
+    (block-work-at:page:mt 147.500 %dumb-zkpow (chunk:bignum zk-pow-v5-zk-anchor-target:page:mt))
+  =/  ai-work=@
+    %-  merge:bignum
+    (block-work-at:page:mt 147.500 %ai-pow (chunk:bignum zk-pow-v5-ai-anchor-target:page:mt))
+  ;:  weld
+    (expect-eq !>(1.028.807) !>(zk-pow-v5-mac-equivalents-per-zk-hash:page:mt))
+    (expect-eq !>(2.000) !>(zk-pow-v5-reference-zk-gpu-count:page:mt))
+    (expect-eq !>(388.800.000) !>(zk-pow-v5-reference-zk-hashes-per-gpu-second:page:mt))
+    (expect-eq !>(777.600.000.000) !>(zk-pow-v5-reference-zk-hashes-per-second:page:mt))
+    (expect-eq !>(10.000.000.000.000.000.000) !>(zk-pow-v5-reference-ai-macs-per-second:page:mt))
+    %+  expect-eq
+      !>(5.493.793.810.273.389.665.851.259.858.908.398.676.672.107.719.039.465.617.368.341.183.437.285.024.349.963.580)
+    !>(zk-pow-v5-zk-anchor-target:page:mt)
+    %+  expect-eq
+      !>(54.108.452.914.633.736.179.238.778.041.442.947.594.985.974.142.822.693.476)
+    !>(zk-pow-v5-ai-anchor-target:page:mt)
+    (expect-eq !>(777.599.999.999) !>((div zk-work 500)))
+    (expect-eq !>(9.719.996.073.121) !>((div ai-work 214)))
   ==
 ::
 :::  ZK weight is continuous across the activation boundary: a post-activation
@@ -257,15 +389,17 @@
     (expect-eq !>(%.y) !>((lth ai-cap-w zk-anchor-w)))
   ==
 ::
-::  Per-block work at the launch anchors, in ZKPoW-attempt-equivalents. The
-::  exchange rate is +mac-equivalents-per-zk-attempt, from the reference-GPU
-::  co-benchmark (see tx-engine).
+::  Per-block work at the Logos anchors uses the historical exchange rate.
+::  Version %5 switches only blocks at and above height 147,500 to the public
+::  Tip5-hash calibration.
 ++  test-anchor-work-is-exchange-rate-priced
   ^-  tang
   =/  mt  ~(. txe *blockchain-constants:txe)
   =/  mainnet  *blockchain-constants:txe
   ;:  weld
     (expect-eq !>(25.750.000.000) !>(mac-equivalents-per-zk-attempt:page:mt))
+    (expect-eq !>(25.750.000.000) !>((mac-equivalents-per-zk-work-unit-at:page:mt 147.499)))
+    (expect-eq !>(1.028.807) !>((mac-equivalents-per-zk-work-unit-at:page:mt 147.500)))
     %+  expect-eq  !>(306.374.333)
     !>((merge:bignum (block-work-at:page:mt 126.000 %dumb-zkpow (chunk:bignum anchor-target-atom.zk-asert-post-ai.mainnet))))
     %+  expect-eq  !>(716.378.410)
@@ -330,7 +464,7 @@
   =/  expected-target
     (~(compute-target-ai-asert dcon con der.built bc-dual-post:helpers) ~(height get:page:t zk-cand) ~(parent get:page:t zk-cand))
   =/  parent-work  (merge:bignum ~(accumulated-work get:page:t tip.built))
-  =/  expected-work  (add parent-work (merge:bignum (ai-pow-work:page:t expected-target)))
+  =/  expected-work  (add parent-work (merge:bignum (ai-pow-work:page:t ~(height get:page:t ai-cand) expected-target)))
   %+  expect-eq
     !>([(merge:bignum expected-target) expected-work])
   !>  :-  (merge:bignum ~(target get:page:t ai-cand))

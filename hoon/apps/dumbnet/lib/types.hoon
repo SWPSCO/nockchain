@@ -768,6 +768,8 @@
       [%3 block-commitment=noun-digest:tip5:zeke target=bignum:bignum:dt pow-len=@]
       ::  %4 identifies the AI-PoW artifact emitted only through %mine-ai.
       [%4 block-commitment=noun-digest:tip5:zeke target=bignum:bignum:dt pow-len=@]
+      ::  %5 is the post-147500 ZK proof version.
+      [%5 block-commitment=noun-digest:tip5:zeke target=bignum:bignum:dt pow-len=@]
   ==
 ::
 +$  seen
@@ -823,11 +825,10 @@
       ::  poke.
       [%liar-peer p=peer-id cause=term]  ::  block-id is wrong, or raw-tx did not validate
       ::
-      ::  block-id is correct, block did not validate. this is only returned once
-      ::  a block's fields are all checked as having been valid - so we know
-      ::  the block-id and powork are valid in particular. so only bad tx data
-      ::  can cause this to be emitted - and the libp2p driver will ban all nodes
-      ::  that sent us this block-id as a result.
+      ::  block-id is correct, but a failure shared by every representation of
+      ::  that semantic block was found. the libp2p driver will ban all nodes
+      ::  that sent us this block-id as a result. do not use this for a v5 proof
+      ::  witness failure: the block ID intentionally excludes that envelope.
       [%liar-block-id p=block-id:dt cause=term]
   ==
 ::

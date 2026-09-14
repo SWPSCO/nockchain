@@ -1,6 +1,6 @@
 +++
 version = "0.1.16"
-status = "draft"
+status = "activated"
 consensus_critical = true
 
 # Activation
@@ -15,7 +15,7 @@ authors = ["Logan Allen (National Compute Co)"]
 reviewers = ["@nockchain-core"]
 
 supersedes = "0.1.15"
-superseded_by = ""
+superseded_by = "0.1.17"
 +++
 
 # Logos
