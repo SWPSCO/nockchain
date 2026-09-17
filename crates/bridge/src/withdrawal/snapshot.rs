@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime};
 
@@ -9,6 +10,7 @@ use nockapp_grpc::services::private_nockapp::client::PrivateNockAppGrpcClient;
 use nockchain_types::tx_engine::common::Name;
 use nockchain_types::tx_engine::v1::note::BalanceUpdate;
 use noun_serde::{NounDecode, NounEncode};
+use tracing::warn;
 use wallet_tx_builder::adapter::{
     normalize_balance_pages, NormalizeSnapshotError, NormalizedSnapshot,
 };
@@ -16,6 +18,10 @@ use wallet_tx_builder::adapter::{
 use crate::shared::errors::BridgeError;
 use crate::shared::types::Tip5Hash;
 const SNAPSHOT_DRIFT_MAX_RETRIES: usize = 2;
+const BACKGROUND_REFRESH_IDLE: u8 = 0;
+const BACKGROUND_REFRESH_RUNNING: u8 = 1;
+const BACKGROUND_REFRESH_PENDING: u8 = 2;
+const BACKGROUND_REFRESH_FAILURE_BACKOFF: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct BridgeOwnedNoteSelectors {
@@ -140,12 +146,19 @@ impl BridgeNoteSnapshotSource for PrivateNockAppSnapshotSource {
     }
 }
 
+struct SnapshotCache {
+    latest_started_generation: u64,
+    committed_generation: u64,
+    snapshot: Option<ConfirmedBridgeNoteSnapshot>,
+}
+
 pub struct BridgeNoteSnapshotService {
     source: Arc<dyn BridgeNoteSnapshotSource>,
     selectors: BridgeOwnedNoteSelectors,
     stale_after: Duration,
-    cache: Arc<RwLock<Option<ConfirmedBridgeNoteSnapshot>>>,
+    cache: Arc<RwLock<SnapshotCache>>,
     nockchain_confirmation_depth: u64,
+    background_refresh_state: Arc<AtomicU8>,
 }
 
 impl Clone for BridgeNoteSnapshotService {
@@ -156,6 +169,7 @@ impl Clone for BridgeNoteSnapshotService {
             stale_after: self.stale_after,
             cache: self.cache.clone(),
             nockchain_confirmation_depth: self.nockchain_confirmation_depth,
+            background_refresh_state: self.background_refresh_state.clone(),
         }
     }
 }
@@ -170,8 +184,13 @@ impl BridgeNoteSnapshotService {
             source,
             selectors: selectors.normalized(),
             stale_after,
-            cache: Arc::new(RwLock::new(None)),
+            cache: Arc::new(RwLock::new(SnapshotCache {
+                latest_started_generation: 0,
+                committed_generation: 0,
+                snapshot: None,
+            })),
             nockchain_confirmation_depth: 0,
+            background_refresh_state: Arc::new(AtomicU8::new(BACKGROUND_REFRESH_IDLE)),
         }
     }
 
@@ -197,13 +216,18 @@ impl BridgeNoteSnapshotService {
     }
 
     pub fn snapshot(&self) -> Option<ConfirmedBridgeNoteSnapshot> {
-        self.cache.read().ok().and_then(|guard| guard.clone())
+        self.cache.read().ok().and_then(|guard| {
+            if guard.committed_generation != guard.latest_started_generation {
+                return None;
+            }
+            guard.snapshot.clone()
+        })
     }
 
     pub async fn refresh(&self) -> Result<Option<ConfirmedBridgeNoteSnapshot>, BridgeError> {
+        let generation = self.begin_refresh()?;
         if self.selectors.is_empty() {
-            self.replace_snapshot(None);
-            return Ok(None);
+            return Ok(self.commit_snapshot(generation, None));
         }
 
         let mut attempts = 0usize;
@@ -211,8 +235,7 @@ impl BridgeNoteSnapshotService {
             attempts = attempts.saturating_add(1);
             let pages = self.source.fetch_pages(&self.selectors).await?;
             if pages.is_empty() {
-                self.replace_snapshot(None);
-                return Ok(None);
+                return Ok(self.commit_snapshot(generation, None));
             }
 
             match normalize_balance_pages(&pages) {
@@ -221,8 +244,7 @@ impl BridgeNoteSnapshotService {
                         refreshed_at: SystemTime::now(),
                         normalized,
                     };
-                    self.replace_snapshot(Some(snapshot.clone()));
-                    return Ok(Some(snapshot));
+                    return Ok(self.commit_snapshot(generation, Some(snapshot)));
                 }
                 Err(NormalizeSnapshotError::Snapshot(
                     wallet_tx_builder::adapter::SnapshotConsistencyError::HeightDrift
@@ -264,6 +286,81 @@ impl BridgeNoteSnapshotService {
         self.refresh().await
     }
 
+    pub fn refresh_in_background(&self) {
+        loop {
+            match self.background_refresh_state.load(Ordering::Acquire) {
+                BACKGROUND_REFRESH_IDLE => {
+                    if self
+                        .background_refresh_state
+                        .compare_exchange(
+                            BACKGROUND_REFRESH_IDLE,
+                            BACKGROUND_REFRESH_RUNNING,
+                            Ordering::AcqRel,
+                            Ordering::Acquire,
+                        )
+                        .is_err()
+                    {
+                        continue;
+                    }
+                    let service = self.clone();
+                    tokio::spawn(async move {
+                        service.run_background_refreshes().await;
+                    });
+                    return;
+                }
+                BACKGROUND_REFRESH_RUNNING => {
+                    if self
+                        .background_refresh_state
+                        .compare_exchange(
+                            BACKGROUND_REFRESH_RUNNING,
+                            BACKGROUND_REFRESH_PENDING,
+                            Ordering::AcqRel,
+                            Ordering::Acquire,
+                        )
+                        .is_err()
+                    {
+                        continue;
+                    }
+                    return;
+                }
+                BACKGROUND_REFRESH_PENDING => return,
+                state => unreachable!("invalid background snapshot refresh state {state}"),
+            }
+        }
+    }
+
+    async fn run_background_refreshes(&self) {
+        loop {
+            let refresh_failed = if let Err(err) = self.refresh().await {
+                warn!(
+                    target: "bridge.nock-watcher",
+                    error = %err,
+                    "failed to refresh confirmed bridge note snapshot in background"
+                );
+                true
+            } else {
+                false
+            };
+            if refresh_failed {
+                tokio::time::sleep(BACKGROUND_REFRESH_FAILURE_BACKOFF).await;
+            }
+
+            match self.background_refresh_state.compare_exchange(
+                BACKGROUND_REFRESH_RUNNING,
+                BACKGROUND_REFRESH_IDLE,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return,
+                Err(BACKGROUND_REFRESH_PENDING) => {
+                    self.background_refresh_state
+                        .store(BACKGROUND_REFRESH_RUNNING, Ordering::Release);
+                }
+                Err(state) => unreachable!("invalid background snapshot refresh state {state}"),
+            }
+        }
+    }
+
     /// Filters out notes that are not safe to spend from the current bridge
     /// node view. Notes newer than the configured safe Nockchain tip may be
     /// orphaned, and reserved notes are already committed to active withdrawal
@@ -288,10 +385,33 @@ impl BridgeNoteSnapshotService {
         )
     }
 
-    fn replace_snapshot(&self, snapshot: Option<ConfirmedBridgeNoteSnapshot>) {
-        if let Ok(mut guard) = self.cache.write() {
-            *guard = snapshot;
+    fn begin_refresh(&self) -> Result<u64, BridgeError> {
+        let mut cache = self.cache.write().map_err(|_| {
+            BridgeError::Runtime("bridge note snapshot cache lock is poisoned".into())
+        })?;
+        cache.latest_started_generation = cache
+            .latest_started_generation
+            .checked_add(1)
+            .ok_or_else(|| BridgeError::Runtime("snapshot refresh generation overflow".into()))?;
+        Ok(cache.latest_started_generation)
+    }
+
+    fn commit_snapshot(
+        &self,
+        generation: u64,
+        snapshot: Option<ConfirmedBridgeNoteSnapshot>,
+    ) -> Option<ConfirmedBridgeNoteSnapshot> {
+        let Ok(mut cache) = self.cache.write() else {
+            return None;
+        };
+        if generation == cache.latest_started_generation {
+            cache.committed_generation = generation;
+            cache.snapshot = snapshot;
         }
+        if cache.committed_generation != cache.latest_started_generation {
+            return None;
+        }
+        cache.snapshot.clone()
     }
 }
 
@@ -409,12 +529,15 @@ fn note_name_key(name: &Name) -> ([u64; 5], [u64; 5]) {
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
+    use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
     use std::sync::Mutex;
 
     use nockchain_math::belt::Belt;
     use nockchain_math::owned_based_noun::OwnedBasedNoun;
     use nockchain_types::tx_engine::common::{BlockHeight, Hash, Nicks};
     use nockchain_types::tx_engine::v1::note::{Balance, Note, NoteData, NoteDataEntry, NoteV1};
+    use tokio::sync::{Notify, Semaphore};
+    use tokio::time::timeout;
     use wallet_tx_builder::types::CandidateNote;
 
     use super::*;
@@ -450,6 +573,83 @@ mod tests {
                 .expect("responses lock")
                 .pop_front()
                 .expect("missing fake response")
+        }
+    }
+
+    #[derive(Debug)]
+    struct BlockingSnapshotSource {
+        responses: Mutex<VecDeque<Result<Vec<BalanceUpdate>, BridgeError>>>,
+        calls: AtomicUsize,
+        started: Notify,
+        release: Semaphore,
+    }
+
+    impl BlockingSnapshotSource {
+        fn new(responses: Vec<Result<Vec<BalanceUpdate>, BridgeError>>) -> Self {
+            Self {
+                responses: Mutex::new(VecDeque::from(responses)),
+                calls: AtomicUsize::new(0),
+                started: Notify::new(),
+                release: Semaphore::new(0),
+            }
+        }
+
+        fn calls(&self) -> usize {
+            self.calls.load(AtomicOrdering::Acquire)
+        }
+    }
+
+    #[async_trait]
+    impl BridgeNoteSnapshotSource for BlockingSnapshotSource {
+        async fn fetch_pages(
+            &self,
+            _selectors: &BridgeOwnedNoteSelectors,
+        ) -> Result<Vec<BalanceUpdate>, BridgeError> {
+            self.calls.fetch_add(1, AtomicOrdering::AcqRel);
+            self.started.notify_one();
+            self.release
+                .acquire()
+                .await
+                .expect("release semaphore")
+                .forget();
+            self.responses
+                .lock()
+                .expect("responses lock")
+                .pop_front()
+                .expect("missing blocking fake response")
+        }
+    }
+
+    #[derive(Debug)]
+    struct OutOfOrderSnapshotSource {
+        calls: AtomicUsize,
+        first_started: Notify,
+        second_started: Notify,
+        release_first: Notify,
+        release_second: Notify,
+        first: Vec<BalanceUpdate>,
+        second: Vec<BalanceUpdate>,
+    }
+
+    #[async_trait]
+    impl BridgeNoteSnapshotSource for OutOfOrderSnapshotSource {
+        async fn fetch_pages(
+            &self,
+            _selectors: &BridgeOwnedNoteSelectors,
+        ) -> Result<Vec<BalanceUpdate>, BridgeError> {
+            match self.calls.fetch_add(1, AtomicOrdering::AcqRel) {
+                0 => {
+                    self.first_started.notify_one();
+                    self.release_first.notified().await;
+                    Ok(self.first.clone())
+                }
+                1 => {
+                    self.second_started.notify_one();
+                    self.release_second.notified().await;
+                    Ok(self.second.clone())
+                }
+                call => panic!("unexpected snapshot fetch call {call}"),
+            }
         }
     }
 
@@ -604,6 +804,200 @@ mod tests {
 
         assert_eq!(source.calls(), 1);
         assert_eq!(reused.normalized, snapshot.normalized);
+    }
+
+    #[tokio::test]
+    async fn background_refresh_coalesces_and_replays_pending_request() {
+        let note = name(5);
+        let first = vec![page(
+            30,
+            300,
+            vec![(note.clone(), note_v1(note.clone(), 30, 9, "k", 5))],
+        )];
+        let second = vec![page(
+            31,
+            301,
+            vec![(note.clone(), note_v1(note.clone(), 31, 9, "k", 5))],
+        )];
+        let source = Arc::new(BlockingSnapshotSource::new(vec![Ok(first), Ok(second)]));
+        let service =
+            BridgeNoteSnapshotService::new(source.clone(), selectors(), Duration::from_secs(300));
+
+        service.refresh_in_background();
+        timeout(Duration::from_secs(5), source.started.notified())
+            .await
+            .expect("first refresh starts");
+        service.refresh_in_background();
+        service.refresh_in_background();
+        assert_eq!(source.calls(), 1);
+
+        source.release.add_permits(1);
+        timeout(Duration::from_secs(5), source.started.notified())
+            .await
+            .expect("pending refresh starts");
+        assert_eq!(source.calls(), 2);
+        source.release.add_permits(1);
+
+        timeout(Duration::from_secs(5), async {
+            loop {
+                if service
+                    .snapshot()
+                    .is_some_and(|snapshot| snapshot.height() == 31)
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("pending refresh updates snapshot");
+        assert_eq!(source.calls(), 2);
+    }
+
+    #[tokio::test]
+    async fn failed_background_refresh_backs_off_before_pending_retry() {
+        let source = Arc::new(BlockingSnapshotSource::new(vec![
+            Err(BridgeError::EventMonitoring("snapshot unavailable".into())),
+            Ok(vec![page(32, 302, Vec::new())]),
+        ]));
+        let service =
+            BridgeNoteSnapshotService::new(source.clone(), selectors(), Duration::from_secs(300));
+
+        service.refresh_in_background();
+        timeout(Duration::from_secs(5), source.started.notified())
+            .await
+            .expect("first refresh starts");
+        service.refresh_in_background();
+        source.release.add_permits(1);
+
+        assert!(
+            timeout(Duration::from_millis(250), source.started.notified())
+                .await
+                .is_err(),
+            "pending refresh retried before failure backoff elapsed"
+        );
+        timeout(Duration::from_secs(2), source.started.notified())
+            .await
+            .expect("pending refresh starts after backoff");
+        source.release.add_permits(1);
+        timeout(Duration::from_secs(5), async {
+            loop {
+                if service
+                    .snapshot()
+                    .is_some_and(|snapshot| snapshot.height() == 32)
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("pending refresh updates snapshot");
+        assert_eq!(source.calls(), 2);
+    }
+
+    #[tokio::test]
+    async fn older_background_refresh_cannot_replace_newer_snapshot() {
+        let source = Arc::new(OutOfOrderSnapshotSource {
+            calls: AtomicUsize::new(0),
+            first_started: Notify::new(),
+            second_started: Notify::new(),
+            release_first: Notify::new(),
+            release_second: Notify::new(),
+            first: vec![page(30, 300, Vec::new())],
+            second: vec![page(31, 301, Vec::new())],
+        });
+        let service =
+            BridgeNoteSnapshotService::new(source.clone(), selectors(), Duration::from_secs(300));
+
+        service.refresh_in_background();
+        timeout(Duration::from_secs(5), source.first_started.notified())
+            .await
+            .expect("background refresh starts");
+        let refresh_service = service.clone();
+        let newer_refresh = tokio::spawn(async move { refresh_service.refresh().await });
+        timeout(Duration::from_secs(5), source.second_started.notified())
+            .await
+            .expect("newer refresh starts");
+        source.release_second.notify_one();
+        let newer = timeout(Duration::from_secs(5), newer_refresh)
+            .await
+            .expect("newer refresh completes")
+            .expect("newer refresh task")
+            .expect("newer refresh succeeds")
+            .expect("newer snapshot");
+        assert_eq!(newer.height(), 31);
+
+        source.release_first.notify_one();
+        timeout(Duration::from_secs(5), async {
+            loop {
+                if service.background_refresh_state.load(Ordering::Acquire)
+                    == BACKGROUND_REFRESH_IDLE
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("older background refresh completes");
+
+        let cached = service.snapshot().expect("cached snapshot");
+        assert_eq!(cached.height(), 31);
+        assert!(!cached.is_stale(SystemTime::now(), Duration::from_secs(300)));
+    }
+
+    #[tokio::test]
+    async fn older_refresh_cannot_become_fresh_while_newer_refresh_is_running() {
+        let source = Arc::new(OutOfOrderSnapshotSource {
+            calls: AtomicUsize::new(0),
+            first_started: Notify::new(),
+            second_started: Notify::new(),
+            release_first: Notify::new(),
+            release_second: Notify::new(),
+            first: vec![page(30, 300, Vec::new())],
+            second: vec![page(31, 301, Vec::new())],
+        });
+        let service =
+            BridgeNoteSnapshotService::new(source.clone(), selectors(), Duration::from_secs(300));
+
+        service.refresh_in_background();
+        timeout(Duration::from_secs(5), source.first_started.notified())
+            .await
+            .expect("background refresh starts");
+        let refresh_service = service.clone();
+        let newer_refresh = tokio::spawn(async move { refresh_service.refresh().await });
+        timeout(Duration::from_secs(5), source.second_started.notified())
+            .await
+            .expect("newer refresh starts");
+
+        source.release_first.notify_one();
+        timeout(Duration::from_secs(5), async {
+            loop {
+                if service.background_refresh_state.load(Ordering::Acquire)
+                    == BACKGROUND_REFRESH_IDLE
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("older background refresh completes");
+        assert!(
+            service.snapshot().is_none(),
+            "older refresh became visible while a newer refresh was still running"
+        );
+
+        source.release_second.notify_one();
+        let newer = timeout(Duration::from_secs(5), newer_refresh)
+            .await
+            .expect("newer refresh completes")
+            .expect("newer refresh task")
+            .expect("newer refresh succeeds")
+            .expect("newer snapshot");
+        assert_eq!(newer.height(), 31);
+        assert_eq!(service.snapshot().expect("cached snapshot").height(), 31);
     }
 
     #[tokio::test]

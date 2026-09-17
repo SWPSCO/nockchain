@@ -37,7 +37,7 @@ This is the canonical runtime and incident-response document for bridge operator
 ### Watchers
 
 - Base watcher (`src/ethereum.rs`) polls confirmed windows every 30s over the Base WebSocket provider. If logs show `base reorg detected` or repeated `failed to get block number after retries`, pause submissions and investigate chain health.
-- Nock watcher (`src/nockchain.rs`) polls private nockapp (`heavy`, `heavy-n`) every 10s by default. Repeated `failed to fetch tip height` or `failed to fetch block at height` usually indicates private nockapp availability or decode-path issues.
+- Nock watcher (`src/shared/nockchain.rs`) polls private nockapp `/heaviest-chain` every 1s by default and fetches confirmed blocks through `/heaviest-chain-blocks-range`, shrinking oversized ranges and falling back to `/heavy-n` when needed. Repeated `failed to fetch tip height` or `failed to fetch block range` usually indicates private nockapp availability or decode-path issues.
 
 ### Runtime and Kernel
 
@@ -112,6 +112,10 @@ RUST_LOG=info cargo run -p bridge
 RUST_LOG=bridge::shared::runtime=debug,bridge::shared::base=trace cargo run -p bridge
 RUST_LOG=debug cargo run -p bridge
 ```
+
+Set `TRACY_ENABLE=1` to enable Tracy collection. Use `--trace tracing` to
+include kernel-arm spans and set `TRACY_PORT` when the default listener port is
+already occupied.
 
 Useful queries:
 
