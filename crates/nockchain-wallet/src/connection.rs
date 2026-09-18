@@ -21,6 +21,10 @@ pub(crate) struct ConnectionCli {
     #[arg(long, default_value_t = 5555)]
     pub private_grpc_server_port: u16,
 
+    /// Host/IP at which listener connects to private grpc server
+    #[arg(long, default_value = "127.0.0.1")]
+    pub private_grpc_server_host: String,
+
     /// Address of the public server (host[:port] or URI)
     #[arg(long, value_parser = GrpcEndpoint::parse, default_value = DEFAULT_PUBLIC_GRPC_SERVER_ADDR, global = true)]
     pub public_grpc_server_addr: GrpcEndpoint,
@@ -33,7 +37,10 @@ impl ConnectionCli {
                 endpoint: self.public_grpc_server_addr.to_string(),
             },
             ClientType::Private => GrpcTarget::Private {
-                endpoint: format!("http://127.0.0.1:{}", self.private_grpc_server_port),
+                endpoint: format!(
+                    "http://{}:{}",
+                    self.private_grpc_server_host, self.private_grpc_server_port
+                ),
             },
         }
     }
