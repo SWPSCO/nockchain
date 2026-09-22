@@ -53,9 +53,11 @@
     =.  c.k
       ~>  %slog.[0 'load: [4/5] check-and-repair: validating consensus state']
       ~>  %bout  check-and-repair:con
-    =.  c.k
+    =/  repaired=[consensus-state:dk derived-state:dk]
       ~>  %slog.[0 'load: [5/5] repair-orphaned-claims: releasing txs stranded by past reorgs']
       ~>  %bout  repair-orphaned-claims:con
+    =.  c.k  -.repaired
+    =.  d.k  +.repaired
     ~|  %v1-phase-must-be-lte-zk-asert-phase
     ?>  (lte v1-phase.constants.k phase.zk-asert.constants.k)
     ::  The ZK re-pin and the introduction of the AI ASERT are the same event.
@@ -158,8 +160,8 @@
               before-ai
           ==
         upgraded
-      ~>  %slog.[1 'load: State requires reset before version-11 migration']
-      (reset-consensus-state-11 upgraded)
+      ~|  'load: Version-10 state cannot be migrated safely; preserving checkpoint and refusing to boot'
+      !!
     ::
     ++  upgrade-pre-ai-constants
       |=  old=blockchain-constants-v1-pre-ai:dk
@@ -588,34 +590,6 @@
         arg
       arg(constants *blockchain-constants:t)
     ::
-    ++  reset-consensus-state
-      |=  arg=kernel-state:dk
-      ^-  kernel-state:dk
-      =|  nk=kernel-state:dk
-      ::  Preserve mining options, boot metadata, and custom-network constants;
-      ::  otherwise drop consensus state so genesis intake can resume safely.
-      =.  mining.m.nk  mining.m.arg
-      =.  shares.m.nk  shares.m.arg
-      =.  v0-shares.m.nk  v0-shares.m.arg
-      =.  init.a.nk  init.a.arg
-      =.  btc-data.c.nk  btc-data.c.arg
-      =.  genesis-seal.c.nk  genesis-seal.c.arg
-      =.  constants.nk  constants.arg
-      nk
-    ::
-    ++  reset-consensus-state-11
-      |=  arg=kernel-state-11:dk
-      ^-  kernel-state-11:dk
-      =|  nk=kernel-state-11:dk
-      =.  mining.m.nk  mining.m.arg
-      =.  shares.m.nk  shares.m.arg
-      =.  v0-shares.m.nk  v0-shares.m.arg
-      =.  init.a.nk  init.a.arg
-      =.  btc-data.c.nk  btc-data.c.arg
-      =.  genesis-seal.c.nk  genesis-seal.c.arg
-      =.  constants.nk  constants.arg
-      nk
-    ::
     ::  Candidate construction on load has no wall clock. The accepted parent
     ::  median timestamp supplies the seed that the next event refreshes.
     ++  rebuild-mining-candidate
@@ -663,42 +637,12 @@
         c
       =.  pending-blocks.c  (~(del h-by pending-blocks.c) ~(digest get:page:t pag))
       c
-    ++  stored-postactivation-pages-valid
-      |=  [arg=kernel-state:dk only-noncanonical=?]
-      ^-  ?
-      =/  mainnet=(unit ?)
-        (~(is-mainnet dumb-derived d.arg constants.arg) c.arg)
-      ::  Ambiguous nonempty states are reset by +check-checkpoints.  Avoid
-      ::  cueing arbitrary pages before a network identity is established.
-      ?~  mainnet  %.y
-      =/  arg-t  ~(. c-transact constants.arg)
-      =/  require-stored-proof=?  ?|(u.mainnet check-pow-flag:arg-t)
-      %-  ~(rep h-by blocks.c.arg)
-      |=  [[block-id=block-id:t local=local-page:t] valid=?]
-      ?.  valid  %.n
-      ::  Audit every artifact from the first consensus change that adds a
-      ::  versioned proof path. Earlier pages retain their historical encoding.
-      =/  height=page-number:t  ~(height get:local-page:t local)
-      =/  first-versioned-height=page-number:t
-        ?:  (lth ai-pow-activation-height.constants.arg proof-version-3-start:con)
-          ai-pow-activation-height.constants.arg
-        proof-version-3-start:con
-      ?:  (lth height first-versioned-height)
-        %.y
-      =/  canonical-id  (~(get z-by heaviest-chain.d.arg) height)
-      =/  canonical=?
-        ?&  ?=(^ canonical-id)
-            =(u.canonical-id block-id)
-        ==
-      ?:  ?&(only-noncanonical canonical)
-        %.y
-      =/  pag=page:t  (to-page:local-page:t local)
-      %-  persisted-page-valid:con
-      [require-stored-proof height block-id pag]
     ::
     ++  check-checkpoints
       |=  arg=kernel-state:dk
-      =/  reset-state=kernel-state:dk  (reset-consensus-state arg)
+      ::  Validation failures abort +load instead of returning a fresh state.
+      ::  NockApp installs the new root only after +load succeeds, so this
+      ::  preserves the checkpoint for explicit operator recovery.
       =/  chain-empty=?
         ?&  =(~ heaviest-block.c.arg)
             =(0 ~(wyt h-by blocks.c.arg))
@@ -710,8 +654,8 @@
       ?~  mainnet
         ?:  chain-empty
           arg
-        ~>  %slog.[1 'load: Ambiguous nonempty chain has no network identity, resetting state']
-        reset-state
+        ~|  'load: Ambiguous nonempty chain has no network identity; preserving state and refusing to boot'
+        !!
       =/  arg-t  ~(. c-transact constants.arg)
       =/  require-stored-proof=?  ?|(u.mainnet check-pow-flag:arg-t)
       =/  genesis-id  (~(get z-by heaviest-chain.d.arg) 0)
@@ -722,16 +666,16 @@
         ::  like duplicates and wedge the node permanently.
         ?:  chain-empty
           arg
-        ~>  %slog.[1 'load: Chain is missing stored genesis, resetting state']
-        reset-state
+        ~|  'load: Chain is missing stored genesis; preserving state and refusing to boot'
+        !!
       =/  tip-id  heaviest-block.c.arg
       ?~  tip-id
-        ~>  %slog.[1 'load: Indexed chain has no heaviest block, resetting state']
-        reset-state
+        ~|  'load: Indexed chain has no heaviest block; preserving state and refusing to boot'
+        !!
       =/  tip-local  (~(get h-by blocks.c.arg) u.tip-id)
       ?~  tip-local
-        ~>  %slog.[1 'load: Heaviest block page is missing, resetting state']
-        reset-state
+        ~|  'load: Heaviest block page is missing; preserving state and refusing to boot'
+        !!
       =/  tip-page=page:t  (to-page:local-page:t u.tip-local)
       =/  tip-height=page-number:t  ~(height get:page:t tip-page)
       =/  indexed-tip  (~(get z-by heaviest-chain.d.arg) tip-height)
@@ -740,8 +684,8 @@
               %-  persisted-page-valid:con
               [require-stored-proof tip-height u.tip-id tip-page]
           ==
-        ~>  %slog.[1 'load: Invalid stored heaviest block proof, resetting state']
-        reset-state
+        ~|  'load: Invalid stored heaviest block proof; preserving state and refusing to boot'
+        !!
       ::  Every pinned checkpoint at or below the tip must have both its
       ::  expected ID and a canonical stored proof envelope.  ID-only checks
       ::  cannot detect legacy proof-version or stream-bookkeeping retags.
@@ -769,8 +713,8 @@
           %.n
         $(checkpoints t.checkpoints)
       ?.  checkpoints-valid
-        ~>  %slog.[1 'load: Invalid or missing checkpoint page, resetting state']
-        reset-state
+        ~|  'load: Invalid or missing checkpoint page; preserving state and refusing to boot'
+        !!
       ::  A node upgraded from pre-Zoe software may already have accepted %2
       ::  pages at the %3 boundary.  Audit the boundary page whenever the tip
       ::  has crossed it; auditing the tip above also catches the ordinary
@@ -790,18 +734,8 @@
             (to-page:local-page:t u.activation-local)
         ==
       ?.  activation-valid
-        ~>  %slog.[1 'load: Invalid Zoe activation page, resetting state']
-        reset-state
-      ::  The canonical activation page is not the only persisted page that
-      ::  can become consensus-relevant after restart.  A pre-Zoe node may
-      ::  also have accepted a %2 side fork at or above the boundary; if left
-      ::  in .blocks, a later %3 child can extend that trusted parent and
-      ::  reorg it onto the canonical chain without rechecking the parent's
-      ::  proof version.  Audit every stored post-activation page so no stale
-      ::  fork can cross the upgrade boundary through the duplicate fast path.
-      ?.  (stored-postactivation-pages-valid [arg %.y])
-        ~>  %slog.[1 'load: Invalid stored post-Zoe side-fork page, resetting state']
-        reset-state
+        ~|  'load: Invalid Zoe activation page; preserving state and refusing to boot'
+        !!
       arg
     --
   ::
