@@ -1575,3 +1575,56 @@ fn path_knots_reject_what_wood_crashes_on() {
         ParsedAtom::Small(1)
     ))));
 }
+
+#[test]
+fn blob_knots_take_only_base32_digits() {
+    // `vum:ag` reads 0-9 and a-v, so an uppercase or later letter ends the
+    // blob and the knot fails to parse instead of reaching the conversion.
+    assert!(parse_src("~0A").is_err());
+    assert!(parse_src("~0w").is_err());
+    assert!(parse_src("~02").is_ok());
+}
+
+#[test]
+fn wood_escapes_by_the_whole_code_point() {
+    // U+2B7E, U+0120 and U+012E end in the bytes of `~`, space and `.`, but
+    // ++wood escapes them as hex like any other character.
+    for (ch, escaped) in [('\u{2b7e}', "~2b7e."), ('\u{120}', "~120."), ('\u{12e}', "~12e.")] {
+        let cord = ParsedAtom::from_biguint(text_atom(&ch.to_string()));
+        assert_eq!(wood(&cord).to_biguint(), text_atom(escaped), "{ch:?}");
+    }
+    assert_eq!(
+        wood(&string_to_atom("a b.c~".to_string())).to_biguint(),
+        text_atom("a.b~.c~~")
+    );
+}
+
+#[test]
+fn signed_literals_past_two_to_the_127_do_not_wrap() {
+    let big = "170.141.183.460.469.231.731.687.303.715.884.105.728";
+    assert_eq!(
+        sand(&format!("--{big}")),
+        ("sd".into(), BigUint::one() << 128)
+    );
+    assert_eq!(
+        sand(&format!("-{big}")),
+        ("sd".into(), (BigUint::one() << 128) - 1u8)
+    );
+}
+
+#[test]
+fn blob_cue_stops_at_the_atoms_last_word() {
+    // nockvm's cue jet reads whole 64-bit words, so a length field that runs
+    // past the last word rejects the knot, as it does in hoonc.
+    assert!(parse_src("~0o0").is_err());
+    assert!(parse_src("~02").is_ok());
+}
+
+#[test]
+fn many_knots_may_be_empty() {
+    // `(more cab nusk)` accepts no items between `._` and `__`.
+    assert!(matches!(
+        nuck().parse(".___").into_result(),
+        Ok(Coin::Many(coins)) if coins.is_empty()
+    ));
+}

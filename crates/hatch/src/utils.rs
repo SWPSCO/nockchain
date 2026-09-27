@@ -5590,29 +5590,18 @@ fn yawn(mut yer: u64, mut mot: u64, mut day: u64) -> u64 {
     day
 }
 
+/// `new:si`: `n` as a positive (`a`) or negative signed atom. The doubling is
+/// done in `BigUint`, since a magnitude of 2^127 or more overflows `u128`.
 pub fn apply_sign(a: bool, b: ParsedAtom) -> ParsedAtom {
-    match b {
-        ParsedAtom::Small(n) => {
-            let out = if a {
-                2 * n
-            } else if n == 0 {
-                0
-            } else {
-                2 * (n - 1) + 1
-            };
-            ParsedAtom::Small(out)
-        }
-        ParsedAtom::Big(n) => {
-            let out = if a {
-                &n << 1
-            } else if n.is_zero() {
-                num_bigint::BigUint::from(0u32)
-            } else {
-                ((&n - 1u32) << 1) + 1u32
-            };
-            ParsedAtom::Big(out)
-        }
-    }
+    let n = b.to_biguint();
+    let out = if a {
+        n << 1
+    } else if n.is_zero() {
+        n
+    } else {
+        ((n - 1u32) << 1) + 1u32
+    };
+    ParsedAtom::from_biguint(out)
 }
 
 ///  Alphanumeric with hyphens
@@ -6250,8 +6239,9 @@ pub fn base64_number<'src>() -> impl Parser<'src, &'src str, ParsedAtom, Err<'sr
 }
 
 pub fn base32<'src>() -> impl Parser<'src, &'src str, String, Err<'src>> {
+    //  `vum:ag`: 0-9 and a-v only
     any()
-        .filter(|c: &char| c.is_ascii_alphanumeric() && *c <= 'v')
+        .filter(|c: &char| c.is_ascii_digit() || ('a'..='v').contains(c))
         .repeated()
         .at_least(1)
         .collect::<String>()
@@ -8395,9 +8385,9 @@ pub fn nuck<'src>() -> impl Parser<'src, &'src str, Coin, Err<'src>> {
 pub fn perd<'src>() -> impl Parser<'src, &'src str, Coin, Err<'src>> {
     choice((
         zust(),
+        //  `(more cab nusk)`: the list may be empty, as in `.___`
         nusk()
             .separated_by(just('_'))
-            .at_least(1)
             .collect::<Vec<_>>()
             .delimited_by(just('_'), just("__"))
             .map(|t| Coin::Many(t)),
@@ -9144,15 +9134,16 @@ fn wood_go(a: &ParsedAtom) -> Vec<u128> {
         return d;
     }
 
-    match c as u8 {
-        b' ' => {
+    // Match the whole code point: U+2B7E is escaped as hex, not as `~`.
+    match char::from_u32(c) {
+        Some(' ') => {
             d.insert(0, b'.' as u128);
         }
-        b'.' => {
+        Some('.') => {
             d.insert(0, b'.' as u128);
             d.insert(0, b'~' as u128);
         }
-        b'~' => {
+        Some('~') => {
             d.insert(0, b'~' as u128);
             d.insert(0, b'~' as u128);
         }
@@ -11011,29 +11002,21 @@ fn get_size(bits: &[bool], cursor: &mut usize) -> Result<u64, &'static str> {
     }
 }
 
+/// The bits of `atom` as nockvm's `cue` jet reads them: whole 64-bit words,
+/// at least one. A length field that runs past the last word fails the cue
+/// there (hoonc's `~0` knots reject it), though pure-Hoon `++cue` would read
+/// zeros.
 fn atom_to_bits(atom: &ParsedAtom) -> Vec<bool> {
-    match atom {
-        ParsedAtom::Small(x) => {
-            let mut bits = Vec::with_capacity(128);
-            for i in 0..128 {
-                bits.push((x >> i) & 1 == 1);
-            }
-            // Trim trailing zeros beyond highest set bit? Not needed — cue stops when done.
-            bits
-        }
-        ParsedAtom::Big(x) => {
-            // Convert to little-endian bytes, then bits
-            let bytes = x.to_bytes_le();
-            let mut bits = Vec::new();
-            for &byte in &bytes {
-                for i in 0..8 {
-                    bits.push((byte >> i) & 1 == 1);
-                }
-            }
-            // Pad to next multiple of 8? Not necessary.
-            bits
+    let bytes = atom.to_biguint().to_bytes_le();
+    let words = bytes.len().div_ceil(8).max(1);
+    let mut bits = Vec::with_capacity(words * 64);
+    for i in 0..words * 8 {
+        let byte = bytes.get(i).copied().unwrap_or(0);
+        for bit in 0..8 {
+            bits.push((byte >> bit) & 1 == 1);
         }
     }
+    bits
 }
 
 fn cue_inner(

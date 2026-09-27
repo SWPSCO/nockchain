@@ -58,6 +58,11 @@ None.
 | 37 | In a tall `;"""` block, a deeper-indented `"""` line ended the block; hoonc reads it as text | same |
 | 38 | A `~~` path knot holding a control byte (`/~~~1.`) compiled; hoonc crashes in `++wood` rendering it | hatch: parse the obsolete $ leaf forms and reject path knots ++wood crashes on |
 | 39 | hatch did not parse `+scat`'s obsolete `%leaf` forms `$$`, `$'x'`, and `$5` | same |
+| 42 | `wood` in hatch matched a code point on its low byte, so a `~~` path knot holding U+2B7E, U+0120, or U+012E rendered as `~~`, `.`, or `~.` instead of a hex escape | hatch: fix knot escapes, ~0 blobs, %many knots, and signed literals |
+| 43 | A `~0` blob knot accepted uppercase digits and then panicked converting them; hoon-138's `vum:ag` reads 0-9 and a-v, so `~0A` is a syntax error | same |
+| 44 | A signed literal with a magnitude of 2^127 or more (`--170.141.183.460.469.231.731.687.303.715.884.105.728`) wrapped to 0 in a `u128` | same |
+| 45 | A `~0` blob whose cue length field runs past the atom's last 64-bit word (`~0o0`) parsed; hoonc's `cue` jet rejects it | same |
+| 46 | hatch required at least one coin in a `._..__` knot; hoon-138's `(more cab nusk)` also reads the empty `.___` | same |
 
 ## Import pipeline (`crates/honk/src/pipeline.rs`, CLI)
 

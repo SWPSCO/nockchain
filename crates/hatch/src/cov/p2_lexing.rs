@@ -1016,8 +1016,18 @@ fn apply_sign_encodes_small_and_big_magnitudes() {
         ParsedAtom::Big(((&n - 1u32) << 1) + 1u32)
     );
     assert_eq!(
-        apply_sign(false, ParsedAtom::Big(BigUint::zero())),
-        ParsedAtom::Big(BigUint::zero())
+        apply_sign(false, ParsedAtom::Big(BigUint::zero())).to_biguint(),
+        BigUint::zero()
+    );
+    // a `u128` magnitude of 2^127 or more doubles past 128 bits
+    let half = 1u128 << 127;
+    assert_eq!(
+        apply_sign(true, ParsedAtom::Small(half)).to_biguint(),
+        big(1) << 128
+    );
+    assert_eq!(
+        apply_sign(false, ParsedAtom::Small(u128::MAX)).to_biguint(),
+        (big(1) << 129) - 3u8
     );
     // through the parser
     assert_eq!(sand_atom(&parse_expr("-0")).1, big(0));
