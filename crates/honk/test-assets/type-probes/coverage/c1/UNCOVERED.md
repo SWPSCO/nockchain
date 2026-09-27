@@ -4,8 +4,8 @@ This range holds the `Sig64` signature writers, the Hoon arena, `Ut` memo
 plumbing, fan-context keys, boundary caches, the `lower_*` helpers, musk setup,
 and the `mint_inner`/`play_inner` dispatch.
 
-The gap report lists 640 uncovered lines and 155 untaken branch outcomes: none
-are missed only by unit tests (U), 607 lines and 132 branches are missed only
+The gap report lists 639 uncovered lines and 155 untaken branch outcomes: none
+are missed only by unit tests (U), 606 lines and 132 branches are missed only
 by the parity corpus (P), and 33 lines and 23 branches are missed by both (UP).
 `L` rows are lines never run; `B` rows are branch outcomes never taken (`T` or
 `F`, with `c2`/`c3` for later conditions of the same `if`).
@@ -70,7 +70,6 @@ by the parity corpus (P), and 33 lines and 23 branches are missed by both (UP).
 
 | Gaps | Tag | Reason |
 |---|---|---|
-| L3145 (`:*` with no items) | P | Unreachable from source: `:*` takes one or more hoons in both parsers. |
 | L3150, B3149 F | UP | Unreachable: `split_first` already proved there are two or more items. |
 | L3353-3354, L3362, B3352 T (`feck` finds `[%sand %tas @]`) | P | Unreachable from source: hoon-138 builds `[%sand %tas @]` only as a path element (`++hasp`, `++limp`) inside a `%clsg` list, never as a bare `~\|` operand. |
 | L3483, B3482 F (`;~` with no rules) | P | Unreachable from source: `;~` takes a hoon plus one or more rules. |

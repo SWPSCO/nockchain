@@ -5,9 +5,9 @@ desugarer (`+ax`, `open`, `flay`, `feck`, `grip`, `half`, `reek`, `name_ax`,
 `autoname`, `peg`).
 
 Uncovered on the final code: 0 lines and 0 branch outcomes missed only by the
-unit tests (`U`), 271 lines and 20 branch outcomes missed only by the parity
-corpus (`P`), and 6 lines and 7 branch outcomes missed by both (`UP`), for 277
-lines and 27 branch outcomes in all. Numbers are current line numbers. `B<n>T`
+unit tests (`U`), 270 lines and 19 branch outcomes missed only by the parity
+corpus (`P`), and 6 lines and 7 branch outcomes missed by both (`UP`), for 276
+lines and 26 branch outcomes in all. Numbers are current line numbers. `B<n>T`
 and `B<n>F` are branch outcomes at line n, and `c2`, `c3` name the second and
 third conditions on that line. "Unit-tested" means
 `crates/hatch/src/cov/p1_desugar.rs` covers the entry.
@@ -106,9 +106,10 @@ third conditions on that line. "Unit-tested" means
   position.
 - 2994 `name_ax` axis head; 3034 `autoname` `%like` axis head: `=$_(.)` gives
   "cannot name spec". hoonc reports a syntax error at the same place.
-- 2949, B2948T `half` empty `%clsg`; 2958, B2957T `half` empty `%cltr`: these
-  are reached only when a cell skin meets `~` or an empty `:*`, which neither
-  compiler accepts.
+- 2949, B2948T `half` empty `%clsg`: reached only when a cell skin meets an
+  empty `~[...]`, which neither parser accepts. The empty `%cltr` case is
+  reached by `.___` (`reject/p1_half_empty_cltr`), which both compilers
+  reject as mint-vain.
 - 1855, B1854T `open` `%brbc` with an empty sample; 2357 `open` `%mcsg` with
   an empty list: the parsers require at least one element. hatch panics.
 

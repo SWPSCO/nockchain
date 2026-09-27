@@ -43,9 +43,9 @@ output is checked byte-for-byte against hoonc.
 | Measure | Before | Now |
 |---|---|---|
 | Unit tests: lines | 72.1% | 94.8% |
-| Unit tests: branches | 55.9% (2,530 of 5,736 missed) | 89.2% (652 of 6,020 missed) |
-| Parity corpus: lines | 65.9% | 76.2% |
-| Parity corpus: branches | 51.8% (2,552 of 5,292 missed) | 66.1% (1,886 of 5,560 missed) |
+| Unit tests: branches | 55.9% (2,530 of 5,736 missed) | 89.2% (651 of 6,016 missed) |
+| Parity corpus: lines | 65.9% | 76.1% |
+| Parity corpus: branches | 51.8% (2,552 of 5,292 missed) | 66.1% (1,883 of 5,556 missed) |
 
 The unit tests reach every line and branch outcome the parity corpus reaches.
 No ledger entry is left as "not yet covered": every remaining gap has a

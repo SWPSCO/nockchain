@@ -1,12 +1,12 @@
-# p2 uncovered ledger: `crates/hatch/src/utils.rs` lines 3247-8381
+# p2 uncovered ledger: `crates/hatch/src/utils.rs` lines 3247-8371
 
 This package covers the wing, tiki, float, tape, cord, atom-literal and path
 lexers, and the `LineMap` span and doc-anchoring code.
 
 Uncovered on the final code: 0 lines and 0 branch outcomes missed only by the
-unit tests (`U`), 263 lines and 162 branch outcomes missed only by the parity
+unit tests (`U`), 262 lines and 161 branch outcomes missed only by the parity
 corpus (`P`), and 118 lines and 113 branch outcomes missed by both (`UP`), for
-381 lines and 275 branch outcomes in all. Numbers are current line numbers.
+380 lines and 274 branch outcomes in all. Numbers are current line numbers.
 `B<n>T` and `B<n>F` are branch outcomes at line n, and `c2` to `c5` name the
 later conditions on that line. "Unit-tested" means
 `crates/hatch/src/cov/p2_lexing.rs` covers the entry.
@@ -23,43 +23,43 @@ later conditions on that line. "Unit-tested" means
     child of `%-`, `%+` or `?:` already carries as a postfix doc).
   - `chapters`: B4809T, 4810, B4834T, 4835, B4855T, 4856, B4869T, 4870,
     and the `attach_help_to_bartis_tail` fallback at 4747.
-  - `strip_doc_spaces`: B6375c2F.
-  - `help_before_with_target_options`: B6585T, 6586, B6600T, 6601, B6615F,
-    B6618F, 6626.
-  - `build_doc_help_from_lines`: B6713T, B6713c2T, B6713c2F, 6714, B6718T,
-    6719.
-  - `parse_doc_link`: B6774F, B6777c2T, B6785F, 6788, B6790F, 6793,
-    B6794c2F.
-  - `help_before_named_arm_summary`: B6851T, 6852, B6862T, 6863, B6875T,
-    6876, B6889F.
-  - `doc_block_is_single_named_summary_for`: B6899T, 6900, B6909T, 6910.
-  - `doc_block_follows_barcab_opener`: B6974T, 6975.
-  - `help_before_named_arm_list_entry`: B6990T, 6991, B7003T, 7004, B7024F,
-    B7031T, 7032.
-  - `coltar_opener_inline_doc_comment`: B7056T, 7057, B7059T, 7060, B7064T,
-    7065-7067, B7068F, B7069T, B7070T, B7070F, 7070, 7072.
-  - `frag_block_doc_entries`: B7094T, 7095, B7111F, 7116.
-  - `frag_doc_entries_from_docs`: B7136T, 7137, B7140T, 7141, B7148F, 7149,
-    B7151F, 7152.
-  - `help_before_plan_tail`: B7187T, 7188, B7199T, 7200, B7216T, 7217,
-    B7222T, 7223, B7230c2F, B7241T, 7242, 7262.
-  - `help_before_arm_tail`: B7271T, 7272, B7283T, 7284, B7344c2F, B7348c2T.
-  - `postfix_doc_summary_parts`: B7458T, 7459-7461, B7463T, B7464T, B7464F,
-    7464, 7466, B7480T, 7482.
-  - `help_after_current_line_expr`: B7542T, 7543.
-  - `help_after_choice_spec_item`: 7657-7658.
-  - `help_before_choice_spec_item`: B7682T, 7683.
-  - `help_after_line_expr_ending_at`: B7742T, 7743, B7749F.
-  - `arm_scye_help_after_name`: B7817T, 7818, B7823T, 7824-7826, B7828T,
-    B7829T, B7829F, 7829, 7831, 7844.
-  - `line_bounds`: B7875F, B7875c2F.
-  - `doc_comment`: B7903T, 7904-7906.
-  - `line_starts_like_spec_doc_target`: B7938F, 7946, 7957.
-  - `line_starts_like_body_spec_doc_target`: B7967F.
-  - `doc_summary_before_line`: B7991F, B7999T, 8000-8001, B8004F.
-- Instrumentation artifact. `LineMap::new` (6384-6386), `new_with_docs`
-  (6389-6454, with all 30 branch outcomes at 6394, 6407, 6413, 6418, 6419,
-  6425, 6426, 6429, 6430 and 6438) and `pint` (6559-6564) are `#[inline]` or
+  - `strip_doc_spaces`: B6365c2F.
+  - `help_before_with_target_options`: B6575T, 6576, B6590T, 6591, B6605F,
+    B6608F, 6616.
+  - `build_doc_help_from_lines`: B6703T, B6703c2T, B6703c2F, 6704, B6708T,
+    6709.
+  - `parse_doc_link`: B6764F, B6767c2T, B6775F, 6778, B6780F, 6783,
+    B6784c2F.
+  - `help_before_named_arm_summary`: B6841T, 6842, B6852T, 6853, B6865T,
+    6866, B6879F.
+  - `doc_block_is_single_named_summary_for`: B6889T, 6890, B6899T, 6900.
+  - `doc_block_follows_barcab_opener`: B6964T, 6965.
+  - `help_before_named_arm_list_entry`: B6980T, 6981, B6993T, 6994, B7014F,
+    B7021T, 7022.
+  - `coltar_opener_inline_doc_comment`: B7046T, 7047, B7049T, 7050, B7054T,
+    7055-7057, B7058F, B7059T, B7060T, B7060F, 7060, 7062.
+  - `frag_block_doc_entries`: B7084T, 7085, B7101F, 7106.
+  - `frag_doc_entries_from_docs`: B7126T, 7127, B7130T, 7131, B7138F, 7139,
+    B7141F, 7142.
+  - `help_before_plan_tail`: B7177T, 7178, B7189T, 7190, B7206T, 7207,
+    B7212T, 7213, B7220c2F, B7231T, 7232, 7252.
+  - `help_before_arm_tail`: B7261T, 7262, B7273T, 7274, B7334c2F, B7338c2T.
+  - `postfix_doc_summary_parts`: B7448T, 7449-7451, B7453T, B7454T, B7454F,
+    7454, 7456, B7470T, 7472.
+  - `help_after_current_line_expr`: B7532T, 7533.
+  - `help_after_choice_spec_item`: 7647-7648.
+  - `help_before_choice_spec_item`: B7672T, 7673.
+  - `help_after_line_expr_ending_at`: B7732T, 7733, B7739F.
+  - `arm_scye_help_after_name`: B7807T, 7808, B7813T, 7814-7816, B7818T,
+    B7819T, B7819F, 7819, 7821, 7834.
+  - `line_bounds`: B7865F, B7865c2F.
+  - `doc_comment`: B7893T, 7894-7896.
+  - `line_starts_like_spec_doc_target`: B7928F, 7936, 7947.
+  - `line_starts_like_body_spec_doc_target`: B7957F.
+  - `doc_summary_before_line`: B7981F, B7989T, 7990-7991, B7994F.
+- Instrumentation artifact. `LineMap::new` (6374-6376), `new_with_docs`
+  (6379-6444, with all 30 branch outcomes at 6384, 6397, 6403, 6408, 6409,
+  6415, 6416, 6419, 6420 and 6428) and `pint` (6549-6554) are `#[inline]` or
   `#[inline(always)]` and report zero counts in the release parity profile,
   even though every compile runs them.
 
@@ -94,57 +94,57 @@ later conditions on that line. "Unit-tested" means
   contradicts the divisibility test just before it (a year not divisible by
   4 is nonzero, a nonzero multiple of 4 is at least 4, and a multiple of 100
   that is not a multiple of 400 is at least 100).
-- B5646F `build_yek` index >= 256: the alphabet is ASCII.
-- B5770T, 5771 `met_big(0)`: every caller passes a nonzero mantissa.
-- 5778-5785 `pad_fa_big`: no callers.
-- B5840c4T, B5840c5F, 5843 `wick` on `_` or an invalid char: `urt` only
+- B5635F `build_yek` index >= 256: the alphabet is ASCII.
+- B5759T, 5760 `met_big(0)`: every caller passes a nonzero mantissa.
+- 5767-5774 `pad_fa_big`: no callers.
+- B5829c4T, B5829c5F, 5832 `wick` on `_` or an invalid char: `urt` only
   admits `[0-9a-z.~-]`.
-- B5927T, 5928, B5935F, 5943-5944 `atom_mask_low_bits` with masks of 128 bits
+- B5916T, 5917, B5924F, 5932-5933 `atom_mask_low_bits` with masks of 128 bits
   or more: only reachable through the private `end`, whose callers use widths
   of 64 bits or less.
-- 6002 `atom_to_u8` `Big` arm: `end(3, 1)` is always small.
-- B6147T `ipv4_address` empty octet (`at_least(1)`); B6181T, 6182
+- 5991 `atom_to_u8` `Big` arm: `end(3, 1)` is always small.
+- B6136T `ipv4_address` empty octet (`at_least(1)`); B6170T, 6171
   `ipv6_address` empty tail (`exactly(7)`).
-- 6313-6315 `snag`: no callers.
-- B6476F, 6482 `set_column` and B6488F, 6489 `drift`: the `drifts` lock is
+- 6303-6305 `snag`: no callers.
+- B6466F, 6472 `set_column` and B6478F, 6479 `drift`: the `drifts` lock is
   poisoned only by a panic while it is held, and nothing that holds it can
   panic.
-- B6620T, 6621-6622, B6623T, 6624-6625 section-marker drain: after draining
+- B6610T, 6611-6612, B6613T, 6614-6615 section-marker drain: after draining
   through the last blank line, no blank line is left at either end.
 - Empty doc text after stripping, which cannot happen because `doc_comment`
-  trims trailing whitespace and blank lines are handled first: B6661T, 6662,
-  B6700T, 6701, B6724T, 6725, B6758T, B6785c2F, B6828T, 6829, B6934T, 6935,
-  B6945T, 6946-6947, B7154T, 7155, B7255T, 7256, B7341T, 7342, B7475c2T,
-  B7665c2T, B7840c2T.
-- B6741F cuff 0 with an empty summary: `parse_doc_link` returns a nonempty
+  trims trailing whitespace and blank lines are handled first: B6651T, 6652,
+  B6690T, 6691, B6714T, 6715, B6748T, B6775c2F, B6818T, 6819, B6924T, 6925,
+  B6935T, 6936-6937, B7144T, 7145, B7245T, 7246, B7331T, 7332, B7465c2T,
+  B7655c2T, B7830c2T.
+- B6731F cuff 0 with an empty summary: `parse_doc_link` returns a nonempty
   summary unchanged whenever the cuff is 0.
-- Lookups that cannot fail: B6957T, 6958 (a first-line target that is never
-  looked up); B6964F, 6965, B7097F, 7098, B7106F, 7107, B7933F, 7934, B7962F,
-  7963, B8010F, 8011 (`line_bounds` and `line_indent` on valid indices);
-  B7091F, 7092 (a line index already wrapped in `Some`); B7118T, 7119 (a frag
-  walk reaching line 0, but the `:*` opener line is code); B7885F
+- Lookups that cannot fail: B6947T, 6948 (a first-line target that is never
+  looked up); B6954F, 6955, B7087F, 7088, B7096F, 7097, B7923F, 7924, B7952F,
+  7953, B8000F, 8001 (`line_bounds` and `line_indent` on valid indices);
+  B7081F, 7082 (a line index already wrapped in `Some`); B7108T, 7109 (a frag
+  walk reaching line 0, but the `:*` opener line is code); B7875F
   (`line_indent` reaching the end of its line, but it is only asked about
   non-blank lines).
-- B7063F, B7457F, B7822F, B7902F: `trimmed_end > cursor` is false only if the
+- B7053F, B7447F, B7812F, B7892F: `trimmed_end > cursor` is false only if the
   line lacks the `::` already found at `cursor`.
-- B7537F, B7656F, B7687F, B7690T, 7691, B7812c2T: postfix scans whose
+- B7527F, B7646F, B7677F, B7680T, 7681, B7802c2T: postfix scans whose
   preconditions rule these arms out: `::` at the expression start, a comment
   line (already returned), or `:x` after an arm name, which is not valid Hoon.
-- B8015F, 8029 `line_starts_like_hoon_target` on a blank line: callers pass
+- B8005F, 8019 `line_starts_like_hoon_target` on a blank line: callers pass
   token starts.
-- B8093F, B8150F `expand_gap_start` scans that cannot run off the end of the
+- B8083F, B8140F `expand_gap_start` scans that cannot run off the end of the
   source: a non-space byte precedes `start` in the first, and every gap line
   before `line_start` ends in a newline in the second.
-- B8125F, 8133, B8137F, 8144 `expand_gap_start`: `if let Some(boundary)`
+- B8115F, 8123, B8127F, 8134 `expand_gap_start`: `if let Some(boundary)`
   fall-through regions after the `None` early return.
-- 8319 `posh`: both arms of the `if let` produce `Some`, so the trailing `?`
+- 8309 `posh`: both arms of the `if let` produce `Some`, so the trailing `?`
   never returns early.
 
 ## Tabs (UP; not legal Hoon whitespace, and hoonc and honk reject any tab)
 
-B7064c2T, B7405c3T, B7409c3F, B7415c3T, B7419c3T, B7449c3T, B7458c2T,
-B7809c3T, B7823c2T, B7885c3T, B7895c3T, B7903c2T, B7938c3T, B7967c3T,
-B8015c3T.
+B7054c2T, B7395c3T, B7399c3F, B7405c3T, B7409c3T, B7439c3T, B7448c2T,
+B7799c3T, B7813c2T, B7875c3T, B7885c3T, B7893c2T, B7928c3T, B7957c3T,
+B8005c3T.
 
 ## Defensive only (UP)
 
@@ -167,9 +167,9 @@ B8015c3T.
   B5487c2F, B5487c3F, 5488-5489, 5491 (`'''` indentation errors).
 - B5315T `wing` on `+0`: honk fails with "peg axis: peg: a and b must be
   non-zero", and hoonc fails too.
-- B5659T, 5660 `cha_fa` (a character outside the base58 alphabet) and
-  B5737F, 5740 `den_fa` (a bad checksum): malformed `0c` literals.
-- 8333 `posh` failure; 8347 `nusk` re-parse failure.
+- B5648T, 5649 `cha_fa` (a character outside the base58 alphabet) and
+  B5726F, 5729 `den_fa` (a bad checksum): malformed `0c` literals.
+- 8323 `posh` failure; 8337 `nusk` re-parse failure.
 
 ## Unreachable from source (P; unit-tested)
 
@@ -201,21 +201,17 @@ so these float paths never run from source:
 Other paths:
 
 - 3702-3708 `zer` and 5302-5310 `concatanate`: no callers.
-- B5911T, 5912 `atom_shr` shifting a `Small` atom by 128 bits or more: its
+- B5900T, 5901 `atom_shr` shifting a `Small` atom by 128 bits or more: its
   only caller is `rsh`, and every `rsh` call shifts by at most 64 bits
   (`rip`, `trip` and the `@p` renderer by one byte, `taft`, `tuft`,
   `den_fa` and the `++wood` helpers by up to 4 bytes, `yell` by 64). The
   generic `fe`, which shifts by an atom's width, has no callers.
-- B5608T, 5609 `apply_sign` on a `Big` zero magnitude: every literal
-  magnitude is either `Small` or a `Big` above `u128::MAX`
-  (`hexadecimal_number` requires a nonzero lead digit, and the other literal
-  parsers normalize values that fit).
-- B5655T, 5656 `cha_fa` on a code point above 255: `alphanumeric` admits
+- B5644T, 5645 `cha_fa` on a code point above 255: `alphanumeric` admits
   ASCII only.
-- B5698T `shay` with length 0: `tok` always hashes at least 21 bytes.
-- B6525T, 6526 `line_col` clamping a column inside a tall tape's indent:
+- B5687T `shay` with length 0: `tok` always hashes at least 21 bytes.
+- B6515T, 6516 `line_col` clamping a column inside a tall tape's indent:
   spots never start or end there in real source.
-- B8307F, 8318 `posh` with no pre tyke: `poor` always passes `Some`.
-- B8071F, 8073, B8096c2T, 8097 `expand_gap_start` at the end of the source,
+- B8297F, 8308 `posh` with no pre tyke: `poor` always passes `Some`.
+- B8061F, 8063, B8086c2T, 8087 `expand_gap_start` at the end of the source,
   on whitespace, or after a `::` lead on the token's own line: spans never
   start there.
