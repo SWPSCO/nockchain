@@ -5,8 +5,8 @@ plumbing, fan-context keys, boundary caches, the `lower_*` helpers, musk setup,
 and the `mint_inner`/`play_inner` dispatch.
 
 The gap report lists 639 uncovered lines and 155 untaken branch outcomes: none
-are missed only by unit tests (U), 606 lines and 132 branches are missed only
-by the parity corpus (P), and 33 lines and 23 branches are missed by both (UP).
+are missed only by unit tests (U), 607 lines and 134 branches are missed only
+by the parity corpus (P), and 32 lines and 21 branches are missed by both (UP).
 `L` rows are lines never run; `B` rows are branch outcomes never taken (`T` or
 `F`, with `c2`/`c3` for later conditions of the same `if`).
 
@@ -104,7 +104,7 @@ by the parity corpus (P), and 33 lines and 23 branches are missed by both (UP).
 
 | Gaps | Tag | Reason |
 |---|---|---|
-| L93, B91 F, B91 c2 F (`lazy_resolver_id_in` skipping an entry) | UP | Hash collision: a bucket entry made for another tomes map or prefix under the same `TomesSignature`. |
+| L93, B91 F, B91 c2 F (`lazy_resolver_id_in` skipping an entry) | P | Hash collision: a bucket entry made for another tomes map or prefix under the same `TomesSignature`. `c1_lazy_resolver_bucket_needs_prefix_and_tomes_map` builds such a bucket by hand. |
 | L3584, 3587-3588, B3577 T, B3584 F, B3584 c2 F (`core_mint_cache_lookup` hit) | P | Performance cache only: the per-gen mint cache has the same key components and answers first; unit tests call the lookup directly. |
 | L3586, B3584 T, B3584 c2 T (`core_mint_cache_lookup` rejecting a hit) | UP | Hash collision: a stored entry for other arms or another prefix under the same `TomesSignature`. |
 | `memo_verify_recompute` L3666-3675, 3679-3687, 3689-3691, B3687 F; `memo_verify_type_eq` L3693-3695, 3700, B3694 T; `memo_verify_formula_eq` L3702-3704, 3709, B3703 T; `memo_verify_noun_eq` L3711-3713; `memo_verify_typed_formula` L3717-3728, 3730, 3733, 3738-3739, 3742-3743, B3728 F, B3730 F; `mint_inner` L4249-4251, 4254, 4256, 4258, 4262, B4246 F, B4248 T, B4256 F | P | Diagnostics only: the parity corpus runs without `HONK_MEMO_VERIFY`; `c6_cli_memo_verify_rechecks_cache_hits_without_changing_the_artifact` covers it. |

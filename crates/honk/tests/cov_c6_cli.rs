@@ -1035,3 +1035,43 @@ fn c6_cli_memo_verify_rechecks_cache_hits_without_changing_the_artifact() {
     assert!(log.contains("[memo-verify] total:"), "{log}");
     assert!(log.contains(" 0 mismatched, 0 context changes"), "{log}");
 }
+
+#[test]
+fn c6_cli_batch_keeps_each_path_for_identical_sources() {
+    // The same core at two paths: arm spots name the file, so the batch must
+    // build each entry exactly as a single build does, not reuse the other
+    // entry's mint because the sources match.
+    let temp = tempfile::tempdir().expect("tempdir");
+    let cwd = temp.path();
+    let deps = cwd.join("deps");
+    let source = "|%\n++  inc  |=(a=@ (add a 1))\n++  twice  |=(a=@ (inc (inc a)))\n--\n";
+    let one = write(&deps, "app/one.hoon", source);
+    let two = write(&deps, "lib/two.hoon", source);
+    let singles = [
+        build(cwd, Some("--arbitrary"), &one, &deps, "s-one.jam"),
+        build(cwd, Some("--arbitrary"), &two, &deps, "s-two.jam"),
+    ];
+    assert_ne!(singles[0], singles[1], "spots name the file");
+    let manifest = cwd.join("batch.tsv");
+    fs::write(
+        &manifest,
+        format!(
+            "b/one.jam\t{}\tarbitrary\nb/two.jam\t{}\tarbitrary\n",
+            one.display(),
+            two.display()
+        ),
+    )
+    .expect("manifest");
+    let prelude = prelude();
+    assert_ok(&honk(
+        &args!["--batch-manifest", manifest, "--prelude", prelude, deps],
+        cwd,
+    ));
+    for (name, single) in ["b/one.jam", "b/two.jam"].iter().zip(&singles) {
+        assert_eq!(
+            &fs::read(cwd.join(name)).expect("batch artifact"),
+            single,
+            "{name}"
+        );
+    }
+}

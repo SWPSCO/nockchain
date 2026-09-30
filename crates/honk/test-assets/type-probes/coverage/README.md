@@ -43,7 +43,7 @@ output is checked byte-for-byte against hoonc.
 | Measure | Before | Now |
 |---|---|---|
 | Unit tests: lines | 72.1% | 94.8% |
-| Unit tests: branches | 55.9% (2,530 of 5,736 missed) | 89.2% (651 of 6,016 missed) |
+| Unit tests: branches | 55.9% (2,530 of 5,736 missed) | 89.2% (648 of 6,016 missed) |
 | Parity corpus: lines | 65.9% | 76.1% |
 | Parity corpus: branches | 51.8% (2,552 of 5,292 missed) | 66.1% (1,883 of 5,556 missed) |
 
@@ -70,3 +70,49 @@ toolchain's `llvm-tools`.
   compiler fixtures, the rejection corpus, the correctness regressions, every
   coverage package probe, and the `c6` import and kernel pairings, rejection
   trees, and dynock pairings. The `c6` batch genrule is not replayed.
+
+## Mutation testing
+
+Coverage shows which code runs; `cargo mutants` shows whether the tests would
+notice if it changed. A run over all of `crates/honk/src` (3,891 mutants,
+79 minutes at 32 jobs on a 128-core machine):
+
+```
+cargo mutants -p honk -j 32 --timeout 180 \
+  -C=--config=profile.dev.opt-level=1 -C=--config=profile.dev.debug=0 \
+  -C=--config=profile.dev.lto=false -C=--config=profile.dev.codegen-units=256 \
+  -C=--config=profile.dev.incremental=true \
+  -- --lib --bins --tests -- \
+  --skip c6_cli_dynamic_wrapper_dumps_with_a_minted_prelude_formula \
+  --skip c6_cli_wrapper_asset_dumps_agree
+```
+
+The profile overrides turn a mutant's rebuild from minutes (the dev profile
+is opt-level 3 with thin LTO) into about 8 seconds. The two skipped tests mint
+the whole prelude and take about 70 seconds each. For a pull request,
+`--in-diff` limits the run to changed lines.
+
+The tests caught 81% of the mutants that compile. Each of the 477 survivors
+was then rebuilt and checked against the hoonc-checked parity corpus, under
+`HONK_MEMO_VERIFY`, and (for cache keys) against the hoon-138 self-mint:
+
+- 6 are caught by the two skipped tests, and 58 by the parity corpus or the
+  self-mint, so for those 58 the Bazel parity job is what guards them.
+- 78 delete a rune arm in `mint_inner`, `play_inner`, or `mull_inner` whose
+  catch-all path (hatch's `open`) produces the same result.
+- 121 change a cache key, signature, lookup, or store with no wrong cache hit
+  and no change to the self-mint; 36 more matter only on a mug or hash
+  collision; 38 are `HONK_MEMO_VERIFY` tooling or stack sizing.
+- 1 (the `(Stop | Wait, None)` arm of `blow_ktsg`) makes the `^~` fold cache
+  give wrong hits under `HONK_MEMO_VERIFY` without changing any output.
+- 79 are in the CLI driver and pipeline plumbing (timing, tracing, `fsync`,
+  artifact listings), including standard-build paths that nothing reaches.
+- 8 were gaps that tests now catch: `c2_cnts_mixed_depth_edits`,
+  `c3_crop_fork_of_cells`, and `c3_wthx_noun_cell_skin` (each checked against
+  hoonc before it was added), the identical-source batch test in
+  `tests/cov_c6_cli.rs`, and the collision tests
+  `c1_lazy_resolver_bucket_needs_prefix_and_tomes_map` and
+  `c4_noun_eq_compares_pairs_past_the_pair_set_threshold`.
+- 52 are elsewhere in the type checker: 11 are fast paths whose fallback
+  computes the same thing, and the rest (core minting, `burp`, `mull`, wet
+  `redo`, fork sets, `twin`) are not yet classified.

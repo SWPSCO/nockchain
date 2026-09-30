@@ -1874,3 +1874,28 @@ fn nest_mug_memo_compares_structurally_and_evicts_full_buckets() {
     assert_eq!(bucket.len(), Ut::NEST_MUG_BUCKET_LIMIT);
     assert_eq!(ut.nest_mug_lookup(sut2, ref2).expect("hit"), Some(false));
 }
+
+#[test]
+fn c1_lazy_resolver_bucket_needs_prefix_and_tomes_map() {
+    // A bucket holds every resolver whose tomes signature (a 31-bit mug)
+    // collided, so a hit must match the prefix and the tomes map itself.
+    let mut slab: NounSlab = NounSlab::new();
+    let map_a = T(&mut slab, &[D(1), D(2)]);
+    let map_b = T(&mut slab, &[D(3), D(4)]);
+    let map_b_copy = T(&mut slab, &[D(3), D(4)]);
+    let bucket: LazyResolverBucket = vec![
+        (map_a, None, LazyResolverId(1)),
+        (map_b, None, LazyResolverId(2)),
+        (map_a, Some("p".to_string()), LazyResolverId(3)),
+    ];
+    let space = slab.noun_space();
+    let find = |map, prefix| lazy_resolver_id_in(Some(&bucket), map, prefix, &space).unwrap();
+    assert_eq!(find(map_b_copy, None), Some(LazyResolverId(2)));
+    assert_eq!(find(map_a, Some("p")), Some(LazyResolverId(3)));
+    assert_eq!(find(map_a, Some("q")), None);
+    assert_eq!(find(map_b, Some("p")), None);
+    assert_eq!(
+        lazy_resolver_id_in(None, map_a, None, &space).unwrap(),
+        None
+    );
+}

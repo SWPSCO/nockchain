@@ -251,6 +251,25 @@ fn c4_noun_eq_skips_repeated_shared_pairs() {
     assert!(!nn::noun_eq(a, c, &space).unwrap());
 }
 
+#[test]
+fn c4_noun_eq_compares_pairs_past_the_pair_set_threshold() {
+    // Two 100-item lists that differ only in their last item, two atoms with
+    // equal mugs: every cell of both spines has equal mugs as well, so only a
+    // walk that keeps comparing past the 64th cell pair tells them apart.
+    let (a1, a2) = colliding_atoms();
+    let mut slab: NounSlab = NounSlab::new();
+    let mut left: Vec<Noun> = (0..99).map(D).collect();
+    let mut right = left.clone();
+    left.push(D(a1));
+    right.push(D(a2));
+    let l = nn::vec_to_list(&mut slab, left);
+    let r = nn::vec_to_list(&mut slab, right);
+    let space = slab.noun_space();
+    assert_eq!(nn::slab_mug(l, &space), nn::slab_mug(r, &space));
+    assert!(!nn::noun_eq(l, r, &space).unwrap());
+    assert!(!nn::noun_eq(r, l, &space).unwrap());
+}
+
 // ---------------------------------------------------------------------------
 // formula.rs: the noun-level ++cons / ++comb / ++cond peepholes
 // ---------------------------------------------------------------------------
