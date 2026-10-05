@@ -42,15 +42,31 @@ impl ArmMap {
     pub fn from_type(ty: &TypeNoun, space: &NounSpace) -> Result<Self> {
         arm_map_from_type(ty, space)
     }
+
+    pub fn from_type_for_dialect(
+        ty: &TypeNoun,
+        space: &NounSpace,
+        dialect: crate::native::Dialect,
+    ) -> Result<Self> {
+        arm_map_from_type_for_dialect(ty, space, dialect)
+    }
 }
 
 pub fn arm_map_from_type(ty: &TypeNoun, space: &NounSpace) -> Result<ArmMap> {
+    arm_map_from_type_for_dialect(ty, space, crate::native::Dialect::Nockchain)
+}
+
+fn arm_map_from_type_for_dialect(
+    ty: &TypeNoun,
+    space: &NounSpace,
+    dialect: crate::native::Dialect,
+) -> Result<ArmMap> {
     let Some(coil) = find_core_coil(ty.noun(), space)? else {
         return Ok(ArmMap::default());
     };
     let tomes = coil_tomes(coil, space)?;
     let mut map = ArmMap::new();
-    collect_tomes(tomes, BigUint::from(2u32), &mut map, space)?;
+    collect_tomes(dialect, tomes, BigUint::from(2u32), &mut map, space)?;
     Ok(map)
 }
 
@@ -162,7 +178,13 @@ fn coil_tomes(coil: Noun, space: &NounSpace) -> Result<Noun> {
     Ok(rest.tail().noun())
 }
 
-fn collect_tomes(dom: Noun, axe: BigUint, map: &mut ArmMap, space: &NounSpace) -> Result<()> {
+fn collect_tomes(
+    dialect: crate::native::Dialect,
+    dom: Noun,
+    axe: BigUint,
+    map: &mut ArmMap,
+    space: &NounSpace,
+) -> Result<()> {
     let Some((node, left, right)) = map_node(dom, space)? else {
         return Ok(());
     };
@@ -179,22 +201,43 @@ fn collect_tomes(dom: Noun, axe: BigUint, map: &mut ArmMap, space: &NounSpace) -
         .as_cell()
         .map_err(|err| CompilerError::Decode(format!("tome entry not cell: {err}")))?;
     let tome = node_cell.tail();
-    let tome_cell = tome
-        .as_cell()
-        .map_err(|err| CompilerError::Decode(format!("tome value not cell: {err}")))?;
-    let arms_map = tome_cell.tail().noun();
+    let arms_map = crate::native::noun::tome_arms(dialect, tome.noun(), space)?;
     collect_arms(arms_map, BigUint::from(1u32), base.clone(), map, space)?;
 
     if left_empty && right_empty {
         return Ok(());
     }
     if left_empty {
-        collect_tomes(right, peg_axis(&axe, &BigUint::from(3u32))?, map, space)?;
+        collect_tomes(
+            dialect,
+            right,
+            peg_axis(&axe, &BigUint::from(3u32))?,
+            map,
+            space,
+        )?;
     } else if right_empty {
-        collect_tomes(left, peg_axis(&axe, &BigUint::from(3u32))?, map, space)?;
+        collect_tomes(
+            dialect,
+            left,
+            peg_axis(&axe, &BigUint::from(3u32))?,
+            map,
+            space,
+        )?;
     } else {
-        collect_tomes(left, peg_axis(&axe, &BigUint::from(6u32))?, map, space)?;
-        collect_tomes(right, peg_axis(&axe, &BigUint::from(7u32))?, map, space)?;
+        collect_tomes(
+            dialect,
+            left,
+            peg_axis(&axe, &BigUint::from(6u32))?,
+            map,
+            space,
+        )?;
+        collect_tomes(
+            dialect,
+            right,
+            peg_axis(&axe, &BigUint::from(7u32))?,
+            map,
+            space,
+        )?;
     }
     Ok(())
 }

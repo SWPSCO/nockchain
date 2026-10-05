@@ -323,3 +323,20 @@ pub fn slab_mug(noun: Noun, space: &NounSpace) -> u32 {
     }
     get_mug(noun, space).expect("Noun should have a mug once mugged.")
 }
+/// The arm map carried by one core chapter in the selected compiler layout.
+pub fn tome_arms(
+    dialect: crate::native::Dialect,
+    tome: nockvm::noun::Noun,
+    space: &nockvm::noun::NounSpace,
+) -> crate::errors::Result<nockvm::noun::Noun> {
+    match dialect {
+        crate::native::Dialect::Urbit => Ok(tome),
+        crate::native::Dialect::Nockchain => tome
+            .in_space(space)
+            .as_cell()
+            .map(|cell| cell.tail().noun())
+            .map_err(|err| {
+                crate::errors::CompilerError::Decode(format!("tome value not cell: {err}"))
+            }),
+    }
+}

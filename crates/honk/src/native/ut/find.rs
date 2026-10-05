@@ -31,6 +31,24 @@ fn atom_handle_to_string(atom: AtomHandle<'_>) -> Result<String> {
 }
 
 impl<'a> Ut<'a> {
+    /// Hoon's `++slob`: inspect only the outer core's arms, expanding holds and
+    /// hints but never searching a core's payload or stripping a face.
+    pub(crate) fn has_arm_noun(&mut self, sut: Noun, name: &str) -> Result<bool> {
+        let mut sut = native_of(&mut self.cx, sut, &self.slab.noun_space())?;
+        loop {
+            match &*sut {
+                NTy::Hold { .. } | NTy::Hint { .. } => sut = self.repo(sut)?,
+                NTy::Core { rest, .. } => {
+                    let rest = live_leaf_to_noun(&mut self.cx, rest, self.slab);
+                    let tomes = coil_tomes(rest, &self.slab.noun_space())?;
+                    let name = term_to_noun(self.slab, name);
+                    return Ok(self.loot(name, tomes)?.is_some());
+                }
+                _ => return Ok(false),
+            }
+        }
+    }
+
     // Wing navigation (find/fond/fend/fund/twin/resolve_wing_axis and the nested
     // `fond_name` walker) works on native types. Leaf-carried parts (face tools
     // and tunes, core coils and tomes) are lowered through the memoized
@@ -784,10 +802,7 @@ impl<'a> Ut<'a> {
                 .as_cell()
                 .map_err(|err| CompilerError::Decode(format!("tome entry not cell: {err}")))?;
             let tome = node_cell.tail();
-            let tome_cell = tome
-                .as_cell()
-                .map_err(|err| CompilerError::Decode(format!("tome value not cell: {err}")))?;
-            let arms_map = tome_cell.tail().noun();
+            let arms_map = crate::native::noun::tome_arms(self.dialect, tome.noun(), &space)?;
             let left_empty = noun_is_zero(left);
             let right_empty = noun_is_zero(right);
             if let Some((arm_axis, hoon)) = self.look(cog, arms_map)? {

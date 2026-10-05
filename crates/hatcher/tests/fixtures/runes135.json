@@ -1,0 +1,800 @@
+[
+  {
+    "rune": "|%",
+    "role": "expression",
+    "tall": "|%  ++  foo  1  --",
+    "wide": null
+  },
+  {
+    "rune": "|@",
+    "role": "expression",
+    "tall": "|@  ++  foo  1  --",
+    "wide": null
+  },
+  {
+    "rune": "|_",
+    "role": "expression",
+    "tall": "|_  @  ++  foo  1  --",
+    "wide": null
+  },
+  {
+    "rune": "|^",
+    "role": "expression",
+    "tall": "|^  foo  ++  foo  1  --",
+    "wide": null
+  },
+  {
+    "rune": "|.",
+    "role": "expression",
+    "tall": "|.  1",
+    "wide": "|.(1)"
+  },
+  {
+    "rune": "|-",
+    "role": "expression",
+    "tall": "|-  1",
+    "wide": "|-(1)"
+  },
+  {
+    "rune": "|?",
+    "role": "expression",
+    "tall": "|?  1",
+    "wide": "|?(1)"
+  },
+  {
+    "rune": "|:",
+    "role": "expression",
+    "tall": "|:  1  2",
+    "wide": "|:(1 2)"
+  },
+  {
+    "rune": "|~",
+    "role": "expression",
+    "tall": "|~  @  1",
+    "wide": "|~(@ 1)"
+  },
+  {
+    "rune": "|*",
+    "role": "expression",
+    "tall": "|*  @  1",
+    "wide": "|*(@ 1)"
+  },
+  {
+    "rune": "|=",
+    "role": "expression",
+    "tall": "|=  @  1",
+    "wide": "|=(@ 1)"
+  },
+  {
+    "rune": "|$",
+    "role": "expression",
+    "tall": "|$  [a b]  @",
+    "wide": "|$([a b] @)"
+  },
+  {
+    "rune": "$@",
+    "role": "expression",
+    "tall": "$@  @  *",
+    "wide": "$@(@ *)"
+  },
+  {
+    "rune": "$<",
+    "role": "expression",
+    "tall": "$<  @  *",
+    "wide": "$<(@ *)"
+  },
+  {
+    "rune": "$>",
+    "role": "expression",
+    "tall": "$>  @  *",
+    "wide": "$>(@ *)"
+  },
+  {
+    "rune": "$^",
+    "role": "expression",
+    "tall": "$^  @  *",
+    "wide": "$^(@ *)"
+  },
+  {
+    "rune": "$-",
+    "role": "expression",
+    "tall": "$-  @  *",
+    "wide": "$-(@ *)"
+  },
+  {
+    "rune": "$:",
+    "role": "expression",
+    "tall": "$:  @  ~  ==",
+    "wide": "$:(@ ~)"
+  },
+  {
+    "rune": "$%",
+    "role": "expression",
+    "tall": "$%  @  ~  ==",
+    "wide": "$%(@ ~)"
+  },
+  {
+    "rune": "$?",
+    "role": "expression",
+    "tall": "$?  @  ~  ==",
+    "wide": "$?(@ ~)"
+  },
+  {
+    "rune": "$|",
+    "role": "expression",
+    "tall": "$|  @  1",
+    "wide": "$|(@ 1)"
+  },
+  {
+    "rune": "$&",
+    "role": "expression",
+    "tall": "$&  @  1",
+    "wide": "$&(@ 1)"
+  },
+  {
+    "rune": "$~",
+    "role": "expression",
+    "tall": "$~  1  @",
+    "wide": "$~(1 @)"
+  },
+  {
+    "rune": "$=",
+    "role": "expression",
+    "tall": "$=  foo  @",
+    "wide": "$=(foo @)"
+  },
+  {
+    "rune": "$+",
+    "role": "expression",
+    "tall": "$+  foo  @",
+    "wide": "$+(foo @)"
+  },
+  {
+    "rune": "$_",
+    "role": "expression",
+    "tall": "$_  1",
+    "wide": "$_(1)"
+  },
+  {
+    "rune": "$@",
+    "role": "mold",
+    "tall": "|=  $@  @  *  1",
+    "wide": "|=($@(@ *) 1)"
+  },
+  {
+    "rune": "$<",
+    "role": "mold",
+    "tall": "|=  $<  @  *  1",
+    "wide": "|=($<(@ *) 1)"
+  },
+  {
+    "rune": "$>",
+    "role": "mold",
+    "tall": "|=  $>  @  *  1",
+    "wide": "|=($>(@ *) 1)"
+  },
+  {
+    "rune": "$^",
+    "role": "mold",
+    "tall": "|=  $^  @  *  1",
+    "wide": "|=($^(@ *) 1)"
+  },
+  {
+    "rune": "$-",
+    "role": "mold",
+    "tall": "|=  $-  @  *  1",
+    "wide": "|=($-(@ *) 1)"
+  },
+  {
+    "rune": "$:",
+    "role": "mold",
+    "tall": "|=  $:  @  ~  ==  1",
+    "wide": "|=($:(@ ~) 1)"
+  },
+  {
+    "rune": "$%",
+    "role": "mold",
+    "tall": "|=  $%  @  ~  ==  1",
+    "wide": "|=($%(@ ~) 1)"
+  },
+  {
+    "rune": "$?",
+    "role": "mold",
+    "tall": "|=  $?  @  ~  ==  1",
+    "wide": "|=($?(@ ~) 1)"
+  },
+  {
+    "rune": "$|",
+    "role": "mold",
+    "tall": "|=  $|  @  1  1",
+    "wide": "|=($|(@ 1) 1)"
+  },
+  {
+    "rune": "$&",
+    "role": "mold",
+    "tall": "|=  $&  @  1  1",
+    "wide": "|=($&(@ 1) 1)"
+  },
+  {
+    "rune": "$~",
+    "role": "mold",
+    "tall": "|=  $~  1  @  1",
+    "wide": "|=($~(1 @) 1)"
+  },
+  {
+    "rune": "$=",
+    "role": "mold",
+    "tall": "|=  $=  foo  @  1",
+    "wide": "|=($=(foo @) 1)"
+  },
+  {
+    "rune": "$+",
+    "role": "mold",
+    "tall": "|=  $+  foo  @  1",
+    "wide": "|=($+(foo @) 1)"
+  },
+  {
+    "rune": "$_",
+    "role": "mold",
+    "tall": "|=  $_  1  1",
+    "wide": "|=($_(1) 1)"
+  },
+  {
+    "rune": "$;",
+    "role": "mold",
+    "tall": "|=  $;  foo  1",
+    "wide": "|=($;(foo) 1)"
+  },
+  {
+    "rune": "$.",
+    "role": "expression",
+    "tall": "$.  @",
+    "wide": "$.(@)"
+  },
+  {
+    "rune": "$,",
+    "role": "expression",
+    "tall": "$,  @",
+    "wide": "$,(@)"
+  },
+  {
+    "rune": "%_",
+    "role": "expression",
+    "tall": "%_  foo  x  1  ==",
+    "wide": "%_(foo x 1)"
+  },
+  {
+    "rune": "%=",
+    "role": "expression",
+    "tall": "%=  foo  x  1  ==",
+    "wide": "%=(foo x 1)"
+  },
+  {
+    "rune": "%*",
+    "role": "expression",
+    "tall": "%*  foo  1  x  2  ==",
+    "wide": "%*(foo 1 x 2)"
+  },
+  {
+    "rune": "%~",
+    "role": "expression",
+    "tall": "%~  foo  1  2",
+    "wide": "%~(foo 1 2)"
+  },
+  {
+    "rune": "%.",
+    "role": "expression",
+    "tall": "%.  1  2",
+    "wide": "%.(1 2)"
+  },
+  {
+    "rune": "%-",
+    "role": "expression",
+    "tall": "%-  foo  1",
+    "wide": "%-(foo 1)"
+  },
+  {
+    "rune": "%+",
+    "role": "expression",
+    "tall": "%+  foo  1  2",
+    "wide": "%+(foo 1 2)"
+  },
+  {
+    "rune": "%^",
+    "role": "expression",
+    "tall": "%^  foo  1  2  3",
+    "wide": "%^(foo 1 2 3)"
+  },
+  {
+    "rune": "%:",
+    "role": "expression",
+    "tall": "%:  foo  1  2  ==",
+    "wide": "%:(foo 1 2)"
+  },
+  {
+    "rune": ":_",
+    "role": "expression",
+    "tall": ":_  1  2",
+    "wide": ":_(1 2)"
+  },
+  {
+    "rune": ":-",
+    "role": "expression",
+    "tall": ":-  1  2",
+    "wide": ":-(1 2)"
+  },
+  {
+    "rune": ":+",
+    "role": "expression",
+    "tall": ":+  1  2  3",
+    "wide": ":+(1 2 3)"
+  },
+  {
+    "rune": ":^",
+    "role": "expression",
+    "tall": ":^  1  2  3  4",
+    "wide": ":^(1 2 3 4)"
+  },
+  {
+    "rune": ":~",
+    "role": "expression",
+    "tall": ":~  1  2  ==",
+    "wide": ":~(1 2)"
+  },
+  {
+    "rune": ":*",
+    "role": "expression",
+    "tall": ":*  1  2  ==",
+    "wide": ":*(1 2)"
+  },
+  {
+    "rune": ".+",
+    "role": "expression",
+    "tall": ".+  1",
+    "wide": ".+(1)"
+  },
+  {
+    "rune": ".?",
+    "role": "expression",
+    "tall": ".?  1",
+    "wide": ".?(1)"
+  },
+  {
+    "rune": ".*",
+    "role": "expression",
+    "tall": ".*  1  2",
+    "wide": ".*(1 2)"
+  },
+  {
+    "rune": ".=",
+    "role": "expression",
+    "tall": ".=  1  2",
+    "wide": ".=(1 2)"
+  },
+  {
+    "rune": ".^",
+    "role": "expression",
+    "tall": ".^  @  1  2  ==",
+    "wide": ".^(@ 1 2)"
+  },
+  {
+    "rune": "^|",
+    "role": "expression",
+    "tall": "^|  1",
+    "wide": "^|(1)"
+  },
+  {
+    "rune": "^&",
+    "role": "expression",
+    "tall": "^&  1",
+    "wide": "^&(1)"
+  },
+  {
+    "rune": "^~",
+    "role": "expression",
+    "tall": "^~  1",
+    "wide": "^~(1)"
+  },
+  {
+    "rune": "^?",
+    "role": "expression",
+    "tall": "^?  1",
+    "wide": "^?(1)"
+  },
+  {
+    "rune": "^.",
+    "role": "expression",
+    "tall": "^.  1  2",
+    "wide": "^.(1 2)"
+  },
+  {
+    "rune": "^+",
+    "role": "expression",
+    "tall": "^+  1  2",
+    "wide": "^+(1 2)"
+  },
+  {
+    "rune": "^_",
+    "role": "expression",
+    "tall": "^_  1  2",
+    "wide": "^_(1 2)"
+  },
+  {
+    "rune": "^-",
+    "role": "expression",
+    "tall": "^-  @  1",
+    "wide": "^-(@ 1)"
+  },
+  {
+    "rune": "^=",
+    "role": "expression",
+    "tall": "^=  foo  1",
+    "wide": "^=(foo 1)"
+  },
+  {
+    "rune": "^*",
+    "role": "expression",
+    "tall": "^*  @",
+    "wide": "^*(@)"
+  },
+  {
+    "rune": "^:",
+    "role": "expression",
+    "tall": "^:  @",
+    "wide": "^:(@)"
+  },
+  {
+    "rune": "~|",
+    "role": "expression",
+    "tall": "~|  1  2",
+    "wide": "~|(1 2)"
+  },
+  {
+    "rune": "~_",
+    "role": "expression",
+    "tall": "~_  1  2",
+    "wide": "~_(1 2)"
+  },
+  {
+    "rune": "~=",
+    "role": "expression",
+    "tall": "~=  1  2",
+    "wide": "~=(1 2)"
+  },
+  {
+    "rune": "~!",
+    "role": "expression",
+    "tall": "~!  1  2",
+    "wide": "~!(1 2)"
+  },
+  {
+    "rune": "~$",
+    "role": "expression",
+    "tall": "~$  %foo  1",
+    "wide": "~$(%foo 1)"
+  },
+  {
+    "rune": "~%",
+    "role": "expression",
+    "tall": "~%  %foo  1  ~  2",
+    "wide": "~%(%foo 1 ~ 2)"
+  },
+  {
+    "rune": "~/",
+    "role": "expression",
+    "tall": "~/  %foo  1",
+    "wide": "~/(%foo 1)"
+  },
+  {
+    "rune": "~<",
+    "role": "expression",
+    "tall": "~<  %foo.1  2",
+    "wide": "~<(%foo.1 2)"
+  },
+  {
+    "rune": "~>",
+    "role": "expression",
+    "tall": "~>  %foo.1  2",
+    "wide": "~>(%foo.1 2)"
+  },
+  {
+    "rune": "~+",
+    "role": "expression",
+    "tall": "~+  1",
+    "wide": "~+(1)"
+  },
+  {
+    "rune": "~&",
+    "role": "expression",
+    "tall": "~&  1  2",
+    "wide": "~&(1 2)"
+  },
+  {
+    "rune": "~?",
+    "role": "expression",
+    "tall": "~?  1  2  3",
+    "wide": "~?(1 2 3)"
+  },
+  {
+    "rune": ";:",
+    "role": "expression",
+    "tall": ";:  foo  1  2  ==",
+    "wide": ";:(foo 1 2)"
+  },
+  {
+    "rune": ";~",
+    "role": "expression",
+    "tall": ";~  foo  1  2  ==",
+    "wide": ";~(foo 1 2)"
+  },
+  {
+    "rune": ";/",
+    "role": "expression",
+    "tall": ";/  1",
+    "wide": ";/(1)"
+  },
+  {
+    "rune": ";<",
+    "role": "expression",
+    "tall": ";<  @  foo  1  2",
+    "wide": ";<(@ foo 1 2)"
+  },
+  {
+    "rune": ";;",
+    "role": "expression",
+    "tall": ";;  @  1",
+    "wide": ";;(@ 1)"
+  },
+  {
+    "rune": "=|",
+    "role": "expression",
+    "tall": "=|  @  1",
+    "wide": "=|(@ 1)"
+  },
+  {
+    "rune": "=.",
+    "role": "expression",
+    "tall": "=.  foo  1  2",
+    "wide": "=.(foo 1 2)"
+  },
+  {
+    "rune": "=?",
+    "role": "expression",
+    "tall": "=?  foo  1  2  3",
+    "wide": "=?(foo 1 2 3)"
+  },
+  {
+    "rune": "=^",
+    "role": "expression",
+    "tall": "=^  foo  bar  1  2",
+    "wide": "=^(foo bar 1 2)"
+  },
+  {
+    "rune": "=:",
+    "role": "expression",
+    "tall": "=:\n  foo  1\n==\n2",
+    "wide": "=:(foo 1 2)"
+  },
+  {
+    "rune": "=/",
+    "role": "expression",
+    "tall": "=/  foo  1  2",
+    "wide": "=/(foo 1 2)"
+  },
+  {
+    "rune": "=;",
+    "role": "expression",
+    "tall": "=;  foo  1  2",
+    "wide": "=;(foo 1 2)"
+  },
+  {
+    "rune": "=*",
+    "role": "expression",
+    "tall": "=*  foo  1  2",
+    "wide": "=*(foo 1 2)"
+  },
+  {
+    "rune": "=<",
+    "role": "expression",
+    "tall": "=<  1  2",
+    "wide": "=<(1 2)"
+  },
+  {
+    "rune": "=>",
+    "role": "expression",
+    "tall": "=>  1  2",
+    "wide": "=>(1 2)"
+  },
+  {
+    "rune": "=-",
+    "role": "expression",
+    "tall": "=-  1  2",
+    "wide": "=-(1 2)"
+  },
+  {
+    "rune": "=,",
+    "role": "expression",
+    "tall": "=,  1  2",
+    "wide": "=,(1 2)"
+  },
+  {
+    "rune": "=+",
+    "role": "expression",
+    "tall": "=+  1  2",
+    "wide": "=+(1 2)"
+  },
+  {
+    "rune": "=~",
+    "role": "expression",
+    "tall": "=~  1  2  ==",
+    "wide": "=~(1 2)"
+  },
+  {
+    "rune": "?|",
+    "role": "expression",
+    "tall": "?|  1  2  ==",
+    "wide": "?|(1 2)"
+  },
+  {
+    "rune": "?&",
+    "role": "expression",
+    "tall": "?&  1  2  ==",
+    "wide": "?&(1 2)"
+  },
+  {
+    "rune": "?:",
+    "role": "expression",
+    "tall": "?:  1  2  3",
+    "wide": "?:(1 2 3)"
+  },
+  {
+    "rune": "?.",
+    "role": "expression",
+    "tall": "?.  1  2  3",
+    "wide": "?.(1 2 3)"
+  },
+  {
+    "rune": "?<",
+    "role": "expression",
+    "tall": "?<  1  2",
+    "wide": "?<(1 2)"
+  },
+  {
+    "rune": "?>",
+    "role": "expression",
+    "tall": "?>  1  2",
+    "wide": "?>(1 2)"
+  },
+  {
+    "rune": "?^",
+    "role": "expression",
+    "tall": "?^  foo  1  2",
+    "wide": "?^(foo 1 2)"
+  },
+  {
+    "rune": "?@",
+    "role": "expression",
+    "tall": "?@  foo  1  2",
+    "wide": "?@(foo 1 2)"
+  },
+  {
+    "rune": "?~",
+    "role": "expression",
+    "tall": "?~  foo  1  2",
+    "wide": "?~(foo 1 2)"
+  },
+  {
+    "rune": "?=",
+    "role": "expression",
+    "tall": "?=  @  foo",
+    "wide": "?=(@ foo)"
+  },
+  {
+    "rune": "?#",
+    "role": "expression",
+    "tall": "?#  foo  bar",
+    "wide": "?#(foo bar)"
+  },
+  {
+    "rune": "?!",
+    "role": "expression",
+    "tall": "?!  1",
+    "wide": "?!(1)"
+  },
+  {
+    "rune": "?-",
+    "role": "expression",
+    "tall": "?-  foo  @  1  ~  2  ==",
+    "wide": "?-(foo @ 1, ~ 2)"
+  },
+  {
+    "rune": "?+",
+    "role": "expression",
+    "tall": "?+  foo  0  @  1  ~  2  ==",
+    "wide": "?+(foo 0 @ 1, ~ 2)"
+  },
+  {
+    "rune": "!:",
+    "role": "expression",
+    "tall": "!:  1",
+    "wide": "!:(1)"
+  },
+  {
+    "rune": "!.",
+    "role": "expression",
+    "tall": "!.  1",
+    "wide": "!.(1)"
+  },
+  {
+    "rune": "!>",
+    "role": "expression",
+    "tall": "!>  1",
+    "wide": "!>(1)"
+  },
+  {
+    "rune": "!=",
+    "role": "expression",
+    "tall": "!=  1",
+    "wide": "!=(1)"
+  },
+  {
+    "rune": "!,",
+    "role": "expression",
+    "tall": "!,  1  2",
+    "wide": "!,(1 2)"
+  },
+  {
+    "rune": "!;",
+    "role": "expression",
+    "tall": "!;  1  2",
+    "wide": "!;(1 2)"
+  },
+  {
+    "rune": "!<",
+    "role": "expression",
+    "tall": "!<  @  1",
+    "wide": "!<(@ 1)"
+  },
+  {
+    "rune": "!@",
+    "role": "expression",
+    "tall": "!@  foo:bar  1  2",
+    "wide": "!@(foo:bar 1 2)"
+  },
+  {
+    "rune": "!?",
+    "role": "expression",
+    "tall": "!?  135  1",
+    "wide": "!?(135 1)"
+  },
+  {
+    "rune": "%.",
+    "role": "mold",
+    "tall": "|=  %.  @  foo  1",
+    "wide": "|=(%.(@ foo) 1)"
+  },
+  {
+    "rune": "%-",
+    "role": "mold",
+    "tall": "|=  %-  foo  @  1",
+    "wide": "|=(%-(foo @) 1)"
+  },
+  {
+    "rune": "%+",
+    "role": "mold",
+    "tall": "|=  %+  foo  @  *  1",
+    "wide": "|=(%+(foo @ *) 1)"
+  },
+  {
+    "rune": "%^",
+    "role": "mold",
+    "tall": "|=  %^  foo  @  *  ~  1",
+    "wide": "|=(%^(foo @ * ~) 1)"
+  },
+  {
+    "rune": "%:",
+    "role": "mold",
+    "tall": "|=  %:  foo  @  *  ==  1",
+    "wide": "|=(%:(foo @ *) 1)"
+  }
+]

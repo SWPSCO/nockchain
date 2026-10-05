@@ -881,8 +881,7 @@ fn c6_cli_failures_before_and_during_the_build() {
     assert!(!out.exists());
     assert!(!cwd.join("b/not-gate.jam").exists());
 
-    // A panic on the worker thread is reported as a failed compile. hatch
-    // panics on a `!?` version miss, where hoon-138's `open` crashes.
+    // A `!?` version miss reports a source-level compiler error.
     let entry = write(&deps, "app/version.hoon", "!?(100 42)\n");
     let output = honk(
         &args!["--arbitrary", "--output", out, "--prelude", prelude, entry, deps],
@@ -890,7 +889,7 @@ fn c6_cli_failures_before_and_during_the_build() {
     );
     assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
     assert!(
-        stderr(&output).contains("native compiler worker thread panicked"),
+        stderr(&output).contains("hoon-version"),
         "{}",
         stderr(&output)
     );

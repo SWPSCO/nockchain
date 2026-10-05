@@ -1,0 +1,7 @@
+{
+  "repository": "https://github.com/urbit/urbit",
+  "revision": "5a187fededc4582a34fcd6055c67bb63e0917b94",
+  "source": "pkg/arvo/sys/hoon.hoon",
+  "hoon_version": 135,
+  "sha256": "6d9e2e85aac5c01374d51fe93ac25d8c2aaf387b0401159384637f7cc7fa94a8"
+}

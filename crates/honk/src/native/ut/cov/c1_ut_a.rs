@@ -586,10 +586,16 @@ fn lower_sigbar_uses_feck_for_tas_sand_and_a_cain_trap_otherwise() {
         ),
         bx(body.clone()),
     );
-    assert_eq!(Ut::lower_sigbar(&tas, &body), expected_rock);
+    assert_eq!(
+        Ut::lower_sigbar(crate::native::Dialect::Nockchain, &tas, &body),
+        expected_rock
+    );
     // `feck` looks through `%dbug` wrappers.
     let wrapped = Hoon::Dbug(spot("f.hoon", 1), bx(tas.clone()));
-    assert_eq!(Ut::lower_sigbar(&wrapped, &body), expected_rock);
+    assert_eq!(
+        Ut::lower_sigbar(crate::native::Dialect::Nockchain, &wrapped, &body),
+        expected_rock
+    );
 
     // A cell-valued `%tas` sand, a non-`%tas` sand, and any other hoon all
     // fall back to the `|.((cain !>(=>(+3 p))))` trap.
@@ -601,7 +607,7 @@ fn lower_sigbar_uses_feck_for_tas_sand_and_a_cain_trap_otherwise() {
         ),
     );
     for p in [cell_sand, sand("ud", 1), axis(2)] {
-        let lowered = Ut::lower_sigbar(&p, &body);
+        let lowered = Ut::lower_sigbar(crate::native::Dialect::Nockchain, &p, &body);
         let Hoon::SigGar(TermOrPair::Pair(name, mean), q) = lowered else {
             panic!("sigbar must lower to a %mean sggr");
         };
@@ -1530,7 +1536,7 @@ fn fan_leg_id_for_native_hold_rejects_non_holds() {
 fn musk_core_cache_is_cleared_past_its_cap_in_the_same_context() {
     let mut slab = NounSlab::new();
     let mut ut = Ut::new(&mut slab);
-    let context = create_musk_eval_context();
+    let context = create_musk_eval_context(crate::native::Dialect::Nockchain);
     ut.ensure_musk_mack_core_cache_context(&context);
     let cap = Ut::MUSK_CORE_CACHE_CAP;
     ut.musk.mack_core_cache_raw.insert(NounIdentity(1), D(1));
@@ -1557,7 +1563,7 @@ fn musk_eval_stack_copy_shares_repeated_indirect_atoms() {
     let big = Atom::from_bytes(&mut slab, &[7u8; 16]).as_noun();
     let noun = T(&mut slab, &[big, big, D(3)]);
     let mut ut = Ut::new(&mut slab);
-    let mut context = create_musk_eval_context();
+    let mut context = create_musk_eval_context(crate::native::Dialect::Nockchain);
     ut.ensure_musk_mack_core_cache_context(&context);
     let space = ut.slab.noun_space();
     let copied = unsafe { ut.copy_into_eval_stack_shared(&mut context, noun, &space) };

@@ -14,7 +14,10 @@ test:
 test-honk:
     cargo nextest run --release -p honk
 
-build-honk-assets: honc-cold-138-asset hoonc-octs-type-138-asset
+build-honk-assets: laze-135-asset honc-cold-138-asset hoonc-octs-type-138-asset
+
+laze-135-asset:
+    python3 tools/urbit135/verify.py --build-evaluator --factory-only
 
 honc-cold-138-asset:
     mkdir -p assets target/honk-assets

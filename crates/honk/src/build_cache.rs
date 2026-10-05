@@ -20,6 +20,7 @@ const CACHE_VERSION: u32 = 1;
 pub enum CacheObjectKind {
     DependencyVase,
     EntryProduct,
+    MintProduct,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -190,7 +191,12 @@ impl BuildCache {
         let pack_hash = blake3::hash(graph);
         let pack_hex = pack_hash.to_hex().to_string();
         let pack_path = self.pack_path(&pack_hex)?;
-        if self.replace_existing || !pack_path.is_file() {
+        if self.replace_existing
+            || entries
+                .iter()
+                .any(|entry| self.damaged.contains(&entry.key))
+            || !pack_path.is_file()
+        {
             atomic_write(&pack_path, graph, Durability::Synced)?;
         }
         self.loaded_packs.insert(pack_hex.clone(), bundle);
@@ -630,7 +636,7 @@ mod tests {
     }
 
     #[test]
-    fn corrupt_object_is_a_miss() {
+    fn corrupt_object_is_repaired_for_the_next_session() {
         let temp = tempfile::tempdir().unwrap();
         let key = blake3::hash(b"key");
         let root_name = key.to_hex().to_string();
@@ -658,6 +664,24 @@ mod tests {
             .unwrap()
             .is_none());
         assert_eq!(cache.stats().corrupt, 1);
+        cache
+            .write_pack(
+                &[CacheWrite {
+                    key,
+                    kind: CacheObjectKind::DependencyVase,
+                    logical_source: "a.hoon",
+                    dependency_keys: &[],
+                    root_name: &root_name,
+                }],
+                &graph,
+            )
+            .unwrap();
+        let mut next = BuildCache::new(temp.path().to_path_buf(), false);
+        assert!(next
+            .read(key, CacheObjectKind::DependencyVase)
+            .unwrap()
+            .is_some());
+        assert_eq!(next.stats().corrupt, 0);
     }
 
     #[test]

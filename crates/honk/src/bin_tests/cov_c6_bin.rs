@@ -78,6 +78,7 @@ fn repo_hoon() -> PathBuf {
 fn cli_for(dbug: bool, vet: bool) -> Cli {
     Cli {
         entry: None,
+        project: None,
         directory: PathBuf::from("deps"),
         output: None,
         prelude: PathBuf::from("hoon.hoon"),
@@ -131,7 +132,7 @@ fn compile_modes_from_flags_and_manifest_names() {
         Err("unknown batch compile mode: typed".to_string())
     );
     let text = usage("honk-x");
-    assert_eq!(text.matches("Usage: honk-x").count(), 6);
+    assert_eq!(text.matches("Usage: honk-x").count(), 7);
     assert!(text.contains("--batch-manifest <file>"));
 }
 
@@ -717,93 +718,6 @@ fn nock_panics_become_errors() {
     // Tracing is off, so the timed wrapper just runs its closure.
     assert_eq!(trace_timed("untraced", || Ok(3)).expect("ok"), 3);
     trace_native("untraced");
-}
-
-// ---------------------------------------------------------------------------
-// Persistent-cache pack hydration
-
-#[test]
-fn packs_hydrate_every_node_kind() {
-    let mut slab: NounSlab = NounSlab::new();
-    let big = Atom::new(&mut slab, DIRECT_MAX + 1).as_noun();
-    let huge = Atom::from_value(&mut slab, vec![0xabu8; 12])
-        .expect("huge atom")
-        .as_noun();
-    let memo = term_to_noun(&mut slab, "memo");
-    let spot = term_to_noun(&mut slab, "spot");
-    let mut f = |cells: &[Noun]| T(&mut slab, cells);
-    let s1 = f(&[D(0), D(1)]);
-    let s2 = f(&[D(0), D(2)]);
-    let s3 = f(&[D(0), D(3)]);
-    let k0 = f(&[D(1), D(0)]);
-    let k1 = f(&[D(1), D(1)]);
-    let konst = f(&[D(42), D(43)]);
-    let edit = f(&[D(6), s3]);
-    let clue_body = f(&[D(1), D(0)]);
-    let clue = f(&[spot, clue_body]);
-    let formulas = vec![
-        s1,
-        f(&[D(0), big]),
-        f(&[D(1), konst]),
-        f(&[D(1), huge]),
-        f(&[D(2), s1, k0]),
-        f(&[D(3), s1]),
-        f(&[D(4), s1]),
-        f(&[D(5), s2, s3]),
-        f(&[D(6), s1, k0, k1]),
-        f(&[D(7), s1, s2]),
-        f(&[D(8), s1, s2]),
-        f(&[D(9), D(2), s1]),
-        f(&[D(10), edit, s2]),
-        f(&[D(11), memo, s1]),
-        f(&[D(11), clue, s1]),
-        f(&[D(12), s1, s2]),
-        f(&[s1, s2]),
-        f(&[D(99), D(1)]),
-    ];
-    let space = slab.noun_space();
-    let mut bridge = SlabToNockasm::new();
-    let converted: Vec<nockasm::Noun> = formulas
-        .iter()
-        .map(|formula| bridge.convert(*formula, &space).expect("convert"))
-        .collect();
-    let names: Vec<String> = (0..converted.len()).map(|i| format!("f{i}")).collect();
-    let inputs: Vec<nockasm::DagInput<'_>> = converted
-        .iter()
-        .zip(&names)
-        .map(|(noun, name)| nockasm::DagInput {
-            name,
-            noun,
-            mode: nockasm::DagMode::Formula,
-        })
-        .collect();
-    let bundle = nockasm::lift_bundle(&inputs).expect("lift");
-    let mut children = Vec::new();
-    for node in bundle.nodes() {
-        push_pack_children(node, &mut children);
-    }
-    assert!(!children.is_empty());
-
-    let mut target: NounSlab = NounSlab::new();
-    let mut values = vec![None; bundle.nodes().len()];
-    for (root, formula) in bundle.roots().iter().zip(&formulas) {
-        hydrate_pack_root(&mut target, bundle.nodes(), root.id(), &mut values).expect("hydrate");
-        // A second hydration of the same root is a no-op.
-        hydrate_pack_root(&mut target, bundle.nodes(), root.id(), &mut values).expect("again");
-        let hydrated = values[root.id().index()].expect("root value");
-        assert_eq!(
-            jam_noun_in_fresh_slab(hydrated, &target.noun_space()),
-            jam_noun_in_fresh_slab(*formula, &space),
-            "{}",
-            root.name()
-        );
-    }
-    for (value, direct) in [(DIRECT_MAX, true), (DIRECT_MAX + 1, false)] {
-        let atom = nockasm::Atom::from(value);
-        let noun = nasm_atom_to_slab(&mut target, &atom);
-        assert_eq!(noun.is_direct(), direct);
-        assert_eq!(atom_u64(noun, &target.noun_space()), Some(value));
-    }
 }
 
 // ---------------------------------------------------------------------------

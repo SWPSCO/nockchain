@@ -1,0 +1,524 @@
+diff --git a/pkg/vere/main.c b/pkg/vere/main.c
+index 34ebb8930..333680a31 100644
+--- a/pkg/vere/main.c
++++ b/pkg/vere/main.c
+@@ -28,6 +28,11 @@
+ #include "pace.h"
+ #include "version.h"
+ #include "whereami.h"
++
++#ifdef U3_OS_windows
++#include <fcntl.h>
++#include <io.h>
++#endif
+ #include "mars.h"
+ 
+ static u3_moat      inn_u;             //  input stream
+@@ -1192,7 +1197,7 @@ _cw_dock(c3_i argc, c3_c* argv[])
+ /* _cw_eval_get_string(): read file til EOF and return a malloc'd string
+ */
+ c3_c*
+-_cw_eval_get_string(FILE* fil_u, size_t siz_i)
++_cw_eval_get_string(FILE* fil_u, size_t siz_i, size_t* len_i_out)
+ {
+   c3_i   car_i;
+   size_t len_i = 0;
+@@ -1206,6 +1211,9 @@ _cw_eval_get_string(FILE* fil_u, size_t siz_i)
+     }
+   }
+ 
++  if ( len_i_out ) {
++    *len_i_out = len_i;
++  }
+   str_c[len_i++]='\0';
+ 
+   return c3_realloc(str_c, len_i);
+@@ -1244,6 +1252,140 @@ _cw_eval_get_newt(FILE* fil_u, c3_d* len_d)
+   return byt_y;
+ }
+ 
++/* _cw_eval_load_jam(): load a raw jammed noun.
++*/
++static u3_noun
++_cw_eval_load_jam(const c3_c* pat_c, const c3_c* kind_c)
++{
++  FILE* fil_u = fopen(pat_c, "rb");
++  long  len_l;
++  c3_y* byt_y;
++  u3_weak vas;
++
++  if ( !fil_u ) {
++    fprintf(stderr, "eval: cannot open %s %s: %s\n", kind_c, pat_c, strerror(errno));
++    exit(1);
++  }
++  if ( fseek(fil_u, 0, SEEK_END) || (len_l = ftell(fil_u)) <= 0 ||
++       fseek(fil_u, 0, SEEK_SET) ) {
++    fprintf(stderr, "eval: cannot read %s %s\n", kind_c, pat_c);
++    fclose(fil_u);
++    exit(1);
++  }
++  byt_y = c3_malloc((size_t)len_l);
++  if ( fread(byt_y, 1, (size_t)len_l, fil_u) != (size_t)len_l ||
++       EOF != fgetc(fil_u) || ferror(fil_u) ) {
++    fprintf(stderr, "eval: cannot read complete %s %s\n", kind_c, pat_c);
++    fclose(fil_u);
++    c3_free(byt_y);
++    exit(1);
++  }
++  fclose(fil_u);
++  vas = u3s_cue_xeno((c3_d)len_l, byt_y);
++  c3_free(byt_y);
++  if ( u3_none == vas ) {
++    fprintf(stderr, "eval: invalid jammed %s %s\n", kind_c, pat_c);
++    exit(1);
++  }
++  return vas;
++}
++
++/* _cw_eval_load_formula(): load a raw jammed [type nock] kernel formula.
++*/
++static u3_noun
++_cw_eval_load_formula(const c3_c* pat_c)
++{
++  //  Share batteries with the live kernel before entering a child road.
++  //  Senior home-road nouns cannot unify during repeated jet lookups.
++  //
++  u3_noun ker = u3m_dedup(_cw_eval_load_jam(pat_c, "kernel formula"));
++  if ( c3n == u3du(ker) ) {
++    fprintf(stderr, "eval: kernel formula must be a [type nock] cell\n");
++    exit(1);
++  }
++  return ker;
++}
++
++/* _cw_eval_slam(): apply an evaluated gate to a decoded sample.
++*/
++static u3_noun
++_cw_eval_slam(u3_noun arg)
++{
++  u3_noun gat = u3k(u3h(arg));
++  u3_noun sam = u3k(u3t(arg));
++  u3z(arg);
++  return u3n_slam_on(gat, sam);
++}
++
++/* _cw_eval_with_kernel(): register a kernel and evaluate text in its subject.
++*/
++static u3_noun
++_cw_eval_with_kernel(u3_noun sam)
++{
++  u3_noun ker = u3h(sam);
++  u3_noun typ = u3k(u3h(ker));
++  u3_noun val = u3n_nock_on(u3_nul, u3k(u3t(ker)));
++  u3_noun cop = u3k(u3h(u3t(sam)));
++  u3_noun txt = u3k(u3t(u3t(sam)));
++  u3_noun gat;
++  u3z(sam);
++
++  if ( c3y == u3du(cop) ) {
++    u3_noun out, fol;
++
++    //  The compiler gate runs in the initialized kernel. Its sample contains
++    //  the raw subject type and source; the built-in compiler sees neither.
++    //
++    gat = u3n_nock_on(u3k(val), u3k(u3t(cop)));
++    u3z(cop);
++    out = u3n_slam_on(gat, u3nc(typ, txt));
++    if ( c3n == u3du(out) ) {
++      return u3m_bail(c3__exit);
++    }
++    fol = u3k(u3t(out));
++    u3z(out);
++    return u3n_nock_on(val, fol);
++  }
++  u3z(cop);
++
++  //  Compile the expression with the built-in compiler against the supplied
++  //  subject. Calls such as (ream text) select that subject's standard library.
++  //
++  gat = u3v_wish("|=([env=vase text=@t] +:(slap env (ream text)))");
++  return u3n_slam_on(gat, u3nc(u3nc(typ, val), txt));
++}
++
++/* _cw_eval_write_newt(): complete a synchronous evaluator result frame.
++*/
++static void
++_cw_eval_write_newt(c3_d len_d, const c3_y* byt_y)
++{
++#ifdef U3_OS_windows
++  if ( -1 == _setmode(_fileno(stdout), _O_BINARY) ) {
++    fprintf(stderr, "eval: cannot configure binary stdout\n");
++    exit(1);
++  }
++#endif
++  c3_y hed_y[5] = {0, len_d & 0xff, (len_d >> 8) & 0xff,
++                  (len_d >> 16) & 0xff, (len_d >> 24) & 0xff};
++  if ( len_d > 0xffffffffULL ||
++       fwrite(hed_y, 1, sizeof(hed_y), stdout) != sizeof(hed_y) ||
++       fwrite(byt_y, 1, (size_t)len_d, stdout) != (size_t)len_d ||
++       fflush(stdout) ) {
++    fprintf(stderr, "eval: cannot write complete newt result\n");
++    exit(1);
++  }
++}
++
++/* _cw_eval_slog(): print evaluator diagnostics to stderr.
++*/
++static void
++_cw_eval_slog(u3_noun hod)
++{
++  u3_pier_tank(0, 0, u3k(u3t(hod)));
++  u3z(hod);
++}
++
+ /* _cw_eval(): initialize and run the hoon evaluator
+ */
+ static void
+@@ -1256,17 +1398,24 @@ _cw_eval(c3_i argc, c3_c* argv[])
+   c3_o    jam_o = c3n;
+   c3_o    kan_o = c3n;
+   c3_o    new_o = c3n;
++  const c3_c* ker_c = NULL;
++  const c3_c* cop_c = NULL;
++  const c3_c* sam_c = NULL;
+ 
+   static struct option lop_u[] = {
+     { "loom", required_argument,  NULL, c3__loom },
+     { "cue",  no_argument,        NULL, 'c'},
+     { "jam",  no_argument,        NULL, 'j' },
+     { "newt", no_argument,        NULL, 'n' },
++    { "kernel-formula", required_argument, NULL, 'F' },
++    { "compiler-formula", required_argument, NULL, 'C' },
++    { "sample", required_argument, NULL, 'S' },
++    { "help", no_argument,        NULL, 'h' },
+     //
+     { NULL, 0, NULL, 0 }
+   };
+ 
+-  while ( -1 != (ch_i=getopt_long(argc, argv, "cjkn", lop_u, &lid_i)) ) {
++  while ( -1 != (ch_i=getopt_long(argc, argv, "cjknh", lop_u, &lid_i)) ) {
+     switch ( ch_i ) {
+       case c3__loom: {
+         if (_main_read_loom("loom", optarg, &u3_Host.ops_u.lom_y)) {
+@@ -1274,6 +1423,37 @@ _cw_eval(c3_i argc, c3_c* argv[])
+         }
+       } break;
+ 
++      case 'S': {
++        sam_c = optarg;
++      } break;
++
++      case 'F': {
++        ker_c = optarg;
++      } break;
++
++      case 'C': {
++        cop_c = optarg;
++      } break;
++
++      case 'h': {
++        fprintf(stdout,
++          "Usage: urbit eval [-j -n | -c -n] [--loom BITS]\n"
++          "       urbit eval [--kernel-formula PATH] [--compiler-formula PATH]\n"
++          "                  [--sample PATH] -j -n\n"
++          "Read Hoon from stdin and evaluate it. --kernel-formula reads raw\n"
++          "jam [type nock] from PATH and runs nock against ~ to initialize\n"
++          "the subject and register its jets. Stdin uses the built-in parser\n"
++          "and compiler; calls resolve in the supplied kernel subject.\n"
++          "--compiler-formula requires --kernel-formula. It reads a raw jammed\n"
++          "Nock formula that evaluates in the kernel to a compiler gate. The\n"
++          "gate takes [subject-type source-cord] and returns [type nock].\n"
++          "With this option the supplied compiler parses and compiles stdin.\n"
++          "This option requires -j -n. With --sample, stdin evaluates to a\n"
++          "gate; the raw jam noun from PATH is passed directly as its sample.\n"
++          "-j emits jam; -n wraps jam in a newt frame; -c decodes a frame.\n");
++        return;
++      } break;
++
+       case 'c': {
+         cue_o = c3y;
+       } break;
+@@ -1297,6 +1477,17 @@ _cw_eval(c3_i argc, c3_c* argv[])
+     }
+   }
+ 
++  if ( cop_c && !ker_c ) {
++    fprintf(stderr, "eval: --compiler-formula requires --kernel-formula\n");
++    exit(1);
++  }
++
++  if ( (ker_c || sam_c || cop_c) &&
++       ((c3n == jam_o) || (c3n == new_o) || (c3y == cue_o)) ) {
++    fprintf(stderr, "eval: --kernel-formula, --compiler-formula and --sample require -j -n and exclude -c\n");
++    exit(1);
++  }
++
+   //  cannot have both jam and cue set
+   //
+   if ( ( c3y == cue_o ) && ( c3y == jam_o ) ) {
+@@ -1316,9 +1507,9 @@ _cw_eval(c3_i argc, c3_c* argv[])
+     exit(1);
+   }
+ 
+-  //  configure stdout as u3_mojo
++  //  configure asynchronous stdout for the built-in evaluator
+   //
+-  {
++  if ( !ker_c && !sam_c ) {
+     c3_i err_i;
+     err_i = uv_pipe_init(uv_default_loop(), &std_u.pyp_u, 0);
+     u3_assert(!err_i);
+@@ -1328,6 +1519,12 @@ _cw_eval(c3_i argc, c3_c* argv[])
+     std_u.bal_f = _cw_king_fail;
+   }
+ 
++  //  Keep compiler diagnostics and Hoon slog output off the result stream.
++  //
++  if ( ker_c || sam_c ) {
++    u3_Host.ops_u.dem = c3y;
++  }
++
+   //  initialize the Loom and load the Ivory Pill
+   //
+   {
+@@ -1357,6 +1554,10 @@ _cw_eval(c3_i argc, c3_c* argv[])
+     }
+   }
+ 
++  if ( ker_c || sam_c ) {
++    u3C.slog_f = _cw_eval_slog;
++  }
++
+   fprintf(stderr, "eval (");
+   if ( c3y == cue_o ) {
+     fprintf(stderr, "cue");
+@@ -1411,13 +1612,35 @@ _cw_eval(c3_i argc, c3_c* argv[])
+   //
+   else if ( c3y == jam_o ) {
+     c3_d    len_d = 0;
+-    c3_c*   evl_c = _cw_eval_get_string(stdin, 10);
++    size_t  siz_i;
++    c3_c*   evl_c = _cw_eval_get_string(stdin, 10, &siz_i);
+     c3_y*   byt_y;
+-    u3_noun sam = u3i_string(evl_c);
+-    u3_noun res = u3m_soft(0, u3v_wish_w, sam);
++    u3_noun sam, res;
++    if ( (ker_c || sam_c) && ((siz_i > 0xffffffffULL) || ferror(stdin)) ) {
++      fprintf(stderr, "eval: cannot read complete source\n");
++      free(evl_c);
++      exit(1);
++    }
++    sam = (ker_c || sam_c) ? u3i_bytes(siz_i, (const c3_y*)evl_c) : u3i_string(evl_c);
++    res = ker_c
++      ? u3m_soft(0, _cw_eval_with_kernel,
++                 u3nt(_cw_eval_load_formula(ker_c),
++                      cop_c ? u3nc(u3_nul, u3m_dedup(_cw_eval_load_jam(cop_c, "compiler formula")))
++                            : u3_nul,
++                      sam))
++      : u3m_soft(0, u3v_wish_w, sam);
++    if ( sam_c && (0 == u3h(res)) ) {
++      u3_noun arg = _cw_eval_load_jam(sam_c, "sample");
++      u3_noun gat = u3k(u3t(res));
++      u3z(res);
++      res = u3m_soft(0, _cw_eval_slam, u3nc(gat, arg));
++    }
+     if ( 0 == u3h(res) ) {                //  successful execution, print output
+       u3s_jam_xeno(u3t(res), &len_d, &byt_y);
+-      if ( c3y == new_o ) {
++      if ( ker_c || sam_c ) {
++        _cw_eval_write_newt(len_d, byt_y);
++        c3_free(byt_y);
++      } else if ( c3y == new_o ) {
+         u3_newt_send(&std_u, len_d, byt_y);
+       } else {
+         for ( size_t p=0; p < len_d; p++ ) {
+@@ -1426,6 +1649,11 @@ _cw_eval(c3_i argc, c3_c* argv[])
+       }
+     } else {                              //  error, print stack trace
+       u3_pier_punt_goof("eval", u3k(res));
++      if ( ker_c || sam_c ) {
++        u3z(res);
++        free(evl_c);
++        exit(1);
++      }
+     }
+     u3z(res);
+     free(evl_c);
+@@ -1433,7 +1661,7 @@ _cw_eval(c3_i argc, c3_c* argv[])
+   //  slam eval gate with input
+   //
+   else {
+-    c3_c*   evl_c = _cw_eval_get_string(stdin, 10);
++    c3_c*   evl_c = _cw_eval_get_string(stdin, 10, NULL);
+     //  +wish for an eval gate (virtualized twice for pretty-printing)
+     u3_noun gat = u3v_wish("|=(a=@t (sell (slap !>(+>.$) (rain /eval a))))");
+     u3_noun res;
+diff --git a/tests/eval-kernel-formula.py b/tests/eval-kernel-formula.py
+new file mode 100644
+index 000000000..e8955218c
+--- /dev/null
++++ b/tests/eval-kernel-formula.py
+@@ -0,0 +1,163 @@
++#!/usr/bin/env python3
++"""Check raw-kernel eval framing, evaluation, and failure behavior.
++
++python3 tests/eval-kernel-formula.py --urbit PATH --kernel-formula PATH --version 135
++
++The supplied kernel formula is raw jam [type nock], without a newt header.
++Its Nock formula executes against ~ to initialize the target subject.
++"""
++import argparse
++from pathlib import Path
++import subprocess
++import tempfile
++import time
++
++
++def main():
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--urbit", type=Path, required=True)
++    parser.add_argument("--kernel-formula", type=Path, required=True)
++    parser.add_argument("--compiler-formula", type=Path)
++    parser.add_argument("--version", type=int, required=True)
++    args = parser.parse_args()
++    binary = str(args.urbit.resolve())
++
++    def frame(data):
++        assert len(data) >= 6 and data[0] == 0, "missing newt result"
++        assert int.from_bytes(data[1:5], "little") == len(data) - 5, "truncated newt result"
++        return data[5:]
++
++    def builtin(source):
++        # The built-in evaluator sends newt through libuv. A regular file keeps
++        # that independent reference from exiting with a queued pipe write.
++        with tempfile.TemporaryFile() as output:
++            result = subprocess.run([binary, "eval", "-j", "-n"], input=source.encode(),
++                                    stdout=output, stderr=subprocess.PIPE, timeout=60)
++            assert result.returncode == 0, result.stderr.decode(errors="replace")
++            output.seek(0)
++            data = output.read()
++            frame(data)
++            return data
++
++    with tempfile.TemporaryDirectory() as directory:
++        directory = Path(directory)
++        kernel = args.kernel_formula
++
++        def evaluate(source, path=kernel, flags=("-j", "-n"), timeout=60, compiler=args.compiler_formula):
++            compiler_args = ["--compiler-formula", str(compiler)] if compiler else []
++            return subprocess.run([binary, "eval", "--kernel-formula", str(path), *compiler_args, *flags],
++                                  input=source.encode(), stdout=subprocess.PIPE,
++                                  stderr=subprocess.PIPE, timeout=timeout)
++
++        started = time.monotonic()
++        for source, reference in [
++            ("hoon-version", str(args.version)),
++            ("(add 2 3)", "5"),
++            ("(mul 17 19)", "323"),
++            ("[1 2 3]", "[1 2 3]"),
++            ("(ream '1')", "(ream '1')"),
++            ('~>(%slog.[0 %leaf "message"] 42)', "42"),
++            ("\'" + "a" * 70000 + "\'", "\'" + "a" * 70000 + "\'"),
++        ]:
++            result = evaluate(source)
++            assert result.returncode == 0, f"{source}: {result.stderr.decode(errors='replace')}"
++            frame(result.stdout)
++            assert result.stdout == builtin(reference), f"incorrect result: {source}"
++
++        result = evaluate('~>(%slog.[0 %leaf "oracle-stage"] 42)')
++        assert result.returncode == 0 and result.stdout == builtin("42")
++        assert b"oracle-stage" in result.stderr, result.stderr
++        result = evaluate('(~(mute vi |) |.(~>(%slog.[0 %leaf "virtual-stage"] 42)))')
++        assert result.returncode == 0 and result.stdout == builtin("[0 42]")
++        assert b"virtual-stage" in result.stderr, result.stderr
++
++        for source in ["!!", "|=", "no-such-eval-arm", "42\0!!"]:
++            result = evaluate(source)
++            assert result.returncode != 0 and not result.stdout, source
++
++        for name, data in [("empty", b""), ("truncated", b"\x00"),
++                           ("atom", frame(builtin("0"))),
++                           ("bad-formula", frame(builtin("[0 0]")))]:
++            path = directory / name
++            path.write_bytes(data)
++            result = evaluate("42", path)
++            assert result.returncode != 0 and not result.stdout, name
++
++        result = evaluate("42", directory / "missing")
++        assert result.returncode != 0 and not result.stdout
++        for flags in [(), ("-j",), ("-c", "-n"), ("-j", "-n", "-c")]:
++            result = evaluate("42", flags=flags)
++            assert result.returncode != 0 and not result.stdout, flags
++
++        # The supplied compiler receives source bytes without host parsing.
++        compiler = directory / "constant-compiler.jam"
++        compiler.write_bytes(frame(builtin("(make '|=([subject=* source=@t] [0 [1 42]])')")))
++        result = evaluate("this is intentionally not Hoon", compiler=compiler)
++        assert result.returncode == 0 and result.stdout == builtin("42")
++        compiler.write_bytes(frame(builtin("(make '|=([subject=* source=@t] 42)')")))
++        result = evaluate("42", compiler=compiler)
++        assert result.returncode != 0 and not result.stdout
++        for data in [b"", b"\x00", frame(builtin("42"))]:
++            compiler.write_bytes(data)
++            result = evaluate("42", compiler=compiler)
++            assert result.returncode != 0 and not result.stdout
++        result = evaluate("42", compiler=directory / "missing-compiler")
++        assert result.returncode != 0 and not result.stdout
++        result = subprocess.run([binary, "eval", "--compiler-formula", str(compiler), "-j", "-n"],
++                                input=b"42", capture_output=True, timeout=10)
++        assert result.returncode != 0 and not result.stdout
++        if args.compiler_formula:
++            result = evaluate("(ream ';div\\0a  # A heading\\0a\\0a==\\0a')")
++            assert result.returncode == 0, result.stderr.decode(errors="replace")
++            frame(result.stdout)
++
++        sample = directory / "sample.jam"
++
++        def slam(gate, path=sample, timeout=60):
++            return evaluate(gate, flags=("-j", "-n", "--sample", str(path)), timeout=timeout)
++
++        for noun in ["0", "42", "[1 [2 3] 4]", "0x62.0061", "(bex 1.000.000)"]:
++            expected = builtin(noun)
++            sample.write_bytes(frame(expected))
++            result = slam("|=(a=* a)")
++            assert result.returncode == 0, result.stderr.decode(errors="replace")
++            frame(result.stdout)
++            assert result.stdout == expected, f"sample changes: {noun}"
++
++        # Repeated parser calls exercise shared kernel batteries in jet lookup.
++        sample.write_bytes(frame(builtin("'" + "[1 2]  " * 4000 + "'")))
++        result = slam("|=(source=@t (lent (rash source (ifix [gay gay] (most gap tall:vast)))))",
++                      timeout=10)
++        assert result.returncode == 0 and result.stdout == builtin("4.000")
++
++        sample.write_bytes(frame(builtin("41")))
++        result = slam("|=(a=@ +(a))")
++        assert result.returncode == 0 and result.stdout == builtin("42")
++        for gate in ["42", "[0 0]", "|=(a=* !!)"]:
++            result = slam(gate)
++            assert result.returncode != 0 and not result.stdout, gate
++        for invalid in [b"", b"\x00"]:
++            sample.write_bytes(invalid)
++            result = slam("|=(a=* a)")
++            assert result.returncode != 0 and not result.stdout
++        result = slam("|=(a=* a)", directory / "missing-sample")
++        assert result.returncode != 0 and not result.stdout
++        expected = builtin("[0 42]")
++        sample.write_bytes(frame(expected))
++        result = subprocess.run([binary, "eval", "--sample", str(sample), "-j", "-n"],
++                                input=b"|=(a=* a)", stdout=subprocess.PIPE,
++                                stderr=subprocess.PIPE, timeout=10)
++        assert result.returncode == 0 and result.stdout == expected
++        for flags in [(), ("-j",), ("-c", "-n")]:
++            result = subprocess.run([binary, "eval", "--sample", str(sample), *flags],
++                                    input=b"|=(a=* a)", stdout=subprocess.PIPE,
++                                    stderr=subprocess.PIPE, timeout=10)
++            assert result.returncode != 0 and not result.stdout
++
++        # Supplying a kernel formula does not change the executable's built-in subject.
++        assert builtin("(add 2 3)") == builtin("5")
++        print(f"eval kernel-formula checks pass ({time.monotonic() - started:.2f}s)")
++
++
++if __name__ == "__main__":
++    main()

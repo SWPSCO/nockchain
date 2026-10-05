@@ -19,8 +19,10 @@ fn compiler_fingerprint(manifest_dir: &std::path::Path) -> io::Result<String> {
         manifest_dir.join("src"),
         manifest_dir.join("build.rs"),
         manifest_dir.join("Cargo.toml"),
+        manifest_dir.join("assets/laze-135.jam"),
         manifest_dir.join("../hatch/src"),
-        manifest_dir.join("../nockapp/src/noun"),
+        manifest_dir.join("../hatcher/src"),
+        manifest_dir.join("../nockapp/src"),
         manifest_dir.join("../nockvm/rust/nockvm/src"),
         repository.join("Cargo.lock"),
         repository.join("Cargo.toml"),
@@ -57,6 +59,15 @@ fn main() -> Result<(), Box<dyn Error>> {
     let honc_type_asset = manifest_dir.join("assets/honc-type-138.jam");
     let honc_formula_asset = manifest_dir.join("assets/honc-formula-138.jam");
     let hoonc_octs_type_asset = manifest_dir.join("assets/hoonc-octs-type-138.jam");
+    let laze_asset = manifest_dir.join("assets/laze-135.jam");
+    println!("cargo:rerun-if-changed={}", laze_asset.display());
+    if !laze_asset.is_file() || fs::metadata(&laze_asset)?.len() == 0 {
+        return Err(io::Error::other(
+            "crates/honk/assets/laze-135.jam is missing or empty; \
+             generate it with `just laze-135-asset` (requires Zig 0.15.2)",
+        )
+        .into());
+    }
     println!(
         "cargo:rustc-env=HONK_NATIVE_COMPILER_FINGERPRINT={}",
         compiler_fingerprint(&manifest_dir)?

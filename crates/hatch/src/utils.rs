@@ -2640,6 +2640,7 @@ pub fn open(gen: Hoon) -> Hoon {
                     let woofs: Vec<Woof> = beers
                         .iter()
                         .map(|b| match b {
+                            Beer::Atom(atom) => Woof::ParsedAtom(atom.clone()),
                             Beer::Char(cord) => Woof::ParsedAtom(string_to_atom(cord.clone())),
                             Beer::Hoon(hoon) => Woof::Hoon(hoon.clone()),
                         })
@@ -12153,6 +12154,22 @@ fn atom_to_tas_string(atom: &DirectAtom) -> String {
     }
 }
 
+pub fn hoon_to_noun(slab: &mut NounSlab, hoon: &Hoon) -> Noun {
+    hoon_to_noun_for_dialect(Dialect::Nockchain, slab, hoon)
+}
+
+pub fn hoon_to_noun_with_cache(
+    slab: &mut NounSlab,
+    hoon: &Hoon,
+    record: impl FnMut(usize, Noun),
+) -> Noun {
+    hoon_to_noun_with_cache_for_dialect(Dialect::Nockchain, slab, hoon, record)
+}
+
+pub fn noun_to_hoon(noun: NounHandle<'_>) -> Result<Hoon, String> {
+    noun_to_hoon_for_dialect(Dialect::Nockchain, noun)
+}
+
 thread_local! {
     // Owned, scoped state only: no borrowed slab/AST pointers escape the call.
     // Recursive Hoon materialization reaches this cache through the existing
@@ -12164,6 +12181,7 @@ thread_local! {
 #[derive(Default)]
 struct HoonNounMaterializationState {
     active: bool,
+    dialect: Dialect,
     nodes: HashMap<usize, Noun>,
 }
 
@@ -12182,7 +12200,8 @@ impl Drop for HoonNounMaterializationGuard {
 /// Materialize a native Hoon tree and return every descendant's noun by stable
 /// AST address. The scoped cache owns all of its state, clears on unwind, and
 /// never stores a borrowed AST or slab reference.
-pub fn hoon_to_noun_with_cache(
+pub fn hoon_to_noun_with_cache_for_dialect(
+    dialect: Dialect,
     slab: &mut NounSlab,
     hoon: &Hoon,
     mut record: impl FnMut(usize, Noun),
@@ -12195,10 +12214,11 @@ pub fn hoon_to_noun_with_cache(
         );
         debug_assert!(cache.nodes.is_empty());
         cache.active = true;
+        cache.dialect = dialect;
     });
 
     let _guard = HoonNounMaterializationGuard;
-    let noun = hoon_to_noun(slab, hoon);
+    let noun = hoon_to_noun_for_dialect(dialect, slab, hoon);
     HOON_NOUN_MATERIALIZATION_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
         for (ptr, noun) in cache.nodes.drain() {
@@ -12209,34 +12229,33 @@ pub fn hoon_to_noun_with_cache(
     noun
 }
 
-pub fn hoon_to_noun(slab: &mut NounSlab, hoon: &Hoon) -> Noun {
+pub fn hoon_to_noun_for_dialect(dialect: Dialect, slab: &mut NounSlab, hoon: &Hoon) -> Noun {
     let ptr = hoon as *const Hoon as usize;
     if let Some(noun) = HOON_NOUN_MATERIALIZATION_CACHE.with(|cache| {
         let cache = cache.borrow();
-        cache
-            .active
+        (cache.active && cache.dialect == dialect)
             .then(|| cache.nodes.get(&ptr).copied())
             .flatten()
     }) {
         return noun;
     }
-    let noun = hoon_to_noun_uncached(slab, hoon);
+    let noun = hoon_to_noun_uncached(dialect, slab, hoon);
     HOON_NOUN_MATERIALIZATION_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
-        if cache.active {
+        if cache.active && cache.dialect == dialect {
             cache.nodes.insert(ptr, noun);
         }
     });
     noun
 }
 
-fn hoon_to_noun_uncached(slab: &mut NounSlab, hoon: &Hoon) -> Noun {
+fn hoon_to_noun_uncached(dialect: Dialect, slab: &mut NounSlab, hoon: &Hoon) -> Noun {
     use Hoon::*;
 
     match hoon {
         Pair(p, q) => {
-            let p = hoon_to_noun(slab, p);
-            let q = hoon_to_noun(slab, q);
+            let p = hoon_to_noun_for_dialect(dialect, slab, p);
+            let q = hoon_to_noun_for_dialect(dialect, slab, q);
             T(slab, &[p, q])
         }
         ZapZap => T(slab, &[D(tas!(b"zpzp")), D(0)]),
@@ -12254,7 +12273,7 @@ fn hoon_to_noun_uncached(slab: &mut NounSlab, hoon: &Hoon) -> Noun {
         }
         Dbug(spot, h) => {
             let spot_noun = spot_to_noun(slab, spot);
-            let h_noun = hoon_to_noun(slab, h);
+            let h_noun = hoon_to_noun_for_dialect(dialect, slab, h);
             T(slab, &[D(tas!(b"dbug")), spot_noun, h_noun])
         }
         Eror(msg) => {
@@ -12264,22 +12283,25 @@ fn hoon_to_noun_uncached(slab: &mut NounSlab, hoon: &Hoon) -> Noun {
             T(slab, &[D(tas!(b"eror")), msg_noun])
         }
         Hand(typ, nock) => {
-            let typ_noun = type_to_noun(slab, typ);
+            let typ_noun = type_to_noun_for_dialect(dialect, slab, typ);
             let nock_noun = nock_to_noun(slab, nock);
             T(slab, &[D(tas!(b"hand")), typ_noun, nock_noun])
         }
         Note(note, h) => {
             let note_noun = note_to_noun(slab, note);
-            let h_noun = hoon_to_noun(slab, h);
+            let h_noun = hoon_to_noun_for_dialect(dialect, slab, h);
             T(slab, &[D(tas!(b"note")), note_noun, h_noun])
         }
         Fits(h, wing) => {
-            let h_noun = hoon_to_noun(slab, h);
+            let h_noun = hoon_to_noun_for_dialect(dialect, slab, h);
             let wing_noun = wing_to_noun(slab, wing);
             T(slab, &[D(tas!(b"fits")), h_noun, wing_noun])
         }
         Knit(woofs) => {
-            let woofs_noun: Vec<_> = woofs.iter().map(|w| woof_to_noun(slab, w)).collect();
+            let woofs_noun: Vec<_> = woofs
+                .iter()
+                .map(|w| woof_to_noun(dialect, slab, w))
+                .collect();
             let list = list_to_noun(slab, woofs_noun);
             T(slab, &[D(tas!(b"knit")), list])
         }
@@ -12293,7 +12315,7 @@ fn hoon_to_noun_uncached(slab: &mut NounSlab, hoon: &Hoon) -> Noun {
             T(slab, &[D(tas!(b"limb")), name_noun])
         }
         Lost(h) => {
-            let h_noun = hoon_to_noun(slab, h);
+            let h_noun = hoon_to_noun_for_dialect(dialect, slab, h);
             T(slab, &[D(tas!(b"lost")), h_noun])
         }
         Rock(au, expr) => {
@@ -12307,12 +12329,15 @@ fn hoon_to_noun_uncached(slab: &mut NounSlab, hoon: &Hoon) -> Noun {
             T(slab, &[D(tas!(b"sand")), au_noun, expr_noun])
         }
         Tell(hoons) => {
-            let hoons_noun: Vec<_> = hoons.iter().map(|h| hoon_to_noun(slab, h)).collect();
+            let hoons_noun: Vec<_> = hoons
+                .iter()
+                .map(|h| hoon_to_noun_for_dialect(dialect, slab, h))
+                .collect();
             let list = list_to_noun(slab, hoons_noun);
             T(slab, &[D(tas!(b"tell")), list])
         }
         Tune(tune) => {
-            let tune_noun = term_or_tune_to_noun(slab, tune);
+            let tune_noun = term_or_tune_to_noun_for_dialect(dialect, slab, tune);
             T(slab, &[D(tas!(b"tune")), tune_noun])
         }
         Wing(wing) => {
@@ -12320,36 +12345,39 @@ fn hoon_to_noun_uncached(slab: &mut NounSlab, hoon: &Hoon) -> Noun {
             T(slab, &[D(tas!(b"wing")), wing_noun])
         }
         Yell(hoons) => {
-            let hoons_noun: Vec<_> = hoons.iter().map(|h| hoon_to_noun(slab, h)).collect();
+            let hoons_noun: Vec<_> = hoons
+                .iter()
+                .map(|h| hoon_to_noun_for_dialect(dialect, slab, h))
+                .collect();
             let list = list_to_noun(slab, hoons_noun);
             T(slab, &[D(tas!(b"yell")), list])
         }
         Xray(manx) => {
-            let manx_noun = manx_to_noun(slab, manx);
+            let manx_noun = manx_to_noun(dialect, slab, manx);
             T(slab, &[D(tas!(b"xray")), manx_noun])
         }
         BarBuc(tagnames, spec) => {
             let tags_noun: Vec<_> = tagnames.iter().map(|s| term_to_noun(slab, s)).collect();
             let list = list_to_noun(slab, tags_noun);
-            let spec_noun = spec_to_noun(slab, spec);
+            let spec_noun = spec_to_noun(dialect, slab, spec);
             T(slab, &[D(tas!(b"brbc")), list, spec_noun])
         }
         BarCab(spec, alas, tomes) => {
-            let spec_noun = spec_to_noun(slab, spec);
-            let alas_noun = alas_to_noun(slab, alas);
+            let spec_noun = spec_to_noun(dialect, slab, spec);
+            let alas_noun = alas_to_noun(dialect, slab, alas);
 
             let mut tomes_pairs = Vec::new();
             for (k, tome) in tomes {
                 let k_noun = term_to_noun(slab, k);
-                let tome_noun = tome_to_noun(slab, tome);
+                let tome_noun = tome_to_noun(dialect, slab, tome);
                 tomes_pairs.push((k_noun, tome_noun));
             }
             let tomes_noun = map_to_noun(slab, tomes_pairs);
             T(slab, &[D(tas!(b"brcb")), spec_noun, alas_noun, tomes_noun])
         }
         BarCol(p, q) => {
-            let p = hoon_to_noun(slab, p);
-            let q = hoon_to_noun(slab, q);
+            let p = hoon_to_noun_for_dialect(dialect, slab, p);
+            let q = hoon_to_noun_for_dialect(dialect, slab, q);
             T(slab, &[D(tas!(b"brcl")), p, q])
         }
         BarCen(prefix, tomes) => {
@@ -12363,44 +12391,44 @@ fn hoon_to_noun_uncached(slab: &mut NounSlab, hoon: &Hoon) -> Noun {
             let mut tomes_pairs = Vec::new();
             for (k, tome) in tomes {
                 let k_noun = term_to_noun(slab, k);
-                let tome_noun = tome_to_noun(slab, tome);
+                let tome_noun = tome_to_noun(dialect, slab, tome);
                 tomes_pairs.push((k_noun, tome_noun));
             }
             let tomes_noun = map_to_noun(slab, tomes_pairs);
             T(slab, &[D(tas!(b"brcn")), prefix_noun, tomes_noun])
         }
         BarDot(p) => {
-            let p = hoon_to_noun(slab, p);
+            let p = hoon_to_noun_for_dialect(dialect, slab, p);
             T(slab, &[D(tas!(b"brdt")), p])
         }
         BarKet(p, tomes) => {
-            let p_noun = hoon_to_noun(slab, p);
+            let p_noun = hoon_to_noun_for_dialect(dialect, slab, p);
             let mut tomes_pairs = Vec::new();
             for (k, tome) in tomes {
                 let k_noun = term_to_noun(slab, k);
-                let tome_noun = tome_to_noun(slab, tome);
+                let tome_noun = tome_to_noun(dialect, slab, tome);
                 tomes_pairs.push((k_noun, tome_noun));
             }
             let tomes_noun = map_to_noun(slab, tomes_pairs);
             T(slab, &[D(tas!(b"brkt")), p_noun, tomes_noun])
         }
         BarHep(p) => {
-            let p = hoon_to_noun(slab, p);
+            let p = hoon_to_noun_for_dialect(dialect, slab, p);
             T(slab, &[D(tas!(b"brhp")), p])
         }
         BarSig(spec, p) => {
-            let spec_noun = spec_to_noun(slab, spec);
-            let p_noun = hoon_to_noun(slab, p);
+            let spec_noun = spec_to_noun(dialect, slab, spec);
+            let p_noun = hoon_to_noun_for_dialect(dialect, slab, p);
             T(slab, &[D(tas!(b"brsg")), spec_noun, p_noun])
         }
         BarTar(spec, p) => {
-            let spec_noun = spec_to_noun(slab, spec);
-            let p_noun = hoon_to_noun(slab, p);
+            let spec_noun = spec_to_noun(dialect, slab, spec);
+            let p_noun = hoon_to_noun_for_dialect(dialect, slab, p);
             T(slab, &[D(tas!(b"brtr")), spec_noun, p_noun])
         }
         BarTis(spec, p) => {
-            let spec_noun = spec_to_noun(slab, spec);
-            let p_noun = hoon_to_noun(slab, p);
+            let spec_noun = spec_to_noun(dialect, slab, spec);
+            let p_noun = hoon_to_noun_for_dialect(dialect, slab, p);
             T(slab, &[D(tas!(b"brts")), spec_noun, p_noun])
         }
         BarPat(prefix, tomes) => {
@@ -12414,46 +12442,52 @@ fn hoon_to_noun_uncached(slab: &mut NounSlab, hoon: &Hoon) -> Noun {
             let mut tomes_pairs = Vec::new();
             for (k, tome) in tomes {
                 let k_noun = term_to_noun(slab, k);
-                let tome_noun = tome_to_noun(slab, tome);
+                let tome_noun = tome_to_noun(dialect, slab, tome);
                 tomes_pairs.push((k_noun, tome_noun));
             }
             let tomes_noun = map_to_noun(slab, tomes_pairs);
             T(slab, &[D(tas!(b"brpt")), prefix_noun, tomes_noun])
         }
         BarWut(p) => {
-            let p = hoon_to_noun(slab, p);
+            let p = hoon_to_noun_for_dialect(dialect, slab, p);
             T(slab, &[D(tas!(b"brwt")), p])
         }
         ColCab(p, q) => {
-            let p = hoon_to_noun(slab, p);
-            let q = hoon_to_noun(slab, q);
+            let p = hoon_to_noun_for_dialect(dialect, slab, p);
+            let q = hoon_to_noun_for_dialect(dialect, slab, q);
             T(slab, &[D(tas!(b"clcb")), p, q])
         }
         ColKet(a, b, c, d) => {
-            let a = hoon_to_noun(slab, a);
-            let b = hoon_to_noun(slab, b);
-            let c = hoon_to_noun(slab, c);
-            let d = hoon_to_noun(slab, d);
+            let a = hoon_to_noun_for_dialect(dialect, slab, a);
+            let b = hoon_to_noun_for_dialect(dialect, slab, b);
+            let c = hoon_to_noun_for_dialect(dialect, slab, c);
+            let d = hoon_to_noun_for_dialect(dialect, slab, d);
             T(slab, &[D(tas!(b"clkt")), a, b, c, d])
         }
         ColHep(p, q) => {
-            let p = hoon_to_noun(slab, p);
-            let q = hoon_to_noun(slab, q);
+            let p = hoon_to_noun_for_dialect(dialect, slab, p);
+            let q = hoon_to_noun_for_dialect(dialect, slab, q);
             T(slab, &[D(tas!(b"clhp")), p, q])
         }
         ColLus(a, b, c) => {
-            let a = hoon_to_noun(slab, a);
-            let b = hoon_to_noun(slab, b);
-            let c = hoon_to_noun(slab, c);
+            let a = hoon_to_noun_for_dialect(dialect, slab, a);
+            let b = hoon_to_noun_for_dialect(dialect, slab, b);
+            let c = hoon_to_noun_for_dialect(dialect, slab, c);
             T(slab, &[D(tas!(b"clls")), a, b, c])
         }
         ColSig(hoons) => {
-            let hoons_noun: Vec<_> = hoons.iter().map(|h| hoon_to_noun(slab, h)).collect();
+            let hoons_noun: Vec<_> = hoons
+                .iter()
+                .map(|h| hoon_to_noun_for_dialect(dialect, slab, h))
+                .collect();
             let list = list_to_noun(slab, hoons_noun);
             T(slab, &[D(tas!(b"clsg")), list])
         }
         ColTar(hoons) => {
-            let hoons_noun: Vec<_> = hoons.iter().map(|h| hoon_to_noun(slab, h)).collect();
+            let hoons_noun: Vec<_> = hoons
+                .iter()
+                .map(|h| hoon_to_noun_for_dialect(dialect, slab, h))
+                .collect();
             let list = list_to_noun(slab, hoons_noun);
             T(slab, &[D(tas!(b"cltr")), list])
         }
@@ -12463,7 +12497,7 @@ fn hoon_to_noun_uncached(slab: &mut NounSlab, hoon: &Hoon) -> Noun {
                 .iter()
                 .map(|(w, h)| {
                     let w_noun = wing_to_noun(slab, w);
-                    let h_noun = hoon_to_noun(slab, h);
+                    let h_noun = hoon_to_noun_for_dialect(dialect, slab, h);
                     T(slab, &[w_noun, h_noun])
                 })
                 .collect();
@@ -12471,29 +12505,32 @@ fn hoon_to_noun_uncached(slab: &mut NounSlab, hoon: &Hoon) -> Noun {
             T(slab, &[D(tas!(b"cncb")), wing_noun, list])
         }
         CenDot(p, q) => {
-            let p = hoon_to_noun(slab, p);
-            let q = hoon_to_noun(slab, q);
+            let p = hoon_to_noun_for_dialect(dialect, slab, p);
+            let q = hoon_to_noun_for_dialect(dialect, slab, q);
             T(slab, &[D(tas!(b"cndt")), p, q])
         }
         CenHep(p, q) => {
-            let p = hoon_to_noun(slab, p);
-            let q = hoon_to_noun(slab, q);
+            let p = hoon_to_noun_for_dialect(dialect, slab, p);
+            let q = hoon_to_noun_for_dialect(dialect, slab, q);
             T(slab, &[D(tas!(b"cnhp")), p, q])
         }
         CenCol(p, hoons) => {
-            let p = hoon_to_noun(slab, p);
-            let hoons_noun: Vec<_> = hoons.iter().map(|h| hoon_to_noun(slab, h)).collect();
+            let p = hoon_to_noun_for_dialect(dialect, slab, p);
+            let hoons_noun: Vec<_> = hoons
+                .iter()
+                .map(|h| hoon_to_noun_for_dialect(dialect, slab, h))
+                .collect();
             let list = list_to_noun(slab, hoons_noun);
             T(slab, &[D(tas!(b"cncl")), p, list])
         }
         CenTar(wing, p, pairs) => {
             let wing_noun = wing_to_noun(slab, wing);
-            let p_noun = hoon_to_noun(slab, p);
+            let p_noun = hoon_to_noun_for_dialect(dialect, slab, p);
             let pairs_noun: Vec<_> = pairs
                 .iter()
                 .map(|(w, h)| {
                     let w_noun = wing_to_noun(slab, w);
-                    let h_noun = hoon_to_noun(slab, h);
+                    let h_noun = hoon_to_noun_for_dialect(dialect, slab, h);
                     T(slab, &[w_noun, h_noun])
                 })
                 .collect();
@@ -12501,22 +12538,25 @@ fn hoon_to_noun_uncached(slab: &mut NounSlab, hoon: &Hoon) -> Noun {
             T(slab, &[D(tas!(b"cntr")), wing_noun, p_noun, list])
         }
         CenKet(a, b, c, d) => {
-            let a = hoon_to_noun(slab, a);
-            let b = hoon_to_noun(slab, b);
-            let c = hoon_to_noun(slab, c);
-            let d = hoon_to_noun(slab, d);
+            let a = hoon_to_noun_for_dialect(dialect, slab, a);
+            let b = hoon_to_noun_for_dialect(dialect, slab, b);
+            let c = hoon_to_noun_for_dialect(dialect, slab, c);
+            let d = hoon_to_noun_for_dialect(dialect, slab, d);
             T(slab, &[D(tas!(b"cnkt")), a, b, c, d])
         }
         CenLus(a, b, c) => {
-            let a = hoon_to_noun(slab, a);
-            let b = hoon_to_noun(slab, b);
-            let c = hoon_to_noun(slab, c);
+            let a = hoon_to_noun_for_dialect(dialect, slab, a);
+            let b = hoon_to_noun_for_dialect(dialect, slab, b);
+            let c = hoon_to_noun_for_dialect(dialect, slab, c);
             T(slab, &[D(tas!(b"cnls")), a, b, c])
         }
         CenSig(wing, p, hoons) => {
             let wing_noun = wing_to_noun(slab, wing);
-            let p_noun = hoon_to_noun(slab, p);
-            let hoons_noun: Vec<_> = hoons.iter().map(|h| hoon_to_noun(slab, h)).collect();
+            let p_noun = hoon_to_noun_for_dialect(dialect, slab, p);
+            let hoons_noun: Vec<_> = hoons
+                .iter()
+                .map(|h| hoon_to_noun_for_dialect(dialect, slab, h))
+                .collect();
             let list = list_to_noun(slab, hoons_noun);
             T(slab, &[D(tas!(b"cnsg")), wing_noun, p_noun, list])
         }
@@ -12526,7 +12566,7 @@ fn hoon_to_noun_uncached(slab: &mut NounSlab, hoon: &Hoon) -> Noun {
                 .iter()
                 .map(|(w, h)| {
                     let w_noun = wing_to_noun(slab, w);
-                    let h_noun = hoon_to_noun(slab, h);
+                    let h_noun = hoon_to_noun_for_dialect(dialect, slab, h);
                     T(slab, &[w_noun, h_noun])
                 })
                 .collect();
@@ -12534,87 +12574,92 @@ fn hoon_to_noun_uncached(slab: &mut NounSlab, hoon: &Hoon) -> Noun {
             T(slab, &[D(tas!(b"cnts")), wing_noun, list])
         }
         DotKet(spec, p) => {
-            let spec_noun = spec_to_noun(slab, spec);
-            let p_noun = hoon_to_noun(slab, p);
+            let spec_noun = spec_to_noun(dialect, slab, spec);
+            let p_noun = hoon_to_noun_for_dialect(dialect, slab, p);
             T(slab, &[D(tas!(b"dtkt")), spec_noun, p_noun])
         }
         DotLus(p) => {
-            let p = hoon_to_noun(slab, p);
+            let p = hoon_to_noun_for_dialect(dialect, slab, p);
             T(slab, &[D(tas!(b"dtls")), p])
         }
         DotTar(p, q) => {
-            let p = hoon_to_noun(slab, p);
-            let q = hoon_to_noun(slab, q);
+            let p = hoon_to_noun_for_dialect(dialect, slab, p);
+            let q = hoon_to_noun_for_dialect(dialect, slab, q);
             T(slab, &[D(tas!(b"dttr")), p, q])
         }
         DotTis(p, q) => {
-            let p = hoon_to_noun(slab, p);
-            let q = hoon_to_noun(slab, q);
+            let p = hoon_to_noun_for_dialect(dialect, slab, p);
+            let q = hoon_to_noun_for_dialect(dialect, slab, q);
             T(slab, &[D(tas!(b"dtts")), p, q])
         }
         DotWut(p) => {
-            let p = hoon_to_noun(slab, p);
+            let p = hoon_to_noun_for_dialect(dialect, slab, p);
             T(slab, &[D(tas!(b"dtwt")), p])
         }
         KetBar(p) => {
-            let p = hoon_to_noun(slab, p);
+            let p = hoon_to_noun_for_dialect(dialect, slab, p);
             T(slab, &[D(tas!(b"ktbr")), p])
         }
         KetDot(p, q) => {
-            let p = hoon_to_noun(slab, p);
-            let q = hoon_to_noun(slab, q);
+            let p = hoon_to_noun_for_dialect(dialect, slab, p);
+            let q = hoon_to_noun_for_dialect(dialect, slab, q);
             T(slab, &[D(tas!(b"ktdt")), p, q])
         }
+        KetCab(p, q) => {
+            let p = hoon_to_noun_for_dialect(dialect, slab, p);
+            let q = hoon_to_noun_for_dialect(dialect, slab, q);
+            T(slab, &[D(tas!(b"ktcb")), p, q])
+        }
         KetLus(p, q) => {
-            let p = hoon_to_noun(slab, p);
-            let q = hoon_to_noun(slab, q);
+            let p = hoon_to_noun_for_dialect(dialect, slab, p);
+            let q = hoon_to_noun_for_dialect(dialect, slab, q);
             T(slab, &[D(tas!(b"ktls")), p, q])
         }
         KetHep(spec, p) => {
-            let spec_noun = spec_to_noun(slab, spec);
-            let p_noun = hoon_to_noun(slab, p);
+            let spec_noun = spec_to_noun(dialect, slab, spec);
+            let p_noun = hoon_to_noun_for_dialect(dialect, slab, p);
             T(slab, &[D(tas!(b"kthp")), spec_noun, p_noun])
         }
         KetPam(p) => {
-            let p = hoon_to_noun(slab, p);
+            let p = hoon_to_noun_for_dialect(dialect, slab, p);
             T(slab, &[D(tas!(b"ktpm")), p])
         }
         KetSig(p) => {
-            let p = hoon_to_noun(slab, p);
+            let p = hoon_to_noun_for_dialect(dialect, slab, p);
             T(slab, &[D(tas!(b"ktsg")), p])
         }
         KetTis(skin, p) => {
-            let skin_noun = skin_to_noun(slab, skin);
-            let p_noun = hoon_to_noun(slab, p);
+            let skin_noun = skin_to_noun(dialect, slab, skin);
+            let p_noun = hoon_to_noun_for_dialect(dialect, slab, p);
             T(slab, &[D(tas!(b"ktts")), skin_noun, p_noun])
         }
         KetWut(p) => {
-            let p = hoon_to_noun(slab, p);
+            let p = hoon_to_noun_for_dialect(dialect, slab, p);
             T(slab, &[D(tas!(b"ktwt")), p])
         }
         KetTar(spec) => {
-            let spec_noun = spec_to_noun(slab, spec);
+            let spec_noun = spec_to_noun(dialect, slab, spec);
             T(slab, &[D(tas!(b"kttr")), spec_noun])
         }
         KetCol(spec) => {
-            let spec_noun = spec_to_noun(slab, spec);
+            let spec_noun = spec_to_noun(dialect, slab, spec);
             T(slab, &[D(tas!(b"ktcl")), spec_noun])
         }
         SigBar(p, q) => {
-            let p = hoon_to_noun(slab, p);
-            let q = hoon_to_noun(slab, q);
+            let p = hoon_to_noun_for_dialect(dialect, slab, p);
+            let q = hoon_to_noun_for_dialect(dialect, slab, q);
             T(slab, &[D(tas!(b"sgbr")), p, q])
         }
         SigCab(p, q) => {
-            let p = hoon_to_noun(slab, p);
-            let q = hoon_to_noun(slab, q);
+            let p = hoon_to_noun_for_dialect(dialect, slab, p);
+            let q = hoon_to_noun_for_dialect(dialect, slab, q);
             T(slab, &[D(tas!(b"sgcb")), p, q])
         }
         SigCen(chum, p, tyre, q) => {
             let chum_noun = chum_to_noun(slab, chum);
-            let p_noun = hoon_to_noun(slab, p);
-            let tyre_noun = tyre_to_noun(slab, tyre);
-            let q_noun = hoon_to_noun(slab, q);
+            let p_noun = hoon_to_noun_for_dialect(dialect, slab, p);
+            let tyre_noun = tyre_to_noun(dialect, slab, tyre);
+            let q_noun = hoon_to_noun_for_dialect(dialect, slab, q);
             T(
                 slab,
                 &[D(tas!(b"sgcn")), chum_noun, p_noun, tyre_noun, q_noun],
@@ -12622,84 +12667,90 @@ fn hoon_to_noun_uncached(slab: &mut NounSlab, hoon: &Hoon) -> Noun {
         }
         SigFas(chum, p) => {
             let chum_noun = chum_to_noun(slab, chum);
-            let p_noun = hoon_to_noun(slab, p);
+            let p_noun = hoon_to_noun_for_dialect(dialect, slab, p);
             T(slab, &[D(tas!(b"sgfs")), chum_noun, p_noun])
         }
         SigGal(term_or_pair, p) => {
-            let term_noun = term_or_pair_to_noun(slab, term_or_pair);
-            let p_noun = hoon_to_noun(slab, p);
+            let term_noun = term_or_pair_to_noun(dialect, slab, term_or_pair);
+            let p_noun = hoon_to_noun_for_dialect(dialect, slab, p);
             T(slab, &[D(tas!(b"sggl")), term_noun, p_noun])
         }
         SigGar(term_or_pair, p) => {
-            let term_noun = term_or_pair_to_noun(slab, term_or_pair);
-            let p_noun = hoon_to_noun(slab, p);
+            let term_noun = term_or_pair_to_noun(dialect, slab, term_or_pair);
+            let p_noun = hoon_to_noun_for_dialect(dialect, slab, p);
             T(slab, &[D(tas!(b"sggr")), term_noun, p_noun])
         }
         SigBuc(tag, p) => {
             let tag_noun = term_to_noun(slab, tag);
-            let p_noun = hoon_to_noun(slab, p);
+            let p_noun = hoon_to_noun_for_dialect(dialect, slab, p);
             T(slab, &[D(tas!(b"sgbc")), tag_noun, p_noun])
         }
         SigLus(n, p) => {
-            let p_noun = hoon_to_noun(slab, p);
+            let p_noun = hoon_to_noun_for_dialect(dialect, slab, p);
             T(slab, &[D(tas!(b"sgls")), D(*n), p_noun])
         }
         SigPam(n, p, q) => {
-            let p_noun = hoon_to_noun(slab, p);
-            let q_noun = hoon_to_noun(slab, q);
+            let p_noun = hoon_to_noun_for_dialect(dialect, slab, p);
+            let q_noun = hoon_to_noun_for_dialect(dialect, slab, q);
             T(slab, &[D(tas!(b"sgpm")), D(*n), p_noun, q_noun])
         }
         SigTis(p, q) => {
-            let p = hoon_to_noun(slab, p);
-            let q = hoon_to_noun(slab, q);
+            let p = hoon_to_noun_for_dialect(dialect, slab, p);
+            let q = hoon_to_noun_for_dialect(dialect, slab, q);
             T(slab, &[D(tas!(b"sgts")), p, q])
         }
         SigWut(n, a, b, c) => {
-            let a = hoon_to_noun(slab, a);
-            let b = hoon_to_noun(slab, b);
-            let c = hoon_to_noun(slab, c);
+            let a = hoon_to_noun_for_dialect(dialect, slab, a);
+            let b = hoon_to_noun_for_dialect(dialect, slab, b);
+            let c = hoon_to_noun_for_dialect(dialect, slab, c);
             T(slab, &[D(tas!(b"sgwt")), D(*n), a, b, c])
         }
         SigZap(p, q) => {
-            let p = hoon_to_noun(slab, p);
-            let q = hoon_to_noun(slab, q);
+            let p = hoon_to_noun_for_dialect(dialect, slab, p);
+            let q = hoon_to_noun_for_dialect(dialect, slab, q);
             T(slab, &[D(tas!(b"sgzp")), p, q])
         }
         MicTis(marl) => {
-            let marl_noun = marl_to_noun(slab, marl);
+            let marl_noun = marl_to_noun(dialect, slab, marl);
             T(slab, &[D(tas!(b"mcts")), marl_noun])
         }
         MicCol(p, hoons) => {
-            let p = hoon_to_noun(slab, p);
-            let hoons_noun: Vec<_> = hoons.iter().map(|h| hoon_to_noun(slab, h)).collect();
+            let p = hoon_to_noun_for_dialect(dialect, slab, p);
+            let hoons_noun: Vec<_> = hoons
+                .iter()
+                .map(|h| hoon_to_noun_for_dialect(dialect, slab, h))
+                .collect();
             let list = list_to_noun(slab, hoons_noun);
             T(slab, &[D(tas!(b"mccl")), p, list])
         }
         MicFas(p) => {
-            let p = hoon_to_noun(slab, p);
+            let p = hoon_to_noun_for_dialect(dialect, slab, p);
             T(slab, &[D(tas!(b"mcfs")), p])
         }
         MicGal(spec, a, b, c) => {
-            let spec_noun = spec_to_noun(slab, spec);
-            let a = hoon_to_noun(slab, a);
-            let b = hoon_to_noun(slab, b);
-            let c = hoon_to_noun(slab, c);
+            let spec_noun = spec_to_noun(dialect, slab, spec);
+            let a = hoon_to_noun_for_dialect(dialect, slab, a);
+            let b = hoon_to_noun_for_dialect(dialect, slab, b);
+            let c = hoon_to_noun_for_dialect(dialect, slab, c);
             T(slab, &[D(tas!(b"mcgl")), spec_noun, a, b, c])
         }
         MicSig(p, hoons) => {
-            let p = hoon_to_noun(slab, p);
-            let hoons_noun: Vec<_> = hoons.iter().map(|h| hoon_to_noun(slab, h)).collect();
+            let p = hoon_to_noun_for_dialect(dialect, slab, p);
+            let hoons_noun: Vec<_> = hoons
+                .iter()
+                .map(|h| hoon_to_noun_for_dialect(dialect, slab, h))
+                .collect();
             let list = list_to_noun(slab, hoons_noun);
             T(slab, &[D(tas!(b"mcsg")), p, list])
         }
         MicMic(spec, p) => {
-            let spec_noun = spec_to_noun(slab, spec);
-            let p_noun = hoon_to_noun(slab, p);
+            let spec_noun = spec_to_noun(dialect, slab, spec);
+            let p_noun = hoon_to_noun_for_dialect(dialect, slab, p);
             T(slab, &[D(tas!(b"mcmc")), spec_noun, p_noun])
         }
         TisBar(spec, p) => {
-            let spec_noun = spec_to_noun(slab, spec);
-            let p_noun = hoon_to_noun(slab, p);
+            let spec_noun = spec_to_noun(dialect, slab, spec);
+            let p_noun = hoon_to_noun_for_dialect(dialect, slab, p);
             T(slab, &[D(tas!(b"tsbr")), spec_noun, p_noun])
         }
         TisCol(pairs, p) => {
@@ -12707,68 +12758,71 @@ fn hoon_to_noun_uncached(slab: &mut NounSlab, hoon: &Hoon) -> Noun {
                 .iter()
                 .map(|(w, h)| {
                     let w_noun = wing_to_noun(slab, w);
-                    let h_noun = hoon_to_noun(slab, h);
+                    let h_noun = hoon_to_noun_for_dialect(dialect, slab, h);
                     T(slab, &[w_noun, h_noun])
                 })
                 .collect();
             let list = list_to_noun(slab, pairs_noun);
-            let p_noun = hoon_to_noun(slab, p);
+            let p_noun = hoon_to_noun_for_dialect(dialect, slab, p);
             T(slab, &[D(tas!(b"tscl")), list, p_noun])
         }
         TisFas(skin, a, b) => {
-            let skin_noun = skin_to_noun(slab, skin);
-            let a = hoon_to_noun(slab, a);
-            let b = hoon_to_noun(slab, b);
+            let skin_noun = skin_to_noun(dialect, slab, skin);
+            let a = hoon_to_noun_for_dialect(dialect, slab, a);
+            let b = hoon_to_noun_for_dialect(dialect, slab, b);
             T(slab, &[D(tas!(b"tsfs")), skin_noun, a, b])
         }
         TisMic(skin, a, b) => {
-            let skin_noun = skin_to_noun(slab, skin);
-            let a = hoon_to_noun(slab, a);
-            let b = hoon_to_noun(slab, b);
+            let skin_noun = skin_to_noun(dialect, slab, skin);
+            let a = hoon_to_noun_for_dialect(dialect, slab, a);
+            let b = hoon_to_noun_for_dialect(dialect, slab, b);
             T(slab, &[D(tas!(b"tsmc")), skin_noun, a, b])
         }
         TisDot(wing, a, b) => {
             let wing_noun = wing_to_noun(slab, wing);
-            let a = hoon_to_noun(slab, a);
-            let b = hoon_to_noun(slab, b);
+            let a = hoon_to_noun_for_dialect(dialect, slab, a);
+            let b = hoon_to_noun_for_dialect(dialect, slab, b);
             T(slab, &[D(tas!(b"tsdt")), wing_noun, a, b])
         }
         TisWut(wing, a, b, c) => {
             let wing_noun = wing_to_noun(slab, wing);
-            let a = hoon_to_noun(slab, a);
-            let b = hoon_to_noun(slab, b);
-            let c = hoon_to_noun(slab, c);
+            let a = hoon_to_noun_for_dialect(dialect, slab, a);
+            let b = hoon_to_noun_for_dialect(dialect, slab, b);
+            let c = hoon_to_noun_for_dialect(dialect, slab, c);
             T(slab, &[D(tas!(b"tswt")), wing_noun, a, b, c])
         }
         TisGal(a, b) => {
-            let a = hoon_to_noun(slab, a);
-            let b = hoon_to_noun(slab, b);
+            let a = hoon_to_noun_for_dialect(dialect, slab, a);
+            let b = hoon_to_noun_for_dialect(dialect, slab, b);
             T(slab, &[D(tas!(b"tsgl")), a, b])
         }
         TisHep(a, b) => {
-            let a = hoon_to_noun(slab, a);
-            let b = hoon_to_noun(slab, b);
+            let a = hoon_to_noun_for_dialect(dialect, slab, a);
+            let b = hoon_to_noun_for_dialect(dialect, slab, b);
             T(slab, &[D(tas!(b"tshp")), a, b])
         }
         TisGar(a, b) => {
-            let a = hoon_to_noun(slab, a);
-            let b = hoon_to_noun(slab, b);
+            let a = hoon_to_noun_for_dialect(dialect, slab, a);
+            let b = hoon_to_noun_for_dialect(dialect, slab, b);
             T(slab, &[D(tas!(b"tsgr")), a, b])
         }
         TisKet(skin, wing, a, b) => {
-            let skin_noun = skin_to_noun(slab, skin);
+            let skin_noun = skin_to_noun(dialect, slab, skin);
             let wing_noun = wing_to_noun(slab, wing);
-            let a = hoon_to_noun(slab, a);
-            let b = hoon_to_noun(slab, b);
+            let a = hoon_to_noun_for_dialect(dialect, slab, a);
+            let b = hoon_to_noun_for_dialect(dialect, slab, b);
             T(slab, &[D(tas!(b"tskt")), skin_noun, wing_noun, a, b])
         }
         TisLus(a, b) => {
-            let a = hoon_to_noun(slab, a);
-            let b = hoon_to_noun(slab, b);
+            let a = hoon_to_noun_for_dialect(dialect, slab, a);
+            let b = hoon_to_noun_for_dialect(dialect, slab, b);
             T(slab, &[D(tas!(b"tsls")), a, b])
         }
         TisSig(hoons) => {
-            let hoons_noun: Vec<_> = hoons.iter().map(|h| hoon_to_noun(slab, h)).collect();
+            let hoons_noun: Vec<_> = hoons
+                .iter()
+                .map(|h| hoon_to_noun_for_dialect(dialect, slab, h))
+                .collect();
             let list = list_to_noun(slab, hoons_noun);
             T(slab, &[D(tas!(b"tssg")), list])
         }
@@ -12777,22 +12831,25 @@ fn hoon_to_noun_uncached(slab: &mut NounSlab, hoon: &Hoon) -> Noun {
             let spec_unit = match spec_opt.as_ref() {
                 None => D(0u64),
                 Some(spec) => {
-                    let spec_noun = spec_to_noun(slab, spec);
+                    let spec_noun = spec_to_noun(dialect, slab, spec);
                     T(slab, &[D(0), spec_noun])
                 }
             };
             let name_spec = T(slab, &[name_noun, spec_unit]);
-            let a = hoon_to_noun(slab, a);
-            let b = hoon_to_noun(slab, b);
+            let a = hoon_to_noun_for_dialect(dialect, slab, a);
+            let b = hoon_to_noun_for_dialect(dialect, slab, b);
             T(slab, &[D(tas!(b"tstr")), name_spec, a, b])
         }
         TisCom(a, b) => {
-            let a = hoon_to_noun(slab, a);
-            let b = hoon_to_noun(slab, b);
+            let a = hoon_to_noun_for_dialect(dialect, slab, a);
+            let b = hoon_to_noun_for_dialect(dialect, slab, b);
             T(slab, &[D(tas!(b"tscm")), a, b])
         }
         WutBar(hoons) => {
-            let hoons_noun: Vec<_> = hoons.iter().map(|h| hoon_to_noun(slab, h)).collect();
+            let hoons_noun: Vec<_> = hoons
+                .iter()
+                .map(|h| hoon_to_noun_for_dialect(dialect, slab, h))
+                .collect();
             let list = list_to_noun(slab, hoons_noun);
             T(slab, &[D(tas!(b"wtbr")), list])
         }
@@ -12801,8 +12858,8 @@ fn hoon_to_noun_uncached(slab: &mut NounSlab, hoon: &Hoon) -> Noun {
             let pairs_noun: Vec<_> = pairs
                 .iter()
                 .map(|(spec, h)| {
-                    let spec_noun = spec_to_noun(slab, spec);
-                    let h_noun = hoon_to_noun(slab, h);
+                    let spec_noun = spec_to_noun(dialect, slab, spec);
+                    let h_noun = hoon_to_noun_for_dialect(dialect, slab, h);
                     T(slab, &[spec_noun, h_noun])
                 })
                 .collect();
@@ -12810,41 +12867,41 @@ fn hoon_to_noun_uncached(slab: &mut NounSlab, hoon: &Hoon) -> Noun {
             T(slab, &[D(tas!(b"wthp")), wing_noun, list])
         }
         WutCol(a, b, c) => {
-            let a = hoon_to_noun(slab, a);
-            let b = hoon_to_noun(slab, b);
-            let c = hoon_to_noun(slab, c);
+            let a = hoon_to_noun_for_dialect(dialect, slab, a);
+            let b = hoon_to_noun_for_dialect(dialect, slab, b);
+            let c = hoon_to_noun_for_dialect(dialect, slab, c);
             T(slab, &[D(tas!(b"wtcl")), a, b, c])
         }
         WutDot(a, b, c) => {
-            let a = hoon_to_noun(slab, a);
-            let b = hoon_to_noun(slab, b);
-            let c = hoon_to_noun(slab, c);
+            let a = hoon_to_noun_for_dialect(dialect, slab, a);
+            let b = hoon_to_noun_for_dialect(dialect, slab, b);
+            let c = hoon_to_noun_for_dialect(dialect, slab, c);
             T(slab, &[D(tas!(b"wtdt")), a, b, c])
         }
         WutKet(wing, a, b) => {
             let wing_noun = wing_to_noun(slab, wing);
-            let a = hoon_to_noun(slab, a);
-            let b = hoon_to_noun(slab, b);
+            let a = hoon_to_noun_for_dialect(dialect, slab, a);
+            let b = hoon_to_noun_for_dialect(dialect, slab, b);
             T(slab, &[D(tas!(b"wtkt")), wing_noun, a, b])
         }
         WutGal(a, b) => {
-            let a = hoon_to_noun(slab, a);
-            let b = hoon_to_noun(slab, b);
+            let a = hoon_to_noun_for_dialect(dialect, slab, a);
+            let b = hoon_to_noun_for_dialect(dialect, slab, b);
             T(slab, &[D(tas!(b"wtgl")), a, b])
         }
         WutGar(a, b) => {
-            let a = hoon_to_noun(slab, a);
-            let b = hoon_to_noun(slab, b);
+            let a = hoon_to_noun_for_dialect(dialect, slab, a);
+            let b = hoon_to_noun_for_dialect(dialect, slab, b);
             T(slab, &[D(tas!(b"wtgr")), a, b])
         }
         WutLus(wing, a, pairs) => {
             let wing_noun = wing_to_noun(slab, wing);
-            let a = hoon_to_noun(slab, a);
+            let a = hoon_to_noun_for_dialect(dialect, slab, a);
             let pairs_noun: Vec<_> = pairs
                 .iter()
                 .map(|(spec, h)| {
-                    let spec_noun = spec_to_noun(slab, spec);
-                    let h_noun = hoon_to_noun(slab, h);
+                    let spec_noun = spec_to_noun(dialect, slab, spec);
+                    let h_noun = hoon_to_noun_for_dialect(dialect, slab, h);
                     T(slab, &[spec_noun, h_noun])
                 })
                 .collect();
@@ -12852,69 +12909,76 @@ fn hoon_to_noun_uncached(slab: &mut NounSlab, hoon: &Hoon) -> Noun {
             T(slab, &[D(tas!(b"wtls")), wing_noun, a, list])
         }
         WutPam(hoons) => {
-            let hoons_noun: Vec<_> = hoons.iter().map(|h| hoon_to_noun(slab, h)).collect();
+            let hoons_noun: Vec<_> = hoons
+                .iter()
+                .map(|h| hoon_to_noun_for_dialect(dialect, slab, h))
+                .collect();
             let list = list_to_noun(slab, hoons_noun);
             T(slab, &[D(tas!(b"wtpm")), list])
         }
         WutPat(wing, a, b) => {
             let wing_noun = wing_to_noun(slab, wing);
-            let a = hoon_to_noun(slab, a);
-            let b = hoon_to_noun(slab, b);
+            let a = hoon_to_noun_for_dialect(dialect, slab, a);
+            let b = hoon_to_noun_for_dialect(dialect, slab, b);
             T(slab, &[D(tas!(b"wtpt")), wing_noun, a, b])
         }
         WutSig(wing, a, b) => {
             let wing_noun = wing_to_noun(slab, wing);
-            let a = hoon_to_noun(slab, a);
-            let b = hoon_to_noun(slab, b);
+            let a = hoon_to_noun_for_dialect(dialect, slab, a);
+            let b = hoon_to_noun_for_dialect(dialect, slab, b);
             T(slab, &[D(tas!(b"wtsg")), wing_noun, a, b])
         }
         WutHax(skin, wing) => {
-            let skin_noun = skin_to_noun(slab, skin);
+            let skin_noun = skin_to_noun(dialect, slab, skin);
             let wing_noun = wing_to_noun(slab, wing);
             T(slab, &[D(tas!(b"wthx")), skin_noun, wing_noun])
         }
         WutTis(spec, wing) => {
-            let spec_noun = spec_to_noun(slab, spec);
+            let spec_noun = spec_to_noun(dialect, slab, spec);
             let wing_noun = wing_to_noun(slab, wing);
             T(slab, &[D(tas!(b"wtts")), spec_noun, wing_noun])
         }
         WutZap(p) => {
-            let p = hoon_to_noun(slab, p);
+            let p = hoon_to_noun_for_dialect(dialect, slab, p);
             T(slab, &[D(tas!(b"wtzp")), p])
         }
         ZapCom(a, b) => {
-            let a = hoon_to_noun(slab, a);
-            let b = hoon_to_noun(slab, b);
+            let a = hoon_to_noun_for_dialect(dialect, slab, a);
+            let b = hoon_to_noun_for_dialect(dialect, slab, b);
             T(slab, &[D(tas!(b"zpcm")), a, b])
         }
         ZapGar(p) => {
-            let p = hoon_to_noun(slab, p);
+            let p = hoon_to_noun_for_dialect(dialect, slab, p);
             T(slab, &[D(tas!(b"zpgr")), p])
         }
         ZapGal(spec, p) => {
-            let spec_noun = spec_to_noun(slab, spec);
-            let p_noun = hoon_to_noun(slab, p);
+            let spec_noun = spec_to_noun(dialect, slab, spec);
+            let p_noun = hoon_to_noun_for_dialect(dialect, slab, p);
             T(slab, &[D(tas!(b"zpgl")), spec_noun, p_noun])
         }
         ZapMic(a, b) => {
-            let a = hoon_to_noun(slab, a);
-            let b = hoon_to_noun(slab, b);
+            let a = hoon_to_noun_for_dialect(dialect, slab, a);
+            let b = hoon_to_noun_for_dialect(dialect, slab, b);
             T(slab, &[D(tas!(b"zpmc")), a, b])
         }
         ZapTis(p) => {
-            let p = hoon_to_noun(slab, p);
+            let p = hoon_to_noun_for_dialect(dialect, slab, p);
             T(slab, &[D(tas!(b"zpts")), p])
         }
         ZapPat(wings, a, b) => {
+            let (a, b) = match dialect {
+                Dialect::Nockchain => (a, b),
+                Dialect::Urbit => (b, a),
+            };
             let wing_nouns: Vec<_> = wings.iter().map(|w| wing_to_noun(slab, w)).collect();
             let wings_noun = list_to_noun(slab, wing_nouns);
-            let a = hoon_to_noun(slab, a);
-            let b = hoon_to_noun(slab, b);
+            let a = hoon_to_noun_for_dialect(dialect, slab, a);
+            let b = hoon_to_noun_for_dialect(dialect, slab, b);
             T(slab, &[D(tas!(b"zppt")), wings_noun, a, b])
         }
         ZapWut(arg, p) => {
             let arg_noun = zpwt_arg_to_noun(slab, arg);
-            let p = hoon_to_noun(slab, p);
+            let p = hoon_to_noun_for_dialect(dialect, slab, p);
             T(slab, &[D(tas!(b"zpwt")), arg_noun, p])
         }
     }
@@ -13138,7 +13202,7 @@ fn noun_expr_to_noun(slab: &mut NounSlab, expr: &NounExpr) -> Noun {
     }
 }
 
-fn type_to_noun(slab: &mut NounSlab, typ: &Type) -> Noun {
+pub fn type_to_noun_for_dialect(dialect: Dialect, slab: &mut NounSlab, typ: &Type) -> Noun {
     use Type::*;
     match typ {
         NounExpr => D(tas!(b"noun")),
@@ -13149,72 +13213,66 @@ fn type_to_noun(slab: &mut NounSlab, typ: &Type) -> Noun {
             T(slab, &[D(tas!(b"atom")), au_noun, bits_noun])
         }
         Cell(l, r) => {
-            let l = type_to_noun(slab, l);
-            let r = type_to_noun(slab, r);
+            let l = type_to_noun_for_dialect(dialect, slab, l);
+            let r = type_to_noun_for_dialect(dialect, slab, r);
             T(slab, &[D(tas!(b"cell")), l, r])
         }
         Core(face, coil) => {
-            let face_noun = type_to_noun(slab, face);
-            let coil_noun = coil_to_noun(slab, coil);
+            let face_noun = type_to_noun_for_dialect(dialect, slab, face);
+            let coil_noun = coil_to_noun(dialect, slab, coil);
             T(slab, &[D(tas!(b"core")), face_noun, coil_noun])
         }
         Face(face_type, inner) => {
-            let face_noun = face_type_to_noun(slab, face_type);
-            let inner_noun = type_to_noun(slab, inner);
+            let face_noun = face_type_to_noun(dialect, slab, face_type);
+            let inner_noun = type_to_noun_for_dialect(dialect, slab, inner);
             T(slab, &[D(tas!(b"face")), face_noun, inner_noun])
         }
         Fork(types) => {
-            let types_vec: Vec<_> = types.iter().map(|t| type_to_noun(slab, t)).collect();
+            let types_vec: Vec<_> = types
+                .iter()
+                .map(|t| type_to_noun_for_dialect(dialect, slab, t))
+                .collect();
             let types_noun = list_to_noun(slab, types_vec);
             T(slab, &[D(tas!(b"fork")), types_noun])
         }
         Hint((inner, note), payload) => {
-            let inner_noun = type_to_noun(slab, inner);
+            let inner_noun = type_to_noun_for_dialect(dialect, slab, inner);
             let note_noun = note_to_noun(slab, note);
-            let payload_noun = type_to_noun(slab, payload);
+            let payload_noun = type_to_noun_for_dialect(dialect, slab, payload);
             let hint_inner = T(slab, &[inner_noun, note_noun]);
             T(slab, &[D(tas!(b"hint")), hint_inner, payload_noun])
         }
         Hold(typ, hoon) => {
-            let typ_noun = type_to_noun(slab, typ);
-            let hoon_noun = hoon_to_noun(slab, hoon);
+            let typ_noun = type_to_noun_for_dialect(dialect, slab, typ);
+            let hoon_noun = hoon_to_noun_for_dialect(dialect, slab, hoon);
             T(slab, &[D(tas!(b"hold")), typ_noun, hoon_noun])
         }
     }
 }
 
-fn face_type_to_noun(slab: &mut NounSlab, ft: &FaceType) -> Noun {
+fn face_type_to_noun(dialect: Dialect, slab: &mut NounSlab, ft: &FaceType) -> Noun {
     match ft {
         FaceType::Term(s) => term_to_noun(slab, s),
         FaceType::Tune(tune) => {
-            let tune_noun = tune_to_noun(slab, tune);
+            let tune_noun = tune_to_noun(dialect, slab, tune);
             T(slab, &[D(tas!(b"tune")), tune_noun])
         }
     }
 }
 
-fn coil_to_noun(slab: &mut NounSlab, coil: &Coil) -> Noun {
+fn coil_to_noun(dialect: Dialect, slab: &mut NounSlab, coil: &Coil) -> Noun {
     let garb_noun = garb_to_noun(slab, &coil.p);
-    let type_noun = type_to_noun(slab, &coil.q);
-    let semi_noun = semi_noun_expr_to_noun(slab, &coil.r.0);
+    let type_noun = type_to_noun_for_dialect(dialect, slab, &coil.q);
+    let semi_noun = semi_noun_expr_to_noun(dialect, slab, &coil.r.0);
 
     let tomes_entries: Vec<_> = coil
         .r
         .1
         .iter()
         .map(|(k, v)| {
-            let (what, v) = v;
             let k_noun = term_to_noun(slab, k);
-            let what_noun = what
-                .as_ref()
-                .map(|what| noun_expr_to_noun(slab, what))
-                .unwrap_or_else(|| D(0));
-            let inner_entries: Vec<_> = v
-                .iter()
-                .map(|(kk, vv)| (term_to_noun(slab, kk), hoon_to_noun(slab, vv)))
-                .collect();
-            let v_noun = map_to_noun(slab, inner_entries);
-            (k_noun, T(slab, &[what_noun, v_noun]))
+            let v_noun = tome_to_noun(dialect, slab, v);
+            (k_noun, v_noun)
         })
         .collect();
 
@@ -13251,17 +13309,21 @@ fn vair_to_noun(_slab: &mut NounSlab, vair: &Vair) -> Noun {
     }
 }
 
-fn semi_noun_expr_to_noun(slab: &mut NounSlab, (stencil, expr): &SemiNounExpr) -> Noun {
-    let stencil_noun = stencil_to_noun(slab, stencil);
+fn semi_noun_expr_to_noun(
+    dialect: Dialect,
+    slab: &mut NounSlab,
+    (stencil, expr): &SemiNounExpr,
+) -> Noun {
+    let stencil_noun = stencil_to_noun(dialect, slab, stencil);
     let expr_noun = noun_expr_to_noun(slab, expr);
     T(slab, &[stencil_noun, expr_noun])
 }
 
-fn stencil_to_noun(slab: &mut NounSlab, st: &Stencil) -> Noun {
+fn stencil_to_noun(dialect: Dialect, slab: &mut NounSlab, st: &Stencil) -> Noun {
     match st {
         Stencil::Half { left, rite } => {
-            let l = stencil_to_noun(slab, left);
-            let r = stencil_to_noun(slab, rite);
+            let l = stencil_to_noun(dialect, slab, left);
+            let r = stencil_to_noun(dialect, slab, rite);
             T(slab, &[D(tas!(b"half")), l, r])
         }
         Stencil::Full { blocks } => {
@@ -13270,7 +13332,7 @@ fn stencil_to_noun(slab: &mut NounSlab, st: &Stencil) -> Noun {
             T(slab, &[D(tas!(b"full")), blocks_noun])
         }
         Stencil::Lazy { fragment, resolve } => {
-            let gate_noun = gate_to_noun(slab, resolve);
+            let gate_noun = gate_to_noun(dialect, slab, resolve);
             let fragment_noun = axis_to_noun(slab, fragment);
             T(slab, &[D(tas!(b"lazy")), fragment_noun, gate_noun])
         }
@@ -13287,13 +13349,13 @@ fn path_to_noun(slab: &mut NounSlab, path: &Path) -> Noun {
     list_to_noun(slab, knots)
 }
 
-fn gate_to_noun(slab: &mut NounSlab, (spec, body): &Gate) -> Noun {
-    let spec_noun = spec_to_noun(slab, spec);
-    let body_noun = spec_to_noun(slab, body);
+fn gate_to_noun(dialect: Dialect, slab: &mut NounSlab, (spec, body): &Gate) -> Noun {
+    let spec_noun = spec_to_noun(dialect, slab, spec);
+    let body_noun = spec_to_noun(dialect, slab, body);
     T(slab, &[spec_noun, body_noun])
 }
 
-fn spec_to_noun(slab: &mut NounSlab, spec: &Spec) -> Noun {
+fn spec_to_noun(dialect: Dialect, slab: &mut NounSlab, spec: &Spec) -> Noun {
     use Spec::*;
     match spec {
         Base(bt) => {
@@ -13302,13 +13364,13 @@ fn spec_to_noun(slab: &mut NounSlab, spec: &Spec) -> Noun {
         }
         Dbug(spot, s) => {
             let spot_noun = spot_to_noun(slab, spot);
-            let s_noun = spec_to_noun(slab, s);
+            let s_noun = spec_to_noun(dialect, slab, s);
             T(slab, &[D(tas!(b"dbug")), spot_noun, s_noun])
         }
         Gist(help, s) => {
             let help_noun = noun_expr_to_noun(slab, help);
             let help = T(slab, &[D(tas!(b"help")), help_noun]);
-            let s_noun = spec_to_noun(slab, s);
+            let s_noun = spec_to_noun(dialect, slab, s);
             T(slab, &[D(tas!(b"gist")), help, s_noun])
         }
         Leaf(tag, atom) => {
@@ -13330,143 +13392,155 @@ fn spec_to_noun(slab: &mut NounSlab, spec: &Spec) -> Noun {
             let name_noun = term_to_noun(slab, name);
             let args_vec: Vec<_> = args.iter().map(|a| term_to_noun(slab, a)).collect();
             let args_noun = list_to_noun(slab, args_vec);
-            let s_noun = spec_to_noun(slab, s);
+            let s_noun = spec_to_noun(dialect, slab, s);
             let inner = T(slab, &[name_noun, args_noun]);
             T(slab, &[D(tas!(b"made")), inner, s_noun])
         }
         Make(hoon, specs) => {
-            let hoon_noun = hoon_to_noun(slab, hoon);
-            let specs_vec: Vec<_> = specs.iter().map(|s| spec_to_noun(slab, s)).collect();
+            let hoon_noun = hoon_to_noun_for_dialect(dialect, slab, hoon);
+            let specs_vec: Vec<_> = specs
+                .iter()
+                .map(|s| spec_to_noun(dialect, slab, s))
+                .collect();
             let specs_noun = list_to_noun(slab, specs_vec);
             T(slab, &[D(tas!(b"make")), hoon_noun, specs_noun])
         }
         Name(name, s) => {
             let name_noun = term_to_noun(slab, name);
-            let s_noun = spec_to_noun(slab, s);
+            let s_noun = spec_to_noun(dialect, slab, s);
             T(slab, &[D(tas!(b"name")), name_noun, s_noun])
         }
         Over(wing, s) => {
             let wing_noun = wing_to_noun(slab, wing);
-            let s_noun = spec_to_noun(slab, s);
+            let s_noun = spec_to_noun(dialect, slab, s);
             T(slab, &[D(tas!(b"over")), wing_noun, s_noun])
         }
         BucGar(a, b) => {
-            let a_noun = spec_to_noun(slab, a);
-            let b_noun = spec_to_noun(slab, b);
+            let a_noun = spec_to_noun(dialect, slab, a);
+            let b_noun = spec_to_noun(dialect, slab, b);
             T(slab, &[D(tas!(b"bcgr")), a_noun, b_noun])
         }
         BucBuc(a, map) => {
-            let a_noun = spec_to_noun(slab, a);
+            let a_noun = spec_to_noun(dialect, slab, a);
             let entries: Vec<_> = map
                 .iter()
-                .map(|(k, v)| (term_to_noun(slab, k), spec_to_noun(slab, v)))
+                .map(|(k, v)| (term_to_noun(slab, k), spec_to_noun(dialect, slab, v)))
                 .collect();
             let map_noun = map_to_noun(slab, entries);
             T(slab, &[D(tas!(b"bcbc")), a_noun, map_noun])
         }
         BucBar(a, h) => {
-            let a_noun = spec_to_noun(slab, a);
-            let h_noun = hoon_to_noun(slab, h);
+            let a_noun = spec_to_noun(dialect, slab, a);
+            let h_noun = hoon_to_noun_for_dialect(dialect, slab, h);
             T(slab, &[D(tas!(b"bcbr")), a_noun, h_noun])
         }
         BucCab(h) => {
-            let h_noun = hoon_to_noun(slab, h);
+            let h_noun = hoon_to_noun_for_dialect(dialect, slab, h);
             T(slab, &[D(tas!(b"bccb")), h_noun])
         }
         BucCol(a, specs) => {
-            let a_noun = spec_to_noun(slab, a);
-            let specs_vec: Vec<_> = specs.iter().map(|s| spec_to_noun(slab, s)).collect();
+            let a_noun = spec_to_noun(dialect, slab, a);
+            let specs_vec: Vec<_> = specs
+                .iter()
+                .map(|s| spec_to_noun(dialect, slab, s))
+                .collect();
             let specs_noun = list_to_noun(slab, specs_vec);
             T(slab, &[D(tas!(b"bccl")), a_noun, specs_noun])
         }
         BucCen(a, specs) => {
-            let a_noun = spec_to_noun(slab, a);
-            let specs_vec: Vec<_> = specs.iter().map(|s| spec_to_noun(slab, s)).collect();
+            let a_noun = spec_to_noun(dialect, slab, a);
+            let specs_vec: Vec<_> = specs
+                .iter()
+                .map(|s| spec_to_noun(dialect, slab, s))
+                .collect();
             let specs_noun = list_to_noun(slab, specs_vec);
             T(slab, &[D(tas!(b"bccn")), a_noun, specs_noun])
         }
         BucDot(a, map) => {
-            let a_noun = spec_to_noun(slab, a);
+            let a_noun = spec_to_noun(dialect, slab, a);
             let entries: Vec<_> = map
                 .iter()
-                .map(|(k, v)| (term_to_noun(slab, k), spec_to_noun(slab, v)))
+                .map(|(k, v)| (term_to_noun(slab, k), spec_to_noun(dialect, slab, v)))
                 .collect();
             let map_noun = map_to_noun(slab, entries);
             T(slab, &[D(tas!(b"bcdt")), a_noun, map_noun])
         }
         BucGal(a, b) => {
-            let a_noun = spec_to_noun(slab, a);
-            let b_noun = spec_to_noun(slab, b);
+            let a_noun = spec_to_noun(dialect, slab, a);
+            let b_noun = spec_to_noun(dialect, slab, b);
             T(slab, &[D(tas!(b"bcgl")), a_noun, b_noun])
         }
         BucHep(a, b) => {
-            let a_noun = spec_to_noun(slab, a);
-            let b_noun = spec_to_noun(slab, b);
+            let a_noun = spec_to_noun(dialect, slab, a);
+            let b_noun = spec_to_noun(dialect, slab, b);
             T(slab, &[D(tas!(b"bchp")), a_noun, b_noun])
         }
         BucKet(a, b) => {
-            let a_noun = spec_to_noun(slab, a);
-            let b_noun = spec_to_noun(slab, b);
+            let a_noun = spec_to_noun(dialect, slab, a);
+            let b_noun = spec_to_noun(dialect, slab, b);
             T(slab, &[D(tas!(b"bckt")), a_noun, b_noun])
         }
         BucLus(tag, s) => {
             let tag_noun = term_to_noun(slab, tag);
-            let s_noun = spec_to_noun(slab, s);
+            let s_noun = spec_to_noun(dialect, slab, s);
             T(slab, &[D(tas!(b"bcls")), tag_noun, s_noun])
         }
         BucFas(a, map) => {
-            let a_noun = spec_to_noun(slab, a);
+            let a_noun = spec_to_noun(dialect, slab, a);
             let entries: Vec<_> = map
                 .iter()
-                .map(|(k, v)| (term_to_noun(slab, k), spec_to_noun(slab, v)))
+                .map(|(k, v)| (term_to_noun(slab, k), spec_to_noun(dialect, slab, v)))
                 .collect();
             let map_noun = map_to_noun(slab, entries);
             T(slab, &[D(tas!(b"bcfs")), a_noun, map_noun])
         }
         BucMic(h) => {
-            let inner = hoon_to_noun(slab, h);
+            let inner = hoon_to_noun_for_dialect(dialect, slab, h);
             T(slab, &[D(tas!(b"bcmc")), inner])
         }
         BucPam(a, h) => {
-            let a_noun = spec_to_noun(slab, a);
-            let h_noun = hoon_to_noun(slab, h);
+            let a_noun = spec_to_noun(dialect, slab, a);
+            let h_noun = hoon_to_noun_for_dialect(dialect, slab, h);
             T(slab, &[D(tas!(b"bcpm")), a_noun, h_noun])
         }
         BucSig(h, a) => {
-            let h_noun = hoon_to_noun(slab, h);
-            let a_noun = spec_to_noun(slab, a);
+            let h_noun = hoon_to_noun_for_dialect(dialect, slab, h);
+            let a_noun = spec_to_noun(dialect, slab, a);
             T(slab, &[D(tas!(b"bcsg")), h_noun, a_noun])
         }
         BucTic(a, map) => {
-            let a_noun = spec_to_noun(slab, a);
+            let a_noun = spec_to_noun(dialect, slab, a);
             let entries: Vec<_> = map
                 .iter()
-                .map(|(k, v)| (term_to_noun(slab, k), spec_to_noun(slab, v)))
+                .map(|(k, v)| (term_to_noun(slab, k), spec_to_noun(dialect, slab, v)))
                 .collect();
             let map_noun = map_to_noun(slab, entries);
             T(slab, &[D(tas!(b"bctc")), a_noun, map_noun])
         }
         BucTis(skin, a) => {
-            let skin_noun = skin_to_noun(slab, skin);
-            let a_noun = spec_to_noun(slab, a);
+            let skin_noun = skin_to_noun(dialect, slab, skin);
+            let a_noun = spec_to_noun(dialect, slab, a);
             T(slab, &[D(tas!(b"bcts")), skin_noun, a_noun])
         }
         BucPat(a, b) => {
-            let a_noun = spec_to_noun(slab, a);
-            let b_noun = spec_to_noun(slab, b);
+            let a_noun = spec_to_noun(dialect, slab, a);
+            let b_noun = spec_to_noun(dialect, slab, b);
             T(slab, &[D(tas!(b"bcpt")), a_noun, b_noun])
         }
         BucWut(a, specs) => {
-            let a_noun = spec_to_noun(slab, a);
-            let specs_vec: Vec<_> = specs.iter().map(|s| spec_to_noun(slab, s)).collect();
+            let a_noun = spec_to_noun(dialect, slab, a);
+            let specs_vec: Vec<_> = specs
+                .iter()
+                .map(|s| spec_to_noun(dialect, slab, s))
+                .collect();
             let specs_noun = list_to_noun(slab, specs_vec);
             T(slab, &[D(tas!(b"bcwt")), a_noun, specs_noun])
         }
         BucZap(a, map) => {
-            let a_noun = spec_to_noun(slab, a);
+            let a_noun = spec_to_noun(dialect, slab, a);
             let entries: Vec<_> = map
                 .iter()
-                .map(|(k, v)| (term_to_noun(slab, k), spec_to_noun(slab, v)))
+                .map(|(k, v)| (term_to_noun(slab, k), spec_to_noun(dialect, slab, v)))
                 .collect();
             let map_noun = map_to_noun(slab, entries);
             T(slab, &[D(tas!(b"bczp")), a_noun, map_noun])
@@ -13474,7 +13548,7 @@ fn spec_to_noun(slab: &mut NounSlab, spec: &Spec) -> Noun {
     }
 }
 
-fn skin_to_noun(slab: &mut NounSlab, skin: &Skin) -> Noun {
+fn skin_to_noun(dialect: Dialect, slab: &mut NounSlab, skin: &Skin) -> Noun {
     use Skin::*;
     match skin {
         Term(s) => term_to_noun(slab, s),
@@ -13483,18 +13557,18 @@ fn skin_to_noun(slab: &mut NounSlab, skin: &Skin) -> Noun {
             T(slab, &[D(tas!(b"base")), inner])
         }
         Cell(l, r) => {
-            let l = skin_to_noun(slab, l);
-            let r = skin_to_noun(slab, r);
+            let l = skin_to_noun(dialect, slab, l);
+            let r = skin_to_noun(dialect, slab, r);
             T(slab, &[D(tas!(b"cell")), l, r])
         }
         Dbug(spot, s) => {
             let spot_noun = spot_to_noun(slab, spot);
-            let s_noun = skin_to_noun(slab, s);
+            let s_noun = skin_to_noun(dialect, slab, s);
             T(slab, &[D(tas!(b"dbug")), spot_noun, s_noun])
         }
         Help(help, s) => {
             let help_noun = noun_expr_to_noun(slab, help);
-            let s_noun = skin_to_noun(slab, s);
+            let s_noun = skin_to_noun(dialect, slab, s);
             T(slab, &[D(tas!(b"help")), help_noun, s_noun])
         }
         Leaf(tag, atom) => {
@@ -13504,17 +13578,17 @@ fn skin_to_noun(slab: &mut NounSlab, skin: &Skin) -> Noun {
         }
         Name(name, s) => {
             let name_noun = term_to_noun(slab, name);
-            let s_noun = skin_to_noun(slab, s);
+            let s_noun = skin_to_noun(dialect, slab, s);
             T(slab, &[D(tas!(b"name")), name_noun, s_noun])
         }
         Over(wing, s) => {
             let wing_noun = wing_to_noun(slab, wing);
-            let s_noun = skin_to_noun(slab, s);
+            let s_noun = skin_to_noun(dialect, slab, s);
             T(slab, &[D(tas!(b"over")), wing_noun, s_noun])
         }
         Spec(spec, s) => {
-            let spec_noun = spec_to_noun(slab, spec);
-            let s_noun = skin_to_noun(slab, s);
+            let spec_noun = spec_to_noun(dialect, slab, spec);
+            let s_noun = skin_to_noun(dialect, slab, s);
             T(slab, &[D(tas!(b"spec")), spec_noun, s_noun])
         }
         Wash(n) => T(slab, &[D(tas!(b"wash")), D(*n)]),
@@ -13593,20 +13667,20 @@ fn note_to_noun(slab: &mut NounSlab, note: &Note) -> Noun {
     }
 }
 
-fn woof_to_noun(slab: &mut NounSlab, woof: &Woof) -> Noun {
+fn woof_to_noun(dialect: Dialect, slab: &mut NounSlab, woof: &Woof) -> Noun {
     match woof {
         Woof::ParsedAtom(a) => {
             let val = atom_to_noun(slab, a);
             val
         }
         Woof::Hoon(h) => {
-            let val = hoon_to_noun(slab, h);
+            let val = hoon_to_noun_for_dialect(dialect, slab, h);
             T(slab, &[D(0), val])
         }
     }
 }
 
-fn tome_to_noun(slab: &mut NounSlab, tome: &Tome) -> Noun {
+fn tome_to_noun(dialect: Dialect, slab: &mut NounSlab, tome: &Tome) -> Noun {
     let what = tome
         .0
         .as_ref()
@@ -13615,30 +13689,38 @@ fn tome_to_noun(slab: &mut NounSlab, tome: &Tome) -> Noun {
     let pairs: Vec<_> = tome
         .1
         .iter()
-        .map(|(k, v)| (term_to_noun(slab, k), hoon_to_noun(slab, v)))
+        .map(|(k, v)| {
+            (
+                term_to_noun(slab, k),
+                hoon_to_noun_for_dialect(dialect, slab, v),
+            )
+        })
         .collect();
     let map = map_to_noun(slab, pairs);
-    T(slab, &[what, map])
+    match dialect {
+        Dialect::Nockchain => T(slab, &[what, map]),
+        Dialect::Urbit => map,
+    }
 }
 
-fn alas_to_noun(slab: &mut NounSlab, alas: &Alas) -> Noun {
+fn alas_to_noun(dialect: Dialect, slab: &mut NounSlab, alas: &Alas) -> Noun {
     let pairs: Vec<Noun> = alas
         .iter()
         .map(|(k, v)| {
             let k_noun = term_to_noun(slab, k);
-            let v_noun = hoon_to_noun(slab, v);
+            let v_noun = hoon_to_noun_for_dialect(dialect, slab, v);
             T(slab, &[k_noun, v_noun])
         })
         .collect();
     list_to_noun(slab, pairs)
 }
 
-fn tyre_to_noun(slab: &mut NounSlab, tyre: &Tyre) -> Noun {
+fn tyre_to_noun(dialect: Dialect, slab: &mut NounSlab, tyre: &Tyre) -> Noun {
     let pairs: Vec<Noun> = tyre
         .iter()
         .map(|(k, v)| {
             let k_noun = term_to_noun(slab, k);
-            let v_noun = hoon_to_noun(slab, v);
+            let v_noun = hoon_to_noun_for_dialect(dialect, slab, v);
             T(slab, &[k_noun, v_noun])
         })
         .collect();
@@ -13751,14 +13833,18 @@ fn nock_hint_to_noun(slab: &mut NounSlab, hint: &NockHint) -> Noun {
     }
 }
 
-fn term_or_tune_to_noun(slab: &mut NounSlab, tot: &TermOrTune) -> Noun {
+pub fn term_or_tune_to_noun_for_dialect(
+    dialect: Dialect,
+    slab: &mut NounSlab,
+    tot: &TermOrTune,
+) -> Noun {
     match tot {
         TermOrTune::Term(s) => term_to_noun(slab, s),
-        TermOrTune::Tune(tune) => tune_to_noun(slab, tune),
+        TermOrTune::Tune(tune) => tune_to_noun(dialect, slab, tune),
     }
 }
 
-fn tune_to_noun(slab: &mut NounSlab, (map, vec): &Tune) -> Noun {
+fn tune_to_noun(dialect: Dialect, slab: &mut NounSlab, (map, vec): &Tune) -> Noun {
     let map_pairs: Vec<_> = map
         .iter()
         .map(|(k, opt_v)| {
@@ -13766,7 +13852,7 @@ fn tune_to_noun(slab: &mut NounSlab, (map, vec): &Tune) -> Noun {
             let v_noun = match opt_v {
                 None => D(0),
                 Some(v) => {
-                    let hoon_noun = hoon_to_noun(slab, v);
+                    let hoon_noun = hoon_to_noun_for_dialect(dialect, slab, v);
                     T(slab, &[D(0), hoon_noun])
                 }
             };
@@ -13776,19 +13862,22 @@ fn tune_to_noun(slab: &mut NounSlab, (map, vec): &Tune) -> Noun {
 
     let map_noun = map_to_noun(slab, map_pairs);
 
-    let vec_nouns: Vec<_> = vec.iter().map(|v| hoon_to_noun(slab, v)).collect();
+    let vec_nouns: Vec<_> = vec
+        .iter()
+        .map(|v| hoon_to_noun_for_dialect(dialect, slab, v))
+        .collect();
 
     let vec_noun = list_to_noun(slab, vec_nouns);
 
     T(slab, &[map_noun, vec_noun])
 }
 
-fn term_or_pair_to_noun(slab: &mut NounSlab, top: &TermOrPair) -> Noun {
+fn term_or_pair_to_noun(dialect: Dialect, slab: &mut NounSlab, top: &TermOrPair) -> Noun {
     match top {
         TermOrPair::Term(s) => term_to_noun(slab, s),
         TermOrPair::Pair(s, h) => {
             let s_noun = term_to_noun(slab, s);
-            let h_noun = hoon_to_noun(slab, h);
+            let h_noun = hoon_to_noun_for_dialect(dialect, slab, h);
             T(slab, &[s_noun, h_noun])
         }
     }
@@ -13821,25 +13910,28 @@ fn mane_to_noun(slab: &mut NounSlab, mane: &Mane) -> Noun {
     }
 }
 
-fn marx_to_noun(slab: &mut NounSlab, marx: &Marx) -> Noun {
+fn marx_to_noun(dialect: Dialect, slab: &mut NounSlab, marx: &Marx) -> Noun {
     let n = mane_to_noun(slab, &marx.n);
-    let a = mart_to_noun(slab, &marx.a);
+    let a = mart_to_noun(dialect, slab, &marx.a);
     T(slab, &[n, a])
 }
 
-fn manx_to_noun(slab: &mut NounSlab, manx: &Manx) -> Noun {
-    let g = marx_to_noun(slab, &manx.g);
-    let c = marl_to_noun(slab, &manx.c);
+fn manx_to_noun(dialect: Dialect, slab: &mut NounSlab, manx: &Manx) -> Noun {
+    let g = marx_to_noun(dialect, slab, &manx.g);
+    let c = marl_to_noun(dialect, slab, &manx.c);
     T(slab, &[g, c])
 }
 
-fn mart_to_noun(slab: &mut NounSlab, mart: &Mart) -> Noun {
+fn mart_to_noun(dialect: Dialect, slab: &mut NounSlab, mart: &Mart) -> Noun {
     let cells: Vec<Noun> = mart
         .iter()
         .map(|(mane, beers)| {
             let mane_noun = mane_to_noun(slab, mane);
 
-            let beer_nouns: Vec<Noun> = beers.iter().map(|b| beer_to_noun(slab, b)).collect();
+            let beer_nouns: Vec<Noun> = beers
+                .iter()
+                .map(|b| beer_to_noun(dialect, slab, b))
+                .collect();
 
             let beers_noun = list_to_noun(slab, beer_nouns);
 
@@ -13850,45 +13942,49 @@ fn mart_to_noun(slab: &mut NounSlab, mart: &Mart) -> Noun {
     list_to_noun(slab, cells)
 }
 
-fn beer_to_noun(slab: &mut NounSlab, beer: &Beer) -> Noun {
+fn beer_to_noun(dialect: Dialect, slab: &mut NounSlab, beer: &Beer) -> Noun {
     match beer {
         Beer::Char(cord) => cord_to_noun(slab, cord),
+        Beer::Atom(atom) => atom_to_noun(slab, atom),
         Beer::Hoon(h) => {
-            let hoon_noun = hoon_to_noun(slab, h);
+            let hoon_noun = hoon_to_noun_for_dialect(dialect, slab, h);
             T(slab, &[D(0), hoon_noun])
         }
     }
 }
 
-fn marl_to_noun(slab: &mut NounSlab, marl: &Marl) -> Noun {
-    let items: Vec<Noun> = marl.iter().map(|t| tuna_to_noun(slab, t)).collect();
+fn marl_to_noun(dialect: Dialect, slab: &mut NounSlab, marl: &Marl) -> Noun {
+    let items: Vec<Noun> = marl
+        .iter()
+        .map(|t| tuna_to_noun(dialect, slab, t))
+        .collect();
 
     list_to_noun(slab, items)
 }
 
-fn tuna_to_noun(slab: &mut NounSlab, tuna: &Tuna) -> Noun {
+fn tuna_to_noun(dialect: Dialect, slab: &mut NounSlab, tuna: &Tuna) -> Noun {
     match tuna {
-        Tuna::Manx(m) => manx_to_noun(slab, m),
-        Tuna::TunaTail(tail) => tuna_tail_to_noun(slab, tail),
+        Tuna::Manx(m) => manx_to_noun(dialect, slab, m),
+        Tuna::TunaTail(tail) => tuna_tail_to_noun(dialect, slab, tail),
     }
 }
 
-fn tuna_tail_to_noun(slab: &mut NounSlab, tail: &TunaTail) -> Noun {
+fn tuna_tail_to_noun(dialect: Dialect, slab: &mut NounSlab, tail: &TunaTail) -> Noun {
     match tail {
         TunaTail::Tape(h) => {
-            let h_noun = hoon_to_noun(slab, h);
+            let h_noun = hoon_to_noun_for_dialect(dialect, slab, h);
             T(slab, &[D(tas!(b"tape")), h_noun])
         }
         TunaTail::Manx(h) => {
-            let h_noun = hoon_to_noun(slab, h);
+            let h_noun = hoon_to_noun_for_dialect(dialect, slab, h);
             T(slab, &[D(tas!(b"manx")), h_noun])
         }
         TunaTail::Marl(h) => {
-            let h_noun = hoon_to_noun(slab, h);
+            let h_noun = hoon_to_noun_for_dialect(dialect, slab, h);
             T(slab, &[D(tas!(b"marl")), h_noun])
         }
         TunaTail::Call(h) => {
-            let h_noun = hoon_to_noun(slab, h);
+            let h_noun = hoon_to_noun_for_dialect(dialect, slab, h);
             T(slab, &[D(tas!(b"call")), h_noun])
         }
     }
@@ -14017,7 +14113,10 @@ fn noun_is_zero_handle(noun: NounHandle<'_>) -> bool {
         .is_some_and(|direct| direct.data() == 0)
 }
 
-fn noun_to_fork_set_options<'a>(noun: NounHandle<'a>) -> Result<Vec<Type>, String> {
+fn noun_to_fork_set_options<'a>(
+    dialect: Dialect,
+    noun: NounHandle<'a>,
+) -> Result<Vec<Type>, String> {
     let mut out = Vec::new();
     let mut stack: Vec<NounHandle<'a>> = Vec::new();
     let mut current = noun;
@@ -14044,7 +14143,7 @@ fn noun_to_fork_set_options<'a>(noun: NounHandle<'a>) -> Result<Vec<Type>, Strin
             break;
         };
         let cell = node.as_cell().map_err(|_| "fork set: expected node cell")?;
-        out.push(noun_to_type(cell.head())?);
+        out.push(noun_to_type(dialect, cell.head())?);
         let branches = cell
             .tail()
             .as_cell()
@@ -14178,7 +14277,7 @@ fn noun_to_limb(noun: NounHandle<'_>) -> Result<Limb, String> {
     }
 }
 
-fn noun_to_skin(noun: NounHandle<'_>) -> Result<Skin, String> {
+fn noun_to_skin(dialect: Dialect, noun: NounHandle<'_>) -> Result<Skin, String> {
     // Skin::Term is a bare atom
     if let Ok(_) = noun.as_atom() {
         let s = noun_to_term(noun)?;
@@ -14194,22 +14293,22 @@ fn noun_to_skin(noun: NounHandle<'_>) -> Result<Skin, String> {
         if tag == tas!(b"cell") {
             let rest = cell.tail().as_cell().map_err(|_| "skin cell")?;
             return Ok(Skin::Cell(
-                Box::new(noun_to_skin(rest.head())?),
-                Box::new(noun_to_skin(rest.tail())?),
+                Box::new(noun_to_skin(dialect, rest.head())?),
+                Box::new(noun_to_skin(dialect, rest.tail())?),
             ));
         }
         if tag == tas!(b"dbug") {
             let rest = cell.tail().as_cell().map_err(|_| "skin dbug")?;
             return Ok(Skin::Dbug(
                 noun_to_spot(rest.head())?,
-                Box::new(noun_to_skin(rest.tail())?),
+                Box::new(noun_to_skin(dialect, rest.tail())?),
             ));
         }
         if tag == tas!(b"help") {
             let rest = cell.tail().as_cell().map_err(|_| "skin help")?;
             return Ok(Skin::Help(
                 noun_to_noun_expr(rest.head())?,
-                Box::new(noun_to_skin(rest.tail())?),
+                Box::new(noun_to_skin(dialect, rest.tail())?),
             ));
         }
         if tag == tas!(b"leaf") {
@@ -14223,21 +14322,21 @@ fn noun_to_skin(noun: NounHandle<'_>) -> Result<Skin, String> {
             let rest = cell.tail().as_cell().map_err(|_| "skin name")?;
             return Ok(Skin::Name(
                 noun_to_term(rest.head())?,
-                Box::new(noun_to_skin(rest.tail())?),
+                Box::new(noun_to_skin(dialect, rest.tail())?),
             ));
         }
         if tag == tas!(b"over") {
             let rest = cell.tail().as_cell().map_err(|_| "skin over")?;
             return Ok(Skin::Over(
                 noun_to_wing(rest.head())?,
-                Box::new(noun_to_skin(rest.tail())?),
+                Box::new(noun_to_skin(dialect, rest.tail())?),
             ));
         }
         if tag == tas!(b"spec") {
             let rest = cell.tail().as_cell().map_err(|_| "skin spec")?;
             return Ok(Skin::Spec(
-                Box::new(noun_to_spec(rest.head())?),
-                Box::new(noun_to_skin(rest.tail())?),
+                Box::new(noun_to_spec(dialect, rest.head())?),
+                Box::new(noun_to_skin(dialect, rest.tail())?),
             ));
         }
         if tag == tas!(b"wash") {
@@ -14247,7 +14346,7 @@ fn noun_to_skin(noun: NounHandle<'_>) -> Result<Skin, String> {
     Err(format!("skin: unrecognized"))
 }
 
-fn noun_to_spec(noun: NounHandle<'_>) -> Result<Spec, String> {
+fn noun_to_spec(dialect: Dialect, noun: NounHandle<'_>) -> Result<Spec, String> {
     let cell = noun.as_cell().map_err(|_| "spec: expected cell")?;
     let tag = noun_to_direct(cell.head())?;
     let rest = cell.tail();
@@ -14258,7 +14357,7 @@ fn noun_to_spec(noun: NounHandle<'_>) -> Result<Spec, String> {
         let r = rest.as_cell().map_err(|_| "spec dbug")?;
         return Ok(Spec::Dbug(
             noun_to_spot(r.head())?,
-            Box::new(noun_to_spec(r.tail())?),
+            Box::new(noun_to_spec(dialect, r.tail())?),
         ));
     }
     if tag == tas!(b"leaf") {
@@ -14283,27 +14382,30 @@ fn noun_to_spec(noun: NounHandle<'_>) -> Result<Spec, String> {
         let inner = r.head().as_cell().map_err(|_| "spec made inner")?;
         let name = noun_to_term(inner.head())?;
         let args = noun_to_list(inner.tail(), noun_to_term)?;
-        return Ok(Spec::Made((name, args), Box::new(noun_to_spec(r.tail())?)));
+        return Ok(Spec::Made(
+            (name, args),
+            Box::new(noun_to_spec(dialect, r.tail())?),
+        ));
     }
     if tag == tas!(b"make") {
         let r = rest.as_cell().map_err(|_| "spec make")?;
         return Ok(Spec::Make(
-            noun_to_hoon(r.head())?,
-            noun_to_list(r.tail(), noun_to_spec)?,
+            noun_to_hoon_for_dialect(dialect, r.head())?,
+            noun_to_list(r.tail(), |noun| noun_to_spec(dialect, noun))?,
         ));
     }
     if tag == tas!(b"name") {
         let r = rest.as_cell().map_err(|_| "spec name")?;
         return Ok(Spec::Name(
             noun_to_term(r.head())?,
-            Box::new(noun_to_spec(r.tail())?),
+            Box::new(noun_to_spec(dialect, r.tail())?),
         ));
     }
     if tag == tas!(b"over") {
         let r = rest.as_cell().map_err(|_| "spec over")?;
         return Ok(Spec::Over(
             noun_to_wing(r.head())?,
-            Box::new(noun_to_spec(r.tail())?),
+            Box::new(noun_to_spec(dialect, r.tail())?),
         ));
     }
     if tag == tas!(b"gist") {
@@ -14314,145 +14416,165 @@ fn noun_to_spec(noun: NounHandle<'_>) -> Result<Spec, String> {
         }
         return Ok(Spec::Gist(
             noun_to_noun_expr(note.tail())?,
-            Box::new(noun_to_spec(r.tail())?),
+            Box::new(noun_to_spec(dialect, r.tail())?),
         ));
     }
     if tag == tas!(b"bcgr") {
         let r = rest.as_cell().map_err(|_| "spec bcgr")?;
         return Ok(Spec::BucGar(
-            Box::new(noun_to_spec(r.head())?),
-            Box::new(noun_to_spec(r.tail())?),
+            Box::new(noun_to_spec(dialect, r.head())?),
+            Box::new(noun_to_spec(dialect, r.tail())?),
         ));
     }
     if tag == tas!(b"bcbc") {
         let r = rest.as_cell().map_err(|_| "spec bcbc")?;
-        let map: HashMap<String, Spec> =
-            noun_to_treap(r.tail(), |k, v| Ok((noun_to_term(k)?, noun_to_spec(v)?)))?
-                .into_iter()
-                .collect();
-        return Ok(Spec::BucBuc(Box::new(noun_to_spec(r.head())?), map));
+        let map: HashMap<String, Spec> = noun_to_treap(r.tail(), |k, v| {
+            Ok((noun_to_term(k)?, noun_to_spec(dialect, v)?))
+        })?
+        .into_iter()
+        .collect();
+        return Ok(Spec::BucBuc(
+            Box::new(noun_to_spec(dialect, r.head())?),
+            map,
+        ));
     }
     if tag == tas!(b"bcbr") {
         let r = rest.as_cell().map_err(|_| "spec bcbr")?;
         return Ok(Spec::BucBar(
-            Box::new(noun_to_spec(r.head())?),
-            noun_to_hoon(r.tail())?,
+            Box::new(noun_to_spec(dialect, r.head())?),
+            noun_to_hoon_for_dialect(dialect, r.tail())?,
         ));
     }
     if tag == tas!(b"bccb") {
-        return Ok(Spec::BucCab(noun_to_hoon(rest)?));
+        return Ok(Spec::BucCab(noun_to_hoon_for_dialect(dialect, rest)?));
     }
     if tag == tas!(b"bccl") {
         let r = rest.as_cell().map_err(|_| "spec bccl")?;
         return Ok(Spec::BucCol(
-            Box::new(noun_to_spec(r.head())?),
-            noun_to_list(r.tail(), noun_to_spec)?,
+            Box::new(noun_to_spec(dialect, r.head())?),
+            noun_to_list(r.tail(), |noun| noun_to_spec(dialect, noun))?,
         ));
     }
     if tag == tas!(b"bccn") {
         let r = rest.as_cell().map_err(|_| "spec bccn")?;
         return Ok(Spec::BucCen(
-            Box::new(noun_to_spec(r.head())?),
-            noun_to_list(r.tail(), noun_to_spec)?,
+            Box::new(noun_to_spec(dialect, r.head())?),
+            noun_to_list(r.tail(), |noun| noun_to_spec(dialect, noun))?,
         ));
     }
     if tag == tas!(b"bcdt") {
         let r = rest.as_cell().map_err(|_| "spec bcdt")?;
-        let map: HashMap<String, Spec> =
-            noun_to_treap(r.tail(), |k, v| Ok((noun_to_term(k)?, noun_to_spec(v)?)))?
-                .into_iter()
-                .collect();
-        return Ok(Spec::BucDot(Box::new(noun_to_spec(r.head())?), map));
+        let map: HashMap<String, Spec> = noun_to_treap(r.tail(), |k, v| {
+            Ok((noun_to_term(k)?, noun_to_spec(dialect, v)?))
+        })?
+        .into_iter()
+        .collect();
+        return Ok(Spec::BucDot(
+            Box::new(noun_to_spec(dialect, r.head())?),
+            map,
+        ));
     }
     if tag == tas!(b"bcgl") {
         let r = rest.as_cell().map_err(|_| "spec bcgl")?;
         return Ok(Spec::BucGal(
-            Box::new(noun_to_spec(r.head())?),
-            Box::new(noun_to_spec(r.tail())?),
+            Box::new(noun_to_spec(dialect, r.head())?),
+            Box::new(noun_to_spec(dialect, r.tail())?),
         ));
     }
     if tag == tas!(b"bchp") {
         let r = rest.as_cell().map_err(|_| "spec bchp")?;
         return Ok(Spec::BucHep(
-            Box::new(noun_to_spec(r.head())?),
-            Box::new(noun_to_spec(r.tail())?),
+            Box::new(noun_to_spec(dialect, r.head())?),
+            Box::new(noun_to_spec(dialect, r.tail())?),
         ));
     }
     if tag == tas!(b"bckt") {
         let r = rest.as_cell().map_err(|_| "spec bckt")?;
         return Ok(Spec::BucKet(
-            Box::new(noun_to_spec(r.head())?),
-            Box::new(noun_to_spec(r.tail())?),
+            Box::new(noun_to_spec(dialect, r.head())?),
+            Box::new(noun_to_spec(dialect, r.tail())?),
         ));
     }
     if tag == tas!(b"bcls") {
         let r = rest.as_cell().map_err(|_| "spec bcls")?;
         return Ok(Spec::BucLus(
             noun_to_term(r.head())?,
-            Box::new(noun_to_spec(r.tail())?),
+            Box::new(noun_to_spec(dialect, r.tail())?),
         ));
     }
     if tag == tas!(b"bcfs") {
         let r = rest.as_cell().map_err(|_| "spec bcfs")?;
-        let map: HashMap<String, Spec> =
-            noun_to_treap(r.tail(), |k, v| Ok((noun_to_term(k)?, noun_to_spec(v)?)))?
-                .into_iter()
-                .collect();
-        return Ok(Spec::BucFas(Box::new(noun_to_spec(r.head())?), map));
+        let map: HashMap<String, Spec> = noun_to_treap(r.tail(), |k, v| {
+            Ok((noun_to_term(k)?, noun_to_spec(dialect, v)?))
+        })?
+        .into_iter()
+        .collect();
+        return Ok(Spec::BucFas(
+            Box::new(noun_to_spec(dialect, r.head())?),
+            map,
+        ));
     }
     if tag == tas!(b"bcmc") {
-        return Ok(Spec::BucMic(noun_to_hoon(rest)?));
+        return Ok(Spec::BucMic(noun_to_hoon_for_dialect(dialect, rest)?));
     }
     if tag == tas!(b"bcpm") {
         let r = rest.as_cell().map_err(|_| "spec bcpm")?;
         return Ok(Spec::BucPam(
-            Box::new(noun_to_spec(r.head())?),
-            noun_to_hoon(r.tail())?,
+            Box::new(noun_to_spec(dialect, r.head())?),
+            noun_to_hoon_for_dialect(dialect, r.tail())?,
         ));
     }
     if tag == tas!(b"bcsg") {
         let r = rest.as_cell().map_err(|_| "spec bcsg")?;
         return Ok(Spec::BucSig(
-            noun_to_hoon(r.head())?,
-            Box::new(noun_to_spec(r.tail())?),
+            noun_to_hoon_for_dialect(dialect, r.head())?,
+            Box::new(noun_to_spec(dialect, r.tail())?),
         ));
     }
     if tag == tas!(b"bctc") {
         let r = rest.as_cell().map_err(|_| "spec bctc")?;
-        let map: HashMap<String, Spec> =
-            noun_to_treap(r.tail(), |k, v| Ok((noun_to_term(k)?, noun_to_spec(v)?)))?
-                .into_iter()
-                .collect();
-        return Ok(Spec::BucTic(Box::new(noun_to_spec(r.head())?), map));
+        let map: HashMap<String, Spec> = noun_to_treap(r.tail(), |k, v| {
+            Ok((noun_to_term(k)?, noun_to_spec(dialect, v)?))
+        })?
+        .into_iter()
+        .collect();
+        return Ok(Spec::BucTic(
+            Box::new(noun_to_spec(dialect, r.head())?),
+            map,
+        ));
     }
     if tag == tas!(b"bcts") {
         let r = rest.as_cell().map_err(|_| "spec bcts")?;
         return Ok(Spec::BucTis(
-            noun_to_skin(r.head())?,
-            Box::new(noun_to_spec(r.tail())?),
+            noun_to_skin(dialect, r.head())?,
+            Box::new(noun_to_spec(dialect, r.tail())?),
         ));
     }
     if tag == tas!(b"bcpt") {
         let r = rest.as_cell().map_err(|_| "spec bcpt")?;
         return Ok(Spec::BucPat(
-            Box::new(noun_to_spec(r.head())?),
-            Box::new(noun_to_spec(r.tail())?),
+            Box::new(noun_to_spec(dialect, r.head())?),
+            Box::new(noun_to_spec(dialect, r.tail())?),
         ));
     }
     if tag == tas!(b"bcwt") {
         let r = rest.as_cell().map_err(|_| "spec bcwt")?;
         return Ok(Spec::BucWut(
-            Box::new(noun_to_spec(r.head())?),
-            noun_to_list(r.tail(), noun_to_spec)?,
+            Box::new(noun_to_spec(dialect, r.head())?),
+            noun_to_list(r.tail(), |noun| noun_to_spec(dialect, noun))?,
         ));
     }
     if tag == tas!(b"bczp") {
         let r = rest.as_cell().map_err(|_| "spec bczp")?;
-        let map: HashMap<String, Spec> =
-            noun_to_treap(r.tail(), |k, v| Ok((noun_to_term(k)?, noun_to_spec(v)?)))?
-                .into_iter()
-                .collect();
-        return Ok(Spec::BucZap(Box::new(noun_to_spec(r.head())?), map));
+        let map: HashMap<String, Spec> = noun_to_treap(r.tail(), |k, v| {
+            Ok((noun_to_term(k)?, noun_to_spec(dialect, v)?))
+        })?
+        .into_iter()
+        .collect();
+        return Ok(Spec::BucZap(
+            Box::new(noun_to_spec(dialect, r.head())?),
+            map,
+        ));
     }
     Err(format!("spec: unknown tag {tag}"))
 }
@@ -14520,58 +14642,64 @@ fn noun_to_chum(noun: NounHandle<'_>) -> Result<Chum, String> {
     ))
 }
 
-fn noun_to_term_or_pair(noun: NounHandle<'_>) -> Result<TermOrPair, String> {
+fn noun_to_term_or_pair(dialect: Dialect, noun: NounHandle<'_>) -> Result<TermOrPair, String> {
     if let Ok(_) = noun.as_atom() {
         return Ok(TermOrPair::Term(noun_to_term(noun)?));
     }
     let cell = noun.as_cell().map_err(|_| "term_or_pair")?;
     Ok(TermOrPair::Pair(
         noun_to_term(cell.head())?,
-        Box::new(noun_to_hoon(cell.tail())?),
+        Box::new(noun_to_hoon_for_dialect(dialect, cell.tail())?),
     ))
 }
 
-fn noun_to_woof(noun: NounHandle<'_>) -> Result<Woof, String> {
+fn noun_to_woof(dialect: Dialect, noun: NounHandle<'_>) -> Result<Woof, String> {
     if let Ok(_) = noun.as_atom() {
         return Ok(Woof::ParsedAtom(noun_to_parsed_atom(noun)?));
     }
     // [0 hoon] → Woof::Hoon
     let cell = noun.as_cell().map_err(|_| "woof")?;
-    Ok(Woof::Hoon(noun_to_hoon(cell.tail())?))
+    Ok(Woof::Hoon(noun_to_hoon_for_dialect(dialect, cell.tail())?))
 }
 
-fn noun_to_tome(noun: NounHandle<'_>) -> Result<Tome, String> {
-    // Tome is (What, HashMap<Term, Hoon>). The noun encoding from tome_to_noun
-    // stores [what map] where map is a treap of (term, hoon) entries.
-    let inner = noun.as_cell().map_err(|_| "tome: expected cell")?;
-    let what = if let Ok(atom) = inner.head().as_atom() {
-        if atom.as_direct().is_ok_and(|direct| direct.data() == 0) {
-            None
-        } else {
-            Some(noun_to_noun_expr(inner.head())?)
+fn noun_to_tome(dialect: Dialect, noun: NounHandle<'_>) -> Result<Tome, String> {
+    let (what, arms) = match dialect {
+        Dialect::Urbit => (None, noun),
+        Dialect::Nockchain => {
+            let inner = noun.as_cell().map_err(|_| "tome: expected cell")?;
+            let what = if noun_is_zero_handle(inner.head()) {
+                None
+            } else {
+                Some(noun_to_noun_expr(inner.head())?)
+            };
+            (what, inner.tail())
         }
-    } else {
-        Some(noun_to_noun_expr(inner.head())?)
     };
-    let map: HashMap<String, Hoon> = noun_to_treap(inner.tail(), |k, v| {
-        Ok((noun_to_term(k)?, noun_to_hoon(v)?))
+    let map = noun_to_treap(arms, |k, v| {
+        Ok((noun_to_term(k)?, noun_to_hoon_for_dialect(dialect, v)?))
     })?
     .into_iter()
     .collect();
     Ok((what, map))
 }
 
-fn noun_to_alas(noun: NounHandle<'_>) -> Result<Alas, String> {
+fn noun_to_alas(dialect: Dialect, noun: NounHandle<'_>) -> Result<Alas, String> {
     noun_to_list(noun, |n| {
         let c = n.as_cell().map_err(|_| "alas entry")?;
-        Ok((noun_to_term(c.head())?, noun_to_hoon(c.tail())?))
+        Ok((
+            noun_to_term(c.head())?,
+            noun_to_hoon_for_dialect(dialect, c.tail())?,
+        ))
     })
 }
 
-fn noun_to_tyre(noun: NounHandle<'_>) -> Result<Vec<(String, Hoon)>, String> {
+fn noun_to_tyre(dialect: Dialect, noun: NounHandle<'_>) -> Result<Vec<(String, Hoon)>, String> {
     noun_to_list(noun, |n| {
         let c = n.as_cell().map_err(|_| "tyre entry")?;
-        Ok((noun_to_term(c.head())?, noun_to_hoon(c.tail())?))
+        Ok((
+            noun_to_term(c.head())?,
+            noun_to_hoon_for_dialect(dialect, c.tail())?,
+        ))
     })
 }
 
@@ -14598,8 +14726,11 @@ fn noun_to_mane(noun: NounHandle<'_>) -> Result<Mane, String> {
     ))
 }
 
-fn noun_to_beer(noun: NounHandle<'_>) -> Result<Beer, String> {
+fn noun_to_beer(dialect: Dialect, noun: NounHandle<'_>) -> Result<Beer, String> {
     if let Ok(_) = noun.as_atom() {
+        if dialect == Dialect::Urbit {
+            return Ok(Beer::Atom(noun_to_parsed_atom(noun)?));
+        }
         //  a beer char is one text byte, held as the char with that code
         //  point (see runes/sail.rs); a lone non-ASCII byte is not UTF-8
         if let Some(byte @ 0x80..) = noun_to_parsed_atom(noun)?.to_u8() {
@@ -14609,53 +14740,65 @@ fn noun_to_beer(noun: NounHandle<'_>) -> Result<Beer, String> {
     }
     let cell = noun.as_cell().map_err(|_| "beer")?;
     // [0 hoon]
-    Ok(Beer::Hoon(noun_to_hoon(cell.tail())?))
+    Ok(Beer::Hoon(noun_to_hoon_for_dialect(dialect, cell.tail())?))
 }
 
-fn noun_to_mart(noun: NounHandle<'_>) -> Result<Mart, String> {
+fn noun_to_mart(dialect: Dialect, noun: NounHandle<'_>) -> Result<Mart, String> {
     noun_to_list(noun, |n| {
         let c = n.as_cell().map_err(|_| "mart entry")?;
         let mane = noun_to_mane(c.head())?;
-        let beers = noun_to_list(c.tail(), noun_to_beer)?;
+        let beers = noun_to_list(c.tail(), |noun| noun_to_beer(dialect, noun))?;
         Ok((mane, beers))
     })
 }
 
-fn noun_to_marx(noun: NounHandle<'_>) -> Result<Marx, String> {
+fn noun_to_marx(dialect: Dialect, noun: NounHandle<'_>) -> Result<Marx, String> {
     let cell = noun.as_cell().map_err(|_| "marx")?;
     Ok(Marx {
         n: noun_to_mane(cell.head())?,
-        a: noun_to_mart(cell.tail())?,
+        a: noun_to_mart(dialect, cell.tail())?,
     })
 }
 
-fn noun_to_manx(noun: NounHandle<'_>) -> Result<Manx, String> {
+fn noun_to_manx(dialect: Dialect, noun: NounHandle<'_>) -> Result<Manx, String> {
     let cell = noun.as_cell().map_err(|_| "manx")?;
     Ok(Manx {
-        g: noun_to_marx(cell.head())?,
-        c: noun_to_marl(cell.tail())?,
+        g: noun_to_marx(dialect, cell.head())?,
+        c: noun_to_marl(dialect, cell.tail())?,
     })
 }
 
-fn noun_to_tuna_tail(noun: NounHandle<'_>) -> Result<TunaTail, String> {
+fn noun_to_tuna_tail(dialect: Dialect, noun: NounHandle<'_>) -> Result<TunaTail, String> {
     let cell = noun.as_cell().map_err(|_| "tuna_tail")?;
     let tag = noun_to_direct(cell.head())?;
     if tag == tas!(b"tape") {
-        return Ok(TunaTail::Tape(noun_to_hoon(cell.tail())?));
+        return Ok(TunaTail::Tape(noun_to_hoon_for_dialect(
+            dialect,
+            cell.tail(),
+        )?));
     }
     if tag == tas!(b"manx") {
-        return Ok(TunaTail::Manx(noun_to_hoon(cell.tail())?));
+        return Ok(TunaTail::Manx(noun_to_hoon_for_dialect(
+            dialect,
+            cell.tail(),
+        )?));
     }
     if tag == tas!(b"marl") {
-        return Ok(TunaTail::Marl(noun_to_hoon(cell.tail())?));
+        return Ok(TunaTail::Marl(noun_to_hoon_for_dialect(
+            dialect,
+            cell.tail(),
+        )?));
     }
     if tag == tas!(b"call") {
-        return Ok(TunaTail::Call(noun_to_hoon(cell.tail())?));
+        return Ok(TunaTail::Call(noun_to_hoon_for_dialect(
+            dialect,
+            cell.tail(),
+        )?));
     }
     Err(format!("tuna_tail: unknown tag {tag}"))
 }
 
-fn noun_to_tuna(noun: NounHandle<'_>) -> Result<Tuna, String> {
+fn noun_to_tuna(dialect: Dialect, noun: NounHandle<'_>) -> Result<Tuna, String> {
     // Try as a tuna_tail first (tagged), else try as manx
     if let Ok(cell) = noun.as_cell() {
         if let Ok(tag) = noun_to_direct(cell.head()) {
@@ -14664,15 +14807,15 @@ fn noun_to_tuna(noun: NounHandle<'_>) -> Result<Tuna, String> {
                 || tag == tas!(b"marl")
                 || tag == tas!(b"call")
             {
-                return Ok(Tuna::TunaTail(noun_to_tuna_tail(noun)?));
+                return Ok(Tuna::TunaTail(noun_to_tuna_tail(dialect, noun)?));
             }
         }
     }
-    Ok(Tuna::Manx(noun_to_manx(noun)?))
+    Ok(Tuna::Manx(noun_to_manx(dialect, noun)?))
 }
 
-fn noun_to_marl(noun: NounHandle<'_>) -> Result<Marl, String> {
-    noun_to_list(noun, noun_to_tuna)
+fn noun_to_marl(dialect: Dialect, noun: NounHandle<'_>) -> Result<Marl, String> {
+    noun_to_list(noun, |noun| noun_to_tuna(dialect, noun))
 }
 
 fn noun_to_nock(noun: NounHandle<'_>) -> Result<Nock, String> {
@@ -14776,7 +14919,7 @@ fn noun_to_nock_hint(noun: NounHandle<'_>) -> Result<NockHint, String> {
     ))
 }
 
-fn noun_to_type(noun: NounHandle<'_>) -> Result<Type, String> {
+fn noun_to_type(dialect: Dialect, noun: NounHandle<'_>) -> Result<Type, String> {
     if let Ok(tag) = noun_to_direct(noun) {
         if tag == tas!(b"noun") {
             return Ok(Type::NounExpr);
@@ -14797,8 +14940,8 @@ fn noun_to_type(noun: NounHandle<'_>) -> Result<Type, String> {
     if tag == tas!(b"cell") {
         let r = rest.as_cell().map_err(|_| "type cell")?;
         return Ok(Type::Cell(
-            Box::new(noun_to_type(r.head())?),
-            Box::new(noun_to_type(r.tail())?),
+            Box::new(noun_to_type(dialect, r.head())?),
+            Box::new(noun_to_type(dialect, r.tail())?),
         ));
     }
     if tag == tas!(b"core") {
@@ -14811,28 +14954,29 @@ fn noun_to_type(noun: NounHandle<'_>) -> Result<Type, String> {
         return Err("type: face decoding not fully supported".into());
     }
     if tag == tas!(b"fork") {
-        let types = noun_to_fork_set_options(rest).or_else(|_| noun_to_list(rest, noun_to_type))?;
+        let types = noun_to_fork_set_options(dialect, rest)
+            .or_else(|_| noun_to_list(rest, |noun| noun_to_type(dialect, noun)))?;
         return Ok(Type::Fork(types));
     }
     if tag == tas!(b"hint") {
         let r = rest.as_cell().map_err(|_| "type hint")?;
         let inner_cell = r.head().as_cell().map_err(|_| "type hint inner")?;
-        let inner = noun_to_type(inner_cell.head())?;
+        let inner = noun_to_type(dialect, inner_cell.head())?;
         let note = noun_to_note(inner_cell.tail())?;
-        let payload = noun_to_type(r.tail())?;
+        let payload = noun_to_type(dialect, r.tail())?;
         return Ok(Type::Hint((Box::new(inner), note), Box::new(payload)));
     }
     if tag == tas!(b"hold") {
         let r = rest.as_cell().map_err(|_| "type hold")?;
-        let typ = noun_to_type(r.head())?;
-        let hoon = noun_to_hoon(r.tail())?;
+        let typ = noun_to_type(dialect, r.head())?;
+        let hoon = noun_to_hoon_for_dialect(dialect, r.tail())?;
         return Ok(Type::Hold(Box::new(typ), hoon));
     }
     Err(format!("type: unknown tag {tag}"))
 }
 
 /// Convert a gene noun (as produced by hoonc or `hoon_to_noun`) back to a `Hoon` AST.
-pub fn noun_to_hoon(noun: NounHandle<'_>) -> Result<Hoon, String> {
+pub fn noun_to_hoon_for_dialect(dialect: Dialect, noun: NounHandle<'_>) -> Result<Hoon, String> {
     let cell = noun
         .as_cell()
         .map_err(|_| format!("noun_to_hoon: expected cell, got atom"))?;
@@ -14841,8 +14985,8 @@ pub fn noun_to_hoon(noun: NounHandle<'_>) -> Result<Hoon, String> {
 
     // If head is a cell, this is a Pair (no tag).
     if head.as_cell().is_ok() {
-        let p = noun_to_hoon(head)?;
-        let q = noun_to_hoon(tail)?;
+        let p = noun_to_hoon_for_dialect(dialect, head)?;
+        let q = noun_to_hoon_for_dialect(dialect, tail)?;
         return Ok(Hoon::Pair(Box::new(p), Box::new(q)));
     }
 
@@ -14869,7 +15013,7 @@ pub fn noun_to_hoon(noun: NounHandle<'_>) -> Result<Hoon, String> {
         let r = tail.as_cell().map_err(|_| "dbug")?;
         return Ok(Hoon::Dbug(
             noun_to_spot(r.head())?,
-            Box::new(noun_to_hoon(r.tail())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.tail())?),
         ));
     }
     if tag == tas!(b"eror") {
@@ -14887,7 +15031,7 @@ pub fn noun_to_hoon(noun: NounHandle<'_>) -> Result<Hoon, String> {
     if tag == tas!(b"hand") {
         let r = tail.as_cell().map_err(|_| "hand")?;
         return Ok(Hoon::Hand(
-            Box::new(noun_to_type(r.head())?),
+            Box::new(noun_to_type(dialect, r.head())?),
             noun_to_nock(r.tail())?,
         ));
     }
@@ -14895,18 +15039,20 @@ pub fn noun_to_hoon(noun: NounHandle<'_>) -> Result<Hoon, String> {
         let r = tail.as_cell().map_err(|_| "note")?;
         return Ok(Hoon::Note(
             noun_to_note(r.head())?,
-            Box::new(noun_to_hoon(r.tail())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.tail())?),
         ));
     }
     if tag == tas!(b"fits") {
         let r = tail.as_cell().map_err(|_| "fits")?;
         return Ok(Hoon::Fits(
-            Box::new(noun_to_hoon(r.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.head())?),
             noun_to_wing(r.tail())?,
         ));
     }
     if tag == tas!(b"knit") {
-        return Ok(Hoon::Knit(noun_to_list(tail, noun_to_woof)?));
+        return Ok(Hoon::Knit(noun_to_list(tail, |noun| {
+            noun_to_woof(dialect, noun)
+        })?));
     }
     if tag == tas!(b"leaf") {
         let r = tail.as_cell().map_err(|_| "leaf")?;
@@ -14919,7 +15065,9 @@ pub fn noun_to_hoon(noun: NounHandle<'_>) -> Result<Hoon, String> {
         return Ok(Hoon::Limb(noun_to_term(tail)?));
     }
     if tag == tas!(b"lost") {
-        return Ok(Hoon::Lost(Box::new(noun_to_hoon(tail)?)));
+        return Ok(Hoon::Lost(Box::new(noun_to_hoon_for_dialect(
+            dialect, tail,
+        )?)));
     }
     if tag == tas!(b"rock") {
         let r = tail.as_cell().map_err(|_| "rock")?;
@@ -14936,19 +15084,23 @@ pub fn noun_to_hoon(noun: NounHandle<'_>) -> Result<Hoon, String> {
         ));
     }
     if tag == tas!(b"tell") {
-        return Ok(Hoon::Tell(noun_to_list(tail, noun_to_hoon)?));
+        return Ok(Hoon::Tell(noun_to_list(tail, |noun| {
+            noun_to_hoon_for_dialect(dialect, noun)
+        })?));
     }
     if tag == tas!(b"tune") {
-        return Ok(Hoon::Tune(noun_to_term_or_tune(tail)?));
+        return Ok(Hoon::Tune(noun_to_term_or_tune(dialect, tail)?));
     }
     if tag == tas!(b"wing") {
         return Ok(Hoon::Wing(noun_to_wing(tail)?));
     }
     if tag == tas!(b"yell") {
-        return Ok(Hoon::Yell(noun_to_list(tail, noun_to_hoon)?));
+        return Ok(Hoon::Yell(noun_to_list(tail, |noun| {
+            noun_to_hoon_for_dialect(dialect, noun)
+        })?));
     }
     if tag == tas!(b"xray") {
-        return Ok(Hoon::Xray(noun_to_manx(tail)?));
+        return Ok(Hoon::Xray(noun_to_manx(dialect, tail)?));
     }
 
     // Bar runes
@@ -14956,92 +15108,105 @@ pub fn noun_to_hoon(noun: NounHandle<'_>) -> Result<Hoon, String> {
         let r = tail.as_cell().map_err(|_| "brbc")?;
         return Ok(Hoon::BarBuc(
             noun_to_list(r.head(), noun_to_term)?,
-            Box::new(noun_to_spec(r.tail())?),
+            Box::new(noun_to_spec(dialect, r.tail())?),
         ));
     }
     if tag == tas!(b"brcb") {
         let r = tail.as_cell().map_err(|_| "brcb")?;
         let r2 = r.tail().as_cell().map_err(|_| "brcb")?;
-        let tomes: HashMap<String, Tome> =
-            noun_to_treap(r2.tail(), |k, v| Ok((noun_to_term(k)?, noun_to_tome(v)?)))?
-                .into_iter()
-                .collect();
+        let tomes: HashMap<String, Tome> = noun_to_treap(r2.tail(), |k, v| {
+            Ok((noun_to_term(k)?, noun_to_tome(dialect, v)?))
+        })?
+        .into_iter()
+        .collect();
         return Ok(Hoon::BarCab(
-            Box::new(noun_to_spec(r.head())?),
-            noun_to_alas(r2.head())?,
+            Box::new(noun_to_spec(dialect, r.head())?),
+            noun_to_alas(dialect, r2.head())?,
             tomes,
         ));
     }
     if tag == tas!(b"brcl") {
         let r = tail.as_cell().map_err(|_| "brcl")?;
         return Ok(Hoon::BarCol(
-            Box::new(noun_to_hoon(r.head())?),
-            Box::new(noun_to_hoon(r.tail())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.tail())?),
         ));
     }
     if tag == tas!(b"brcn") {
         let r = tail.as_cell().map_err(|_| "brcn")?;
         let prefix = noun_to_opt(r.head(), noun_to_term)?;
-        let tomes: HashMap<String, Tome> =
-            noun_to_treap(r.tail(), |k, v| Ok((noun_to_term(k)?, noun_to_tome(v)?)))?
-                .into_iter()
-                .collect();
+        let tomes: HashMap<String, Tome> = noun_to_treap(r.tail(), |k, v| {
+            Ok((noun_to_term(k)?, noun_to_tome(dialect, v)?))
+        })?
+        .into_iter()
+        .collect();
         return Ok(Hoon::BarCen(prefix, tomes));
     }
     if tag == tas!(b"brdt") {
-        return Ok(Hoon::BarDot(Box::new(noun_to_hoon(tail)?)));
+        return Ok(Hoon::BarDot(Box::new(noun_to_hoon_for_dialect(
+            dialect, tail,
+        )?)));
     }
     if tag == tas!(b"brkt") {
         let r = tail.as_cell().map_err(|_| "brkt")?;
-        let tomes: HashMap<String, Tome> =
-            noun_to_treap(r.tail(), |k, v| Ok((noun_to_term(k)?, noun_to_tome(v)?)))?
-                .into_iter()
-                .collect();
-        return Ok(Hoon::BarKet(Box::new(noun_to_hoon(r.head())?), tomes));
+        let tomes: HashMap<String, Tome> = noun_to_treap(r.tail(), |k, v| {
+            Ok((noun_to_term(k)?, noun_to_tome(dialect, v)?))
+        })?
+        .into_iter()
+        .collect();
+        return Ok(Hoon::BarKet(
+            Box::new(noun_to_hoon_for_dialect(dialect, r.head())?),
+            tomes,
+        ));
     }
     if tag == tas!(b"brhp") {
-        return Ok(Hoon::BarHep(Box::new(noun_to_hoon(tail)?)));
+        return Ok(Hoon::BarHep(Box::new(noun_to_hoon_for_dialect(
+            dialect, tail,
+        )?)));
     }
     if tag == tas!(b"brsg") {
         let r = tail.as_cell().map_err(|_| "brsg")?;
         return Ok(Hoon::BarSig(
-            Box::new(noun_to_spec(r.head())?),
-            Box::new(noun_to_hoon(r.tail())?),
+            Box::new(noun_to_spec(dialect, r.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.tail())?),
         ));
     }
     if tag == tas!(b"brtr") {
         let r = tail.as_cell().map_err(|_| "brtr")?;
         return Ok(Hoon::BarTar(
-            Box::new(noun_to_spec(r.head())?),
-            Box::new(noun_to_hoon(r.tail())?),
+            Box::new(noun_to_spec(dialect, r.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.tail())?),
         ));
     }
     if tag == tas!(b"brts") {
         let r = tail.as_cell().map_err(|_| "brts")?;
         return Ok(Hoon::BarTis(
-            Box::new(noun_to_spec(r.head())?),
-            Box::new(noun_to_hoon(r.tail())?),
+            Box::new(noun_to_spec(dialect, r.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.tail())?),
         ));
     }
     if tag == tas!(b"brpt") {
         let r = tail.as_cell().map_err(|_| "brpt")?;
         let prefix = noun_to_opt(r.head(), noun_to_term)?;
-        let tomes: HashMap<String, Tome> =
-            noun_to_treap(r.tail(), |k, v| Ok((noun_to_term(k)?, noun_to_tome(v)?)))?
-                .into_iter()
-                .collect();
+        let tomes: HashMap<String, Tome> = noun_to_treap(r.tail(), |k, v| {
+            Ok((noun_to_term(k)?, noun_to_tome(dialect, v)?))
+        })?
+        .into_iter()
+        .collect();
         return Ok(Hoon::BarPat(prefix, tomes));
     }
     if tag == tas!(b"brwt") {
-        return Ok(Hoon::BarWut(Box::new(noun_to_hoon(tail)?)));
+        return Ok(Hoon::BarWut(Box::new(noun_to_hoon_for_dialect(
+            dialect, tail,
+        )?)));
     }
 
     // Col runes
     if tag == tas!(b"clcb") {
         let r = tail.as_cell().map_err(|_| "clcb")?;
         return Ok(Hoon::ColCab(
-            Box::new(noun_to_hoon(r.head())?),
-            Box::new(noun_to_hoon(r.tail())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.tail())?),
         ));
     }
     if tag == tas!(b"clkt") {
@@ -15049,33 +15214,37 @@ pub fn noun_to_hoon(noun: NounHandle<'_>) -> Result<Hoon, String> {
         let r2 = r.tail().as_cell().map_err(|_| "clkt")?;
         let r3 = r2.tail().as_cell().map_err(|_| "clkt")?;
         return Ok(Hoon::ColKet(
-            Box::new(noun_to_hoon(r.head())?),
-            Box::new(noun_to_hoon(r2.head())?),
-            Box::new(noun_to_hoon(r3.head())?),
-            Box::new(noun_to_hoon(r3.tail())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r2.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r3.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r3.tail())?),
         ));
     }
     if tag == tas!(b"clhp") {
         let r = tail.as_cell().map_err(|_| "clhp")?;
         return Ok(Hoon::ColHep(
-            Box::new(noun_to_hoon(r.head())?),
-            Box::new(noun_to_hoon(r.tail())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.tail())?),
         ));
     }
     if tag == tas!(b"clls") {
         let r = tail.as_cell().map_err(|_| "clls")?;
         let r2 = r.tail().as_cell().map_err(|_| "clls")?;
         return Ok(Hoon::ColLus(
-            Box::new(noun_to_hoon(r.head())?),
-            Box::new(noun_to_hoon(r2.head())?),
-            Box::new(noun_to_hoon(r2.tail())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r2.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r2.tail())?),
         ));
     }
     if tag == tas!(b"clsg") {
-        return Ok(Hoon::ColSig(noun_to_list(tail, noun_to_hoon)?));
+        return Ok(Hoon::ColSig(noun_to_list(tail, |noun| {
+            noun_to_hoon_for_dialect(dialect, noun)
+        })?));
     }
     if tag == tas!(b"cltr") {
-        return Ok(Hoon::ColTar(noun_to_list(tail, noun_to_hoon)?));
+        return Ok(Hoon::ColTar(noun_to_list(tail, |noun| {
+            noun_to_hoon_for_dialect(dialect, noun)
+        })?));
     }
 
     // Cen runes
@@ -15083,29 +15252,32 @@ pub fn noun_to_hoon(noun: NounHandle<'_>) -> Result<Hoon, String> {
         let r = tail.as_cell().map_err(|_| "cncb")?;
         let pairs = noun_to_list(r.tail(), |n| {
             let c = n.as_cell().map_err(|_| "cncb pair")?;
-            Ok((noun_to_wing(c.head())?, noun_to_hoon(c.tail())?))
+            Ok((
+                noun_to_wing(c.head())?,
+                noun_to_hoon_for_dialect(dialect, c.tail())?,
+            ))
         })?;
         return Ok(Hoon::CenCab(noun_to_wing(r.head())?, pairs));
     }
     if tag == tas!(b"cndt") {
         let r = tail.as_cell().map_err(|_| "cndt")?;
         return Ok(Hoon::CenDot(
-            Box::new(noun_to_hoon(r.head())?),
-            Box::new(noun_to_hoon(r.tail())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.tail())?),
         ));
     }
     if tag == tas!(b"cnhp") {
         let r = tail.as_cell().map_err(|_| "cnhp")?;
         return Ok(Hoon::CenHep(
-            Box::new(noun_to_hoon(r.head())?),
-            Box::new(noun_to_hoon(r.tail())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.tail())?),
         ));
     }
     if tag == tas!(b"cncl") {
         let r = tail.as_cell().map_err(|_| "cncl")?;
         return Ok(Hoon::CenCol(
-            Box::new(noun_to_hoon(r.head())?),
-            noun_to_list(r.tail(), noun_to_hoon)?,
+            Box::new(noun_to_hoon_for_dialect(dialect, r.head())?),
+            noun_to_list(r.tail(), |noun| noun_to_hoon_for_dialect(dialect, noun))?,
         ));
     }
     if tag == tas!(b"cntr") {
@@ -15113,11 +15285,14 @@ pub fn noun_to_hoon(noun: NounHandle<'_>) -> Result<Hoon, String> {
         let r2 = r.tail().as_cell().map_err(|_| "cntr")?;
         let pairs = noun_to_list(r2.tail(), |n| {
             let c = n.as_cell().map_err(|_| "cntr pair")?;
-            Ok((noun_to_wing(c.head())?, noun_to_hoon(c.tail())?))
+            Ok((
+                noun_to_wing(c.head())?,
+                noun_to_hoon_for_dialect(dialect, c.tail())?,
+            ))
         })?;
         return Ok(Hoon::CenTar(
             noun_to_wing(r.head())?,
-            Box::new(noun_to_hoon(r2.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r2.head())?),
             pairs,
         ));
     }
@@ -15126,19 +15301,19 @@ pub fn noun_to_hoon(noun: NounHandle<'_>) -> Result<Hoon, String> {
         let r2 = r.tail().as_cell().map_err(|_| "cnkt")?;
         let r3 = r2.tail().as_cell().map_err(|_| "cnkt")?;
         return Ok(Hoon::CenKet(
-            Box::new(noun_to_hoon(r.head())?),
-            Box::new(noun_to_hoon(r2.head())?),
-            Box::new(noun_to_hoon(r3.head())?),
-            Box::new(noun_to_hoon(r3.tail())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r2.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r3.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r3.tail())?),
         ));
     }
     if tag == tas!(b"cnls") {
         let r = tail.as_cell().map_err(|_| "cnls")?;
         let r2 = r.tail().as_cell().map_err(|_| "cnls")?;
         return Ok(Hoon::CenLus(
-            Box::new(noun_to_hoon(r.head())?),
-            Box::new(noun_to_hoon(r2.head())?),
-            Box::new(noun_to_hoon(r2.tail())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r2.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r2.tail())?),
         ));
     }
     if tag == tas!(b"cnsg") {
@@ -15146,15 +15321,18 @@ pub fn noun_to_hoon(noun: NounHandle<'_>) -> Result<Hoon, String> {
         let r2 = r.tail().as_cell().map_err(|_| "cnsg")?;
         return Ok(Hoon::CenSig(
             noun_to_wing(r.head())?,
-            Box::new(noun_to_hoon(r2.head())?),
-            noun_to_list(r2.tail(), noun_to_hoon)?,
+            Box::new(noun_to_hoon_for_dialect(dialect, r2.head())?),
+            noun_to_list(r2.tail(), |noun| noun_to_hoon_for_dialect(dialect, noun))?,
         ));
     }
     if tag == tas!(b"cnts") {
         let r = tail.as_cell().map_err(|_| "cnts")?;
         let pairs = noun_to_list(r.tail(), |n| {
             let c = n.as_cell().map_err(|_| "cnts pair")?;
-            Ok((noun_to_wing(c.head())?, noun_to_hoon(c.tail())?))
+            Ok((
+                noun_to_wing(c.head())?,
+                noun_to_hoon_for_dialect(dialect, c.tail())?,
+            ))
         })?;
         return Ok(Hoon::CenTis(noun_to_wing(r.head())?, pairs));
     }
@@ -15163,92 +15341,111 @@ pub fn noun_to_hoon(noun: NounHandle<'_>) -> Result<Hoon, String> {
     if tag == tas!(b"dtkt") {
         let r = tail.as_cell().map_err(|_| "dtkt")?;
         return Ok(Hoon::DotKet(
-            Box::new(noun_to_spec(r.head())?),
-            Box::new(noun_to_hoon(r.tail())?),
+            Box::new(noun_to_spec(dialect, r.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.tail())?),
         ));
     }
     if tag == tas!(b"dtls") {
-        return Ok(Hoon::DotLus(Box::new(noun_to_hoon(tail)?)));
+        return Ok(Hoon::DotLus(Box::new(noun_to_hoon_for_dialect(
+            dialect, tail,
+        )?)));
     }
     if tag == tas!(b"dttr") {
         let r = tail.as_cell().map_err(|_| "dttr")?;
         return Ok(Hoon::DotTar(
-            Box::new(noun_to_hoon(r.head())?),
-            Box::new(noun_to_hoon(r.tail())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.tail())?),
         ));
     }
     if tag == tas!(b"dtts") {
         let r = tail.as_cell().map_err(|_| "dtts")?;
         return Ok(Hoon::DotTis(
-            Box::new(noun_to_hoon(r.head())?),
-            Box::new(noun_to_hoon(r.tail())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.tail())?),
         ));
     }
     if tag == tas!(b"dtwt") {
-        return Ok(Hoon::DotWut(Box::new(noun_to_hoon(tail)?)));
+        return Ok(Hoon::DotWut(Box::new(noun_to_hoon_for_dialect(
+            dialect, tail,
+        )?)));
     }
 
     // Ket runes
     if tag == tas!(b"ktbr") {
-        return Ok(Hoon::KetBar(Box::new(noun_to_hoon(tail)?)));
+        return Ok(Hoon::KetBar(Box::new(noun_to_hoon_for_dialect(
+            dialect, tail,
+        )?)));
     }
     if tag == tas!(b"ktdt") {
         let r = tail.as_cell().map_err(|_| "ktdt")?;
         return Ok(Hoon::KetDot(
-            Box::new(noun_to_hoon(r.head())?),
-            Box::new(noun_to_hoon(r.tail())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.tail())?),
+        ));
+    }
+    if tag == tas!(b"ktcb") {
+        let r = tail.as_cell().map_err(|_| "ktcb")?;
+        return Ok(Hoon::KetCab(
+            Box::new(noun_to_hoon_for_dialect(dialect, r.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.tail())?),
         ));
     }
     if tag == tas!(b"ktls") {
         let r = tail.as_cell().map_err(|_| "ktls")?;
         return Ok(Hoon::KetLus(
-            Box::new(noun_to_hoon(r.head())?),
-            Box::new(noun_to_hoon(r.tail())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.tail())?),
         ));
     }
     if tag == tas!(b"kthp") {
         let r = tail.as_cell().map_err(|_| "kthp")?;
         return Ok(Hoon::KetHep(
-            Box::new(noun_to_spec(r.head())?),
-            Box::new(noun_to_hoon(r.tail())?),
+            Box::new(noun_to_spec(dialect, r.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.tail())?),
         ));
     }
     if tag == tas!(b"ktpm") {
-        return Ok(Hoon::KetPam(Box::new(noun_to_hoon(tail)?)));
+        return Ok(Hoon::KetPam(Box::new(noun_to_hoon_for_dialect(
+            dialect, tail,
+        )?)));
     }
     if tag == tas!(b"ktsg") {
-        return Ok(Hoon::KetSig(Box::new(noun_to_hoon(tail)?)));
+        return Ok(Hoon::KetSig(Box::new(noun_to_hoon_for_dialect(
+            dialect, tail,
+        )?)));
     }
     if tag == tas!(b"ktts") {
         let r = tail.as_cell().map_err(|_| "ktts")?;
         return Ok(Hoon::KetTis(
-            noun_to_skin(r.head())?,
-            Box::new(noun_to_hoon(r.tail())?),
+            noun_to_skin(dialect, r.head())?,
+            Box::new(noun_to_hoon_for_dialect(dialect, r.tail())?),
         ));
     }
     if tag == tas!(b"ktwt") {
-        return Ok(Hoon::KetWut(Box::new(noun_to_hoon(tail)?)));
+        return Ok(Hoon::KetWut(Box::new(noun_to_hoon_for_dialect(
+            dialect, tail,
+        )?)));
     }
     if tag == tas!(b"kttr") {
-        return Ok(Hoon::KetTar(Box::new(noun_to_spec(tail)?)));
+        return Ok(Hoon::KetTar(Box::new(noun_to_spec(dialect, tail)?)));
     }
     if tag == tas!(b"ktcl") {
-        return Ok(Hoon::KetCol(Box::new(noun_to_spec(tail)?)));
+        return Ok(Hoon::KetCol(Box::new(noun_to_spec(dialect, tail)?)));
     }
 
     // Sig runes
     if tag == tas!(b"sgbr") {
         let r = tail.as_cell().map_err(|_| "sgbr")?;
         return Ok(Hoon::SigBar(
-            Box::new(noun_to_hoon(r.head())?),
-            Box::new(noun_to_hoon(r.tail())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.tail())?),
         ));
     }
     if tag == tas!(b"sgcb") {
         let r = tail.as_cell().map_err(|_| "sgcb")?;
         return Ok(Hoon::SigCab(
-            Box::new(noun_to_hoon(r.head())?),
-            Box::new(noun_to_hoon(r.tail())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.tail())?),
         ));
     }
     if tag == tas!(b"sgcn") {
@@ -15257,44 +15454,44 @@ pub fn noun_to_hoon(noun: NounHandle<'_>) -> Result<Hoon, String> {
         let r3 = r2.tail().as_cell().map_err(|_| "sgcn")?;
         return Ok(Hoon::SigCen(
             noun_to_chum(r.head())?,
-            Box::new(noun_to_hoon(r2.head())?),
-            noun_to_tyre(r3.head())?,
-            Box::new(noun_to_hoon(r3.tail())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r2.head())?),
+            noun_to_tyre(dialect, r3.head())?,
+            Box::new(noun_to_hoon_for_dialect(dialect, r3.tail())?),
         ));
     }
     if tag == tas!(b"sgfs") {
         let r = tail.as_cell().map_err(|_| "sgfs")?;
         return Ok(Hoon::SigFas(
             noun_to_chum(r.head())?,
-            Box::new(noun_to_hoon(r.tail())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.tail())?),
         ));
     }
     if tag == tas!(b"sggl") {
         let r = tail.as_cell().map_err(|_| "sggl")?;
         return Ok(Hoon::SigGal(
-            noun_to_term_or_pair(r.head())?,
-            Box::new(noun_to_hoon(r.tail())?),
+            noun_to_term_or_pair(dialect, r.head())?,
+            Box::new(noun_to_hoon_for_dialect(dialect, r.tail())?),
         ));
     }
     if tag == tas!(b"sggr") {
         let r = tail.as_cell().map_err(|_| "sggr")?;
         return Ok(Hoon::SigGar(
-            noun_to_term_or_pair(r.head())?,
-            Box::new(noun_to_hoon(r.tail())?),
+            noun_to_term_or_pair(dialect, r.head())?,
+            Box::new(noun_to_hoon_for_dialect(dialect, r.tail())?),
         ));
     }
     if tag == tas!(b"sgbc") {
         let r = tail.as_cell().map_err(|_| "sgbc")?;
         return Ok(Hoon::SigBuc(
             noun_to_term(r.head())?,
-            Box::new(noun_to_hoon(r.tail())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.tail())?),
         ));
     }
     if tag == tas!(b"sgls") {
         let r = tail.as_cell().map_err(|_| "sgls")?;
         return Ok(Hoon::SigLus(
             noun_to_direct(r.head())?,
-            Box::new(noun_to_hoon(r.tail())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.tail())?),
         ));
     }
     if tag == tas!(b"sgpm") {
@@ -15302,15 +15499,15 @@ pub fn noun_to_hoon(noun: NounHandle<'_>) -> Result<Hoon, String> {
         let r2 = r.tail().as_cell().map_err(|_| "sgpm")?;
         return Ok(Hoon::SigPam(
             noun_to_direct(r.head())?,
-            Box::new(noun_to_hoon(r2.head())?),
-            Box::new(noun_to_hoon(r2.tail())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r2.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r2.tail())?),
         ));
     }
     if tag == tas!(b"sgts") {
         let r = tail.as_cell().map_err(|_| "sgts")?;
         return Ok(Hoon::SigTis(
-            Box::new(noun_to_hoon(r.head())?),
-            Box::new(noun_to_hoon(r.tail())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.tail())?),
         ));
     }
     if tag == tas!(b"sgwt") {
@@ -15319,56 +15516,58 @@ pub fn noun_to_hoon(noun: NounHandle<'_>) -> Result<Hoon, String> {
         let r3 = r2.tail().as_cell().map_err(|_| "sgwt")?;
         return Ok(Hoon::SigWut(
             noun_to_direct(r.head())?,
-            Box::new(noun_to_hoon(r2.head())?),
-            Box::new(noun_to_hoon(r3.head())?),
-            Box::new(noun_to_hoon(r3.tail())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r2.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r3.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r3.tail())?),
         ));
     }
     if tag == tas!(b"sgzp") {
         let r = tail.as_cell().map_err(|_| "sgzp")?;
         return Ok(Hoon::SigZap(
-            Box::new(noun_to_hoon(r.head())?),
-            Box::new(noun_to_hoon(r.tail())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.tail())?),
         ));
     }
 
     // Mic runes
     if tag == tas!(b"mcts") {
-        return Ok(Hoon::MicTis(noun_to_marl(tail)?));
+        return Ok(Hoon::MicTis(noun_to_marl(dialect, tail)?));
     }
     if tag == tas!(b"mccl") {
         let r = tail.as_cell().map_err(|_| "mccl")?;
         return Ok(Hoon::MicCol(
-            Box::new(noun_to_hoon(r.head())?),
-            noun_to_list(r.tail(), noun_to_hoon)?,
+            Box::new(noun_to_hoon_for_dialect(dialect, r.head())?),
+            noun_to_list(r.tail(), |noun| noun_to_hoon_for_dialect(dialect, noun))?,
         ));
     }
     if tag == tas!(b"mcfs") {
-        return Ok(Hoon::MicFas(Box::new(noun_to_hoon(tail)?)));
+        return Ok(Hoon::MicFas(Box::new(noun_to_hoon_for_dialect(
+            dialect, tail,
+        )?)));
     }
     if tag == tas!(b"mcgl") {
         let r = tail.as_cell().map_err(|_| "mcgl")?;
         let r2 = r.tail().as_cell().map_err(|_| "mcgl")?;
         let r3 = r2.tail().as_cell().map_err(|_| "mcgl")?;
         return Ok(Hoon::MicGal(
-            Box::new(noun_to_spec(r.head())?),
-            Box::new(noun_to_hoon(r2.head())?),
-            Box::new(noun_to_hoon(r3.head())?),
-            Box::new(noun_to_hoon(r3.tail())?),
+            Box::new(noun_to_spec(dialect, r.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r2.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r3.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r3.tail())?),
         ));
     }
     if tag == tas!(b"mcsg") {
         let r = tail.as_cell().map_err(|_| "mcsg")?;
         return Ok(Hoon::MicSig(
-            Box::new(noun_to_hoon(r.head())?),
-            noun_to_list(r.tail(), noun_to_hoon)?,
+            Box::new(noun_to_hoon_for_dialect(dialect, r.head())?),
+            noun_to_list(r.tail(), |noun| noun_to_hoon_for_dialect(dialect, noun))?,
         ));
     }
     if tag == tas!(b"mcmc") {
         let r = tail.as_cell().map_err(|_| "mcmc")?;
         return Ok(Hoon::MicMic(
-            Box::new(noun_to_spec(r.head())?),
-            Box::new(noun_to_hoon(r.tail())?),
+            Box::new(noun_to_spec(dialect, r.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.tail())?),
         ));
     }
 
@@ -15376,34 +15575,40 @@ pub fn noun_to_hoon(noun: NounHandle<'_>) -> Result<Hoon, String> {
     if tag == tas!(b"tsbr") {
         let r = tail.as_cell().map_err(|_| "tsbr")?;
         return Ok(Hoon::TisBar(
-            Box::new(noun_to_spec(r.head())?),
-            Box::new(noun_to_hoon(r.tail())?),
+            Box::new(noun_to_spec(dialect, r.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.tail())?),
         ));
     }
     if tag == tas!(b"tscl") {
         let r = tail.as_cell().map_err(|_| "tscl")?;
         let pairs = noun_to_list(r.head(), |n| {
             let c = n.as_cell().map_err(|_| "tscl pair")?;
-            Ok((noun_to_wing(c.head())?, noun_to_hoon(c.tail())?))
+            Ok((
+                noun_to_wing(c.head())?,
+                noun_to_hoon_for_dialect(dialect, c.tail())?,
+            ))
         })?;
-        return Ok(Hoon::TisCol(pairs, Box::new(noun_to_hoon(r.tail())?)));
+        return Ok(Hoon::TisCol(
+            pairs,
+            Box::new(noun_to_hoon_for_dialect(dialect, r.tail())?),
+        ));
     }
     if tag == tas!(b"tsfs") {
         let r = tail.as_cell().map_err(|_| "tsfs")?;
         let r2 = r.tail().as_cell().map_err(|_| "tsfs")?;
         return Ok(Hoon::TisFas(
-            noun_to_skin(r.head())?,
-            Box::new(noun_to_hoon(r2.head())?),
-            Box::new(noun_to_hoon(r2.tail())?),
+            noun_to_skin(dialect, r.head())?,
+            Box::new(noun_to_hoon_for_dialect(dialect, r2.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r2.tail())?),
         ));
     }
     if tag == tas!(b"tsmc") {
         let r = tail.as_cell().map_err(|_| "tsmc")?;
         let r2 = r.tail().as_cell().map_err(|_| "tsmc")?;
         return Ok(Hoon::TisMic(
-            noun_to_skin(r.head())?,
-            Box::new(noun_to_hoon(r2.head())?),
-            Box::new(noun_to_hoon(r2.tail())?),
+            noun_to_skin(dialect, r.head())?,
+            Box::new(noun_to_hoon_for_dialect(dialect, r2.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r2.tail())?),
         ));
     }
     if tag == tas!(b"tsdt") {
@@ -15411,8 +15616,8 @@ pub fn noun_to_hoon(noun: NounHandle<'_>) -> Result<Hoon, String> {
         let r2 = r.tail().as_cell().map_err(|_| "tsdt")?;
         return Ok(Hoon::TisDot(
             noun_to_wing(r.head())?,
-            Box::new(noun_to_hoon(r2.head())?),
-            Box::new(noun_to_hoon(r2.tail())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r2.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r2.tail())?),
         ));
     }
     if tag == tas!(b"tswt") {
@@ -15421,30 +15626,30 @@ pub fn noun_to_hoon(noun: NounHandle<'_>) -> Result<Hoon, String> {
         let r3 = r2.tail().as_cell().map_err(|_| "tswt")?;
         return Ok(Hoon::TisWut(
             noun_to_wing(r.head())?,
-            Box::new(noun_to_hoon(r2.head())?),
-            Box::new(noun_to_hoon(r3.head())?),
-            Box::new(noun_to_hoon(r3.tail())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r2.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r3.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r3.tail())?),
         ));
     }
     if tag == tas!(b"tsgl") {
         let r = tail.as_cell().map_err(|_| "tsgl")?;
         return Ok(Hoon::TisGal(
-            Box::new(noun_to_hoon(r.head())?),
-            Box::new(noun_to_hoon(r.tail())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.tail())?),
         ));
     }
     if tag == tas!(b"tshp") {
         let r = tail.as_cell().map_err(|_| "tshp")?;
         return Ok(Hoon::TisHep(
-            Box::new(noun_to_hoon(r.head())?),
-            Box::new(noun_to_hoon(r.tail())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.tail())?),
         ));
     }
     if tag == tas!(b"tsgr") {
         let r = tail.as_cell().map_err(|_| "tsgr")?;
         return Ok(Hoon::TisGar(
-            Box::new(noun_to_hoon(r.head())?),
-            Box::new(noun_to_hoon(r.tail())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.tail())?),
         ));
     }
     if tag == tas!(b"tskt") {
@@ -15452,51 +15657,58 @@ pub fn noun_to_hoon(noun: NounHandle<'_>) -> Result<Hoon, String> {
         let r2 = r.tail().as_cell().map_err(|_| "tskt")?;
         let r3 = r2.tail().as_cell().map_err(|_| "tskt")?;
         return Ok(Hoon::TisKet(
-            noun_to_skin(r.head())?,
+            noun_to_skin(dialect, r.head())?,
             noun_to_wing(r2.head())?,
-            Box::new(noun_to_hoon(r3.head())?),
-            Box::new(noun_to_hoon(r3.tail())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r3.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r3.tail())?),
         ));
     }
     if tag == tas!(b"tsls") {
         let r = tail.as_cell().map_err(|_| "tsls")?;
         return Ok(Hoon::TisLus(
-            Box::new(noun_to_hoon(r.head())?),
-            Box::new(noun_to_hoon(r.tail())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.tail())?),
         ));
     }
     if tag == tas!(b"tssg") || tag == tas!(b"tsig") {
-        return Ok(Hoon::TisSig(noun_to_list(tail, noun_to_hoon)?));
+        return Ok(Hoon::TisSig(noun_to_list(tail, |noun| {
+            noun_to_hoon_for_dialect(dialect, noun)
+        })?));
     }
     if tag == tas!(b"tstr") {
         let r = tail.as_cell().map_err(|_| "tstr")?;
         let name_spec = r.head().as_cell().map_err(|_| "tstr name_spec")?;
         let name = noun_to_term(name_spec.head())?;
-        let spec_opt = noun_to_opt(name_spec.tail(), noun_to_spec)?;
+        let spec_opt = noun_to_opt(name_spec.tail(), |noun| noun_to_spec(dialect, noun))?;
         let r2 = r.tail().as_cell().map_err(|_| "tstr")?;
         return Ok(Hoon::TisTar(
             (name, spec_opt.map(Box::new)),
-            Box::new(noun_to_hoon(r2.head())?),
-            Box::new(noun_to_hoon(r2.tail())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r2.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r2.tail())?),
         ));
     }
     if tag == tas!(b"tscm") {
         let r = tail.as_cell().map_err(|_| "tscm")?;
         return Ok(Hoon::TisCom(
-            Box::new(noun_to_hoon(r.head())?),
-            Box::new(noun_to_hoon(r.tail())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.tail())?),
         ));
     }
 
     // Wut runes
     if tag == tas!(b"wtbr") {
-        return Ok(Hoon::WutBar(noun_to_list(tail, noun_to_hoon)?));
+        return Ok(Hoon::WutBar(noun_to_list(tail, |noun| {
+            noun_to_hoon_for_dialect(dialect, noun)
+        })?));
     }
     if tag == tas!(b"wthp") {
         let r = tail.as_cell().map_err(|_| "wthp")?;
         let pairs = noun_to_list(r.tail(), |n| {
             let c = n.as_cell().map_err(|_| "wthp pair")?;
-            Ok((noun_to_spec(c.head())?, noun_to_hoon(c.tail())?))
+            Ok((
+                noun_to_spec(dialect, c.head())?,
+                noun_to_hoon_for_dialect(dialect, c.tail())?,
+            ))
         })?;
         return Ok(Hoon::WutHep(noun_to_wing(r.head())?, pairs));
     }
@@ -15504,18 +15716,18 @@ pub fn noun_to_hoon(noun: NounHandle<'_>) -> Result<Hoon, String> {
         let r = tail.as_cell().map_err(|_| "wtcl")?;
         let r2 = r.tail().as_cell().map_err(|_| "wtcl")?;
         return Ok(Hoon::WutCol(
-            Box::new(noun_to_hoon(r.head())?),
-            Box::new(noun_to_hoon(r2.head())?),
-            Box::new(noun_to_hoon(r2.tail())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r2.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r2.tail())?),
         ));
     }
     if tag == tas!(b"wtdt") {
         let r = tail.as_cell().map_err(|_| "wtdt")?;
         let r2 = r.tail().as_cell().map_err(|_| "wtdt")?;
         return Ok(Hoon::WutDot(
-            Box::new(noun_to_hoon(r.head())?),
-            Box::new(noun_to_hoon(r2.head())?),
-            Box::new(noun_to_hoon(r2.tail())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r2.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r2.tail())?),
         ));
     }
     if tag == tas!(b"wtkt") {
@@ -15523,22 +15735,22 @@ pub fn noun_to_hoon(noun: NounHandle<'_>) -> Result<Hoon, String> {
         let r2 = r.tail().as_cell().map_err(|_| "wtkt")?;
         return Ok(Hoon::WutKet(
             noun_to_wing(r.head())?,
-            Box::new(noun_to_hoon(r2.head())?),
-            Box::new(noun_to_hoon(r2.tail())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r2.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r2.tail())?),
         ));
     }
     if tag == tas!(b"wtgl") {
         let r = tail.as_cell().map_err(|_| "wtgl")?;
         return Ok(Hoon::WutGal(
-            Box::new(noun_to_hoon(r.head())?),
-            Box::new(noun_to_hoon(r.tail())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.tail())?),
         ));
     }
     if tag == tas!(b"wtgr") {
         let r = tail.as_cell().map_err(|_| "wtgr")?;
         return Ok(Hoon::WutGar(
-            Box::new(noun_to_hoon(r.head())?),
-            Box::new(noun_to_hoon(r.tail())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.tail())?),
         ));
     }
     if tag == tas!(b"wtls") {
@@ -15546,24 +15758,29 @@ pub fn noun_to_hoon(noun: NounHandle<'_>) -> Result<Hoon, String> {
         let r2 = r.tail().as_cell().map_err(|_| "wtls")?;
         let pairs = noun_to_list(r2.tail(), |n| {
             let c = n.as_cell().map_err(|_| "wtls pair")?;
-            Ok((noun_to_spec(c.head())?, noun_to_hoon(c.tail())?))
+            Ok((
+                noun_to_spec(dialect, c.head())?,
+                noun_to_hoon_for_dialect(dialect, c.tail())?,
+            ))
         })?;
         return Ok(Hoon::WutLus(
             noun_to_wing(r.head())?,
-            Box::new(noun_to_hoon(r2.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r2.head())?),
             pairs,
         ));
     }
     if tag == tas!(b"wtpm") {
-        return Ok(Hoon::WutPam(noun_to_list(tail, noun_to_hoon)?));
+        return Ok(Hoon::WutPam(noun_to_list(tail, |noun| {
+            noun_to_hoon_for_dialect(dialect, noun)
+        })?));
     }
     if tag == tas!(b"wtpt") {
         let r = tail.as_cell().map_err(|_| "wtpt")?;
         let r2 = r.tail().as_cell().map_err(|_| "wtpt")?;
         return Ok(Hoon::WutPat(
             noun_to_wing(r.head())?,
-            Box::new(noun_to_hoon(r2.head())?),
-            Box::new(noun_to_hoon(r2.tail())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r2.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r2.tail())?),
         ));
     }
     if tag == tas!(b"wtsg") {
@@ -15571,70 +15788,80 @@ pub fn noun_to_hoon(noun: NounHandle<'_>) -> Result<Hoon, String> {
         let r2 = r.tail().as_cell().map_err(|_| "wtsg")?;
         return Ok(Hoon::WutSig(
             noun_to_wing(r.head())?,
-            Box::new(noun_to_hoon(r2.head())?),
-            Box::new(noun_to_hoon(r2.tail())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r2.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r2.tail())?),
         ));
     }
     if tag == tas!(b"wthx") {
         let r = tail.as_cell().map_err(|_| "wthx")?;
         return Ok(Hoon::WutHax(
-            noun_to_skin(r.head())?,
+            noun_to_skin(dialect, r.head())?,
             noun_to_wing(r.tail())?,
         ));
     }
     if tag == tas!(b"wtts") {
         let r = tail.as_cell().map_err(|_| "wtts")?;
         return Ok(Hoon::WutTis(
-            Box::new(noun_to_spec(r.head())?),
+            Box::new(noun_to_spec(dialect, r.head())?),
             noun_to_wing(r.tail())?,
         ));
     }
     if tag == tas!(b"wtzp") {
-        return Ok(Hoon::WutZap(Box::new(noun_to_hoon(tail)?)));
+        return Ok(Hoon::WutZap(Box::new(noun_to_hoon_for_dialect(
+            dialect, tail,
+        )?)));
     }
 
     // Zap runes
     if tag == tas!(b"zpcm") {
         let r = tail.as_cell().map_err(|_| "zpcm")?;
         return Ok(Hoon::ZapCom(
-            Box::new(noun_to_hoon(r.head())?),
-            Box::new(noun_to_hoon(r.tail())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.tail())?),
         ));
     }
     if tag == tas!(b"zpgr") {
-        return Ok(Hoon::ZapGar(Box::new(noun_to_hoon(tail)?)));
+        return Ok(Hoon::ZapGar(Box::new(noun_to_hoon_for_dialect(
+            dialect, tail,
+        )?)));
     }
     if tag == tas!(b"zpgl") {
         let r = tail.as_cell().map_err(|_| "zpgl")?;
         return Ok(Hoon::ZapGal(
-            Box::new(noun_to_spec(r.head())?),
-            Box::new(noun_to_hoon(r.tail())?),
+            Box::new(noun_to_spec(dialect, r.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.tail())?),
         ));
     }
     if tag == tas!(b"zpmc") {
         let r = tail.as_cell().map_err(|_| "zpmc")?;
         return Ok(Hoon::ZapMic(
-            Box::new(noun_to_hoon(r.head())?),
-            Box::new(noun_to_hoon(r.tail())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.head())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.tail())?),
         ));
     }
     if tag == tas!(b"zpts") {
-        return Ok(Hoon::ZapTis(Box::new(noun_to_hoon(tail)?)));
+        return Ok(Hoon::ZapTis(Box::new(noun_to_hoon_for_dialect(
+            dialect, tail,
+        )?)));
     }
     if tag == tas!(b"zppt") {
         let r = tail.as_cell().map_err(|_| "zppt")?;
         let r2 = r.tail().as_cell().map_err(|_| "zppt")?;
+        let (present, absent) = match dialect {
+            Dialect::Nockchain => (r2.head(), r2.tail()),
+            Dialect::Urbit => (r2.tail(), r2.head()),
+        };
         return Ok(Hoon::ZapPat(
             noun_to_list(r.head(), noun_to_wing)?,
-            Box::new(noun_to_hoon(r2.head())?),
-            Box::new(noun_to_hoon(r2.tail())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, present)?),
+            Box::new(noun_to_hoon_for_dialect(dialect, absent)?),
         ));
     }
     if tag == tas!(b"zpwt") {
         let r = tail.as_cell().map_err(|_| "zpwt")?;
         return Ok(Hoon::ZapWut(
             noun_to_zpwt_arg(r.head())?,
-            Box::new(noun_to_hoon(r.tail())?),
+            Box::new(noun_to_hoon_for_dialect(dialect, r.tail())?),
         ));
     }
 
@@ -15649,7 +15876,7 @@ pub fn noun_to_hoon(noun: NounHandle<'_>) -> Result<Hoon, String> {
     Err(format!("noun_to_hoon: unknown tag {tag} ({tag_str})"))
 }
 
-fn noun_to_term_or_tune(noun: NounHandle<'_>) -> Result<TermOrTune, String> {
+fn noun_to_term_or_tune(dialect: Dialect, noun: NounHandle<'_>) -> Result<TermOrTune, String> {
     if let Ok(_) = noun.as_atom() {
         return Ok(TermOrTune::Term(noun_to_term(noun)?));
     }
@@ -15657,10 +15884,10 @@ fn noun_to_term_or_tune(noun: NounHandle<'_>) -> Result<TermOrTune, String> {
     let cell = noun.as_cell().map_err(|_| "term_or_tune")?;
     let map = noun_to_treap(cell.head(), |k, v| {
         let term = noun_to_term(k)?;
-        let opt = noun_to_opt(v, noun_to_hoon)?;
+        let opt = noun_to_opt(v, |noun| noun_to_hoon_for_dialect(dialect, noun))?;
         Ok((term, opt))
     })?;
-    let vec = noun_to_list(cell.tail(), noun_to_hoon)?;
+    let vec = noun_to_list(cell.tail(), |noun| noun_to_hoon_for_dialect(dialect, noun))?;
     Ok(TermOrTune::Tune((map.into_iter().collect(), vec)))
 }
 

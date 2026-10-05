@@ -6,6 +6,24 @@ use num_bigint::BigUint;
 use num_traits::Zero;
 use serde::Serialize;
 
+/// Compiler noun layout and Kelvin selected for a source project.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Dialect {
+    #[default]
+    Nockchain,
+    Urbit,
+}
+
+impl Dialect {
+    pub fn kelvin(self) -> u64 {
+        match self {
+            Self::Nockchain => 138,
+            Self::Urbit => 135,
+        }
+    }
+}
+
 #[derive(serde::Serialize, Hash, Eq, PartialEq, Debug, Clone)]
 pub enum NounExpr {
     ParsedAtom(ParsedAtom),
@@ -332,6 +350,7 @@ pub type Block = Vec<Path>;
 #[derive(serde::Serialize, PartialEq, Debug, Clone)]
 pub enum Beer {
     Char(Cord),
+    Atom(ParsedAtom),
     Hoon(Hoon),
 }
 
@@ -659,6 +678,7 @@ pub enum Hoon {
     DotTis(Box<Hoon>, Box<Hoon>),
     DotWut(Box<Hoon>),
     KetBar(Box<Hoon>),
+    KetCab(Box<Hoon>, Box<Hoon>),
     KetDot(Box<Hoon>, Box<Hoon>),
     KetLus(Box<Hoon>, Box<Hoon>),
     KetHep(Box<Spec>, Box<Hoon>),

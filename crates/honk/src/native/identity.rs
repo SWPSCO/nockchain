@@ -50,6 +50,8 @@ identity!(/// Signature of the active placeholder recursion guards.
     PlaceholderSignature, u64);
 identity!(/// Compile-local lazy core resolver, serialized at noun boundaries.
     LazyResolverId, u64);
+identity!(/// Interned compiler context captured by a lazy resolver.
+    LazyScopeId, u64);
 identity!(/// A small atom's numeric value (which need not fit a direct noun).
     AtomValue, u64);
 identity!(/// Identity assigned by the structural noun type interner.

@@ -10,15 +10,14 @@ use std::rc::Rc as SharedRc;
 use std::sync::Arc;
 
 use hatch::ast::hoon::{
-    Alas, Axis as AstAxis, BaseType, Beer, Block, Chum, Coil, Cord, FaceType, Garb, Gate, Hoon,
-    Knot, Limb, Mane, Manx, Marl, Mart, Marx, Nock, NockHint, Note, NounExpr, ParsedAtom, Path,
-    Pint, Poly as AstPoly, SemiNounExpr, Skin, Spec, Spot, Stencil, TermOrPair, TermOrTune, Tome,
-    Tuna, TunaTail, Tune, Type, Tyre, Vair as AstVair, WingType, Woof, ZpwtArg,
+    Alas, Axis as AstAxis, BaseType, Beer, Chum, Coil, Cord, FaceType, Garb, Hoon, Knot, Limb,
+    Mane, Manx, Marl, Mart, Marx, Nock, NockHint, Note, NounExpr, ParsedAtom, Path, Pint,
+    Poly as AstPoly, SemiNounExpr, Skin, Spec, Spot, Stencil, TermOrPair, TermOrTune, Tome, Tuna,
+    TunaTail, Tune, Type, Tyre, Vair as AstVair, WingType, Woof, ZpwtArg,
 };
-use hatch::utils::{
-    chum_to_nounexpr, example, factory, grip, hoon_to_noun, hoon_to_noun_with_cache, noun_to_hoon,
-    open, reek, string_to_atom,
-};
+#[cfg(test)]
+use hatch::utils::hoon_to_noun;
+use hatch::utils::{chum_to_nounexpr, example, factory, grip, open, reek, string_to_atom};
 use nockapp::noun::slab::NounSlab;
 use nockapp::noun::NounAllocatorExt;
 use nockapp::utils::{create_context, NOCK_STACK_SIZE_MEDIUM};
@@ -49,6 +48,7 @@ use crate::native::noun::{
 #[cfg(test)]
 use crate::native::noun::{noun_eq_direct, noun_pair};
 
+mod export;
 mod find;
 mod fire;
 pub(crate) mod keys;
@@ -101,7 +101,6 @@ const SEMI_TAG_LAZY: u64 = 2_038_063_468; // %lazy
 
 struct MuskRuntime {
     context: NockContext,
-    cold_state: Option<&'static [u8]>,
     // Dynamic subject/formula states on the current partial-evaluation stack.
     araw_active: Vec<ArawKey>,
     // Copied interpreter-side cores keyed by the source core raw noun. These nouns live on the
@@ -115,10 +114,9 @@ struct MuskRuntime {
 }
 
 impl MuskRuntime {
-    fn new() -> Self {
+    fn new(dialect: crate::native::Dialect) -> Self {
         Self {
-            context: create_musk_eval_context(),
-            cold_state: None,
+            context: create_musk_eval_context(dialect),
             araw_active: Default::default(),
             mack_core_cache_raw: Default::default(),
             mack_core_cache_context: None,
@@ -126,10 +124,9 @@ impl MuskRuntime {
         }
     }
 
-    fn with_cold_state(raw: &'static [u8], label: &str) -> Result<Self> {
-        let mut runtime = Self::new();
+    fn with_cold_state(dialect: crate::native::Dialect, raw: &[u8], label: &str) -> Result<Self> {
+        let mut runtime = Self::new(dialect);
         install_musk_cold_state(&mut runtime.context, raw, label)?;
-        runtime.cold_state = Some(raw);
         Ok(runtime)
     }
 
@@ -281,6 +278,7 @@ impl Drop for HoonAstScope<'_, '_, '_> {
 
 pub struct Ut<'a> {
     pub slab: &'a mut NounSlab,
+    dialect: crate::native::Dialect,
     // Canonical Nock formula graph. Formula-producing paths build `FormulaId`s;
     // nouns are materialized only at explicit semantic boundaries and at the
     // public output boundary.
@@ -307,6 +305,15 @@ pub struct Ut<'a> {
     pub arm_goal_in_progress: Vec<ArmInProgressEntry>,
     pub arm_placeholder_play_in_progress: HashSet<NounIdentity>,
     pub arm_epoch: ArmEpoch,
+    lazy_scopes: HashMap<LazyScopeKey, LazyScopeId>,
+    lazy_mask_ids: FastHashMap<NounIdentity, LazyResolverId>,
+    exported_nouns: FastHashMap<NounIdentity, Noun>,
+    export_fork_sets: FastHashSet<NounIdentity>,
+    exported_lazy_masks: HashMap<LazyResolverId, Noun>,
+    exporting_lazy: HashSet<LazyResolverId>,
+    laze_factory: Option<Noun>,
+    callable_resolvers: HashMap<LazyResolverId, Noun>,
+    callable_resolver_ids: FastHashMap<NounIdentity, LazyResolverId>,
     pub lazy_resolver_next_id: LazyResolverId,
     pub lazy_resolvers: HashMap<LazyResolverId, LazyResolverContext>,
     // Canonical lazy-core identity: maps a recursive core's structural key
@@ -316,9 +323,8 @@ pub struct Ut<'a> {
     pub lazy_resolver_canonical_ids: HashMap<LazyCoreKey, LazyResolverBucket>,
     // Resolver IDs for the `%lazy` battery seminoun of mulled cores (hoon-138
     // `++mile`'s `laze`), keyed like `lazy_resolver_canonical_ids` but drawn
-    // separately and never registered: a mulled core never resolves arms, but
-    // its seminoun must differ from `*seminoun`, full batteries, and `++mine`'s
-    // lazy root, while staying equal across mulls of the same core.
+    // separately from mint's resolvers. Mulled cores retain their callable
+    // context for folding and for types reflected into the output.
     pub mull_lazy_resolver_ids: HashMap<LazyCoreKey, LazyResolverBucket>,
     // Exact AST recovery from structurally equal hoon nouns. The honk binary
     // enables it for prelude builds; the normal compile path keeps it off.
@@ -1032,6 +1038,10 @@ impl Sig64 {
 
     fn write_beer(&mut self, beer: &Beer) -> Option<()> {
         match beer {
+            Beer::Atom(atom) => {
+                self.write_byte(0x03);
+                self.write_parsed_atom(atom);
+            }
             Beer::Char(cord) => {
                 self.write_byte(0x01);
                 self.write_str(cord);
@@ -1729,6 +1739,11 @@ impl Sig64 {
                 self.write_hoon(p)?;
                 self.write_hoon(q)?;
             }
+            Hoon::KetCab(p, q) => {
+                self.write_byte(0x80);
+                self.write_hoon(p)?;
+                self.write_hoon(q)?;
+            }
             Hoon::KetLus(p, q) => {
                 self.write_byte(0x38);
                 self.write_hoon(p)?;
@@ -2103,12 +2118,17 @@ impl Sig64 {
 
 impl<'a> Ut<'a> {
     pub fn new(slab: &'a mut NounSlab) -> Self {
+        Self::new_for_dialect(slab, crate::native::Dialect::Nockchain)
+    }
+
+    pub fn new_for_dialect(slab: &'a mut NounSlab, dialect: crate::native::Dialect) -> Self {
         // Every `Ut` gets a fresh `Context`. Its intern table and
         // `live_to_noun`/`live_leaf_to_noun` memos hold nouns bound to this
         // compile's slab, and the next compile can reuse a freed slab's address,
         // so a shared context would return stale types or dangling nouns.
         Self {
             slab,
+            dialect,
             formula_arena: FormulaArena::new(),
             value_arena: ValueArena::new(),
             semi_arena: SemiArena::new(),
@@ -2119,6 +2139,15 @@ impl<'a> Ut<'a> {
             arm_goal_in_progress: Vec::new(),
             arm_placeholder_play_in_progress: HashSet::new(),
             arm_epoch: ArmEpoch(0),
+            lazy_scopes: Default::default(),
+            lazy_mask_ids: Default::default(),
+            exported_nouns: Default::default(),
+            export_fork_sets: Default::default(),
+            exported_lazy_masks: Default::default(),
+            exporting_lazy: Default::default(),
+            laze_factory: None,
+            callable_resolvers: Default::default(),
+            callable_resolver_ids: Default::default(),
             lazy_resolver_next_id: LazyResolverId(1),
             lazy_resolvers: HashMap::new(),
             lazy_resolver_canonical_ids: HashMap::new(),
@@ -2168,7 +2197,7 @@ impl<'a> Ut<'a> {
             spec_factory_open_cache: HashMap::new(),
             spec_factory_open_cache_order: VecDeque::new(),
             burp_type_cache: HashMap::new(),
-            musk: MuskRuntime::new(),
+            musk: MuskRuntime::new(dialect),
             miss_memo_persist: None,
             ktsg_fold_cache: Default::default(),
             semi_root_blocked_set: None,
@@ -2366,9 +2395,9 @@ impl<'a> Ut<'a> {
         copied
     }
 
-    pub fn load_musk_cold_state(&mut self, raw: &'static [u8], label: &str) -> Result<()> {
+    pub fn load_musk_cold_state(&mut self, raw: &[u8], label: &str) -> Result<()> {
         self.clear_musk_context_dependent_caches();
-        self.musk = MuskRuntime::with_cold_state(raw, label)?;
+        self.musk = MuskRuntime::with_cold_state(self.dialect, raw, label)?;
         Ok(())
     }
 
@@ -3342,23 +3371,28 @@ impl<'a> Ut<'a> {
         }
     }
 
-    fn lower_sigbar(p: &Hoon, q: &Hoon) -> Hoon {
+    fn lower_sigbar(dialect: crate::native::Dialect, p: &Hoon, q: &Hoon) -> Hoon {
         // Canonical hoon-138 open() lowering:
         //   [%sgbr p=hoon q=hoon]
         // => [%sggr [%mean ?^((feck p) [%rock %tas u.fek]
         //                 [%brdt [%cncl [%limb %cain] [%zpgr [%tsgr [%$ 3] p]] ~]])] q]
-        fn feck_tas(gen: &Hoon) -> Option<ParsedAtom> {
-            match gen {
-                Hoon::Sand(term, noun) if term == "tas" => match noun {
-                    NounExpr::ParsedAtom(atom) => Some(atom.clone()),
-                    NounExpr::Cell(_, _) => None,
-                },
-                Hoon::Dbug(_spot, expr) => feck_tas(expr),
+        fn feck_tas(dialect: crate::native::Dialect, gen: &Hoon) -> Option<ParsedAtom> {
+            match (dialect, gen) {
+                (crate::native::Dialect::Nockchain, Hoon::Sand(term, noun))
+                | (crate::native::Dialect::Urbit, Hoon::Rock(term, noun))
+                    if term == "tas" =>
+                {
+                    match noun {
+                        NounExpr::ParsedAtom(atom) => Some(atom.clone()),
+                        NounExpr::Cell(_, _) => None,
+                    }
+                }
+                (_, Hoon::Dbug(_spot, expr)) => feck_tas(dialect, expr),
                 _ => None,
             }
         }
 
-        let fek = match feck_tas(p) {
+        let fek = match feck_tas(dialect, p) {
             Some(atom) => Hoon::Rock("tas".to_string(), NounExpr::ParsedAtom(atom)),
             None => Hoon::BarDot(Box::new(Hoon::CenCol(
                 Box::new(Hoon::Limb("cain".to_string())),
@@ -4231,6 +4265,9 @@ impl<'a> Ut<'a> {
         let (ty, formula) = self.mint(sut_n, gol_n, gen)?;
         let ty_noun = live_to_noun(&mut self.cx, &ty, self.slab);
         let formula = self.formula_materialize(formula);
+        if self.dialect == crate::native::Dialect::Urbit {
+            return Ok((self.export_noun(ty_noun)?, self.export_noun(formula)?));
+        }
         Ok((ty_noun, formula))
     }
 
@@ -4326,6 +4363,11 @@ impl<'a> Ut<'a> {
                 let lowered = Self::lower_ktdt(p, q);
                 self.mint(sut, gol, &lowered)
             }
+            Hoon::KetCab(p, q) => {
+                let played = self.play(sut.clone(), p)?;
+                let hif = self.nice(sut.clone(), gol, played)?;
+                self.mint(sut, hif, q)
+            }
             Hoon::KetLus(p, q) => self.mint_ktsl(sut, gol, p, q),
             Hoon::KetBar(p) => self.mint_ketvar(sut, gol, p, Vair::Iron),
             Hoon::KetPam(p) => self.mint_ketvar(sut, gol, p, Vair::Zinc),
@@ -4395,7 +4437,7 @@ impl<'a> Ut<'a> {
                 self.mint(sut, gol, &lowered)
             }
             Hoon::SigBar(p, q) => {
-                let lowered = Self::lower_sigbar(p, q);
+                let lowered = Self::lower_sigbar(self.dialect, p, q);
                 self.mint(sut, gol, &lowered)
             }
             Hoon::SigCab(p, q) => {
@@ -4688,6 +4730,7 @@ impl<'a> Ut<'a> {
                     let lowered = Self::lower_ktdt(p, q);
                     self.play(sut, &lowered)
                 }
+                Hoon::KetCab(_p, q) => self.play(sut, q),
                 Hoon::KetLus(p, _q) => self.play(sut, p),
                 Hoon::KetBar(p) => self.play_ketvar(sut, p, Vair::Iron),
                 Hoon::KetPam(p) => self.play_ketvar(sut, p, Vair::Zinc),
@@ -4709,7 +4752,7 @@ impl<'a> Ut<'a> {
                 Hoon::DotTis(_p, _q) => Ok(ty_bool_n(&mut self.cx, self.slab).1),
                 Hoon::DotWut(_p) => Ok(ty_bool_n(&mut self.cx, self.slab).1),
                 Hoon::TisBar(spec, q) => {
-                    let example = self.spec_example_cached(spec);
+                    let example = self.tisbar_initial(spec);
                     let expanded =
                         Hoon::TisLus(Box::new(example.as_ref().clone()), Box::new(*q.clone()));
                     self.play(sut, &expanded)
@@ -4753,7 +4796,7 @@ impl<'a> Ut<'a> {
                 }
                 Hoon::Limb(name) => self.play_limb(sut, name),
                 Hoon::Hand(typ, _nock) => {
-                    let n = type_to_noun(self.slab, typ)?;
+                    let n = hatch::utils::type_to_noun_for_dialect(self.dialect, self.slab, typ);
                     native_of(&mut self.cx, n, &self.slab.noun_space())
                 }
                 Hoon::Tune(tune) => self.play_tune(sut, tune),
@@ -4777,7 +4820,7 @@ impl<'a> Ut<'a> {
                     self.play(sut, &lowered)
                 }
                 Hoon::SigBar(p, q) => {
-                    let lowered = Self::lower_sigbar(p, q);
+                    let lowered = Self::lower_sigbar(self.dialect, p, q);
                     self.play(sut, &lowered)
                 }
                 Hoon::SigCab(p, q) => {
@@ -5646,6 +5689,8 @@ impl<'a> Ut<'a> {
         let resolve = noun_u64(self.slab, resolver_id.0);
         let frag = noun_biguint(self.slab, BigUint::from(1u32));
         let mask = T(self.slab, &[D(SEMI_TAG_LAZY), frag, resolve]);
+        self.lazy_mask_ids
+            .insert(NounIdentity::of(mask), resolver_id);
         self.semi_make(mask, D(0))
     }
 
@@ -5663,18 +5708,29 @@ impl<'a> Ut<'a> {
         id
     }
 
-    /// Returns one stable resolver ID per structurally equal recursive core, so
-    /// `cons_core` interns their lazy forms to a single `Rc` and the pointer-keyed
-    /// recursion cuts (mint cache, `arm_goal_for_hoon_in_progress`, fond
-    /// `hold_path`, fish, bran) converge. A lazy core is identified by
-    /// `(sut, tomes_sig, poly)`: `garb` is a function of prefix and poly, and
-    /// `tomes_sig` already folds in `prefix_signature`. The resolver depends only
-    /// on the core type, poly, and arms (the lazy callback goal is always `%noun`,
-    /// `vet` is read at resolve time, and `gol` is not captured). With a fresh ID
-    /// per call, equal lazy cores would be pointer-distinct and the cuts would fire
-    /// only at the redo-gil backstop depth. Completed cores carry an ID-free
-    /// `[%full ~]` semi, so reusing an ID never changes emitted bytes. `sut` is
-    /// keyed by its arena ID, which is stable for the whole compile.
+    /// Intern the context captured by the Hoon 135 callable resolver.
+    fn lazy_scope_id(&mut self) -> LazyScopeId {
+        if self.dialect != hatch::ast::hoon::Dialect::Urbit {
+            return LazyScopeId(0);
+        }
+        let key = LazyScopeKey {
+            vet: self.vet,
+            fan: self.hold_repo_fan_context_id,
+            rib: self
+                .fire_wet_rib
+                .iter()
+                .map(|(sut, dox, hoon)| WetRibKey {
+                    subject: sut.arena_id(),
+                    secondary_subject: dox.arena_id(),
+                    gene: NounIdentity::of(*hoon),
+                })
+                .collect(),
+        };
+        let next = LazyScopeId(self.lazy_scopes.len() as u64 + 1);
+        *self.lazy_scopes.entry(key).or_insert(next)
+    }
+
+    /// Intern the lazy core by subject, arm map, polymorphism, and captured scope.
     fn lazy_resolver_canonical_id(
         &mut self,
         sut: &NRc<NTy>,
@@ -5684,7 +5740,9 @@ impl<'a> Ut<'a> {
         prefix: Option<&str>,
     ) -> Result<LazyResolverId> {
         let poly_key = PolyKey::from(poly);
+        let scope = self.lazy_scope_id();
         let key = LazyCoreKey {
+            scope,
             subject: sut.arena_id(),
             tomes: tomes_sig,
             poly: poly_key,
@@ -5715,7 +5773,9 @@ impl<'a> Ut<'a> {
         tomes_map: Noun,
         prefix: Option<&str>,
     ) -> Result<LazyResolverId> {
+        let scope = self.lazy_scope_id();
         let key = LazyCoreKey {
+            scope,
             subject: sut.arena_id(),
             tomes: tomes_sig,
             poly: PolyKey::from(poly),
@@ -5748,6 +5808,23 @@ impl<'a> Ut<'a> {
         self.lazy_resolvers.insert(
             resolver_id,
             LazyResolverContext {
+                fan_leg_ids: self.hold_repo_fan_active_leg_ids.clone(),
+                fan: if self.hold_repo_fan_active_leg_ids.is_empty() {
+                    Vec::new()
+                } else {
+                    self.hold_repo_fan_leg_ids
+                        .values()
+                        .flatten()
+                        .filter(|entry| {
+                            self.hold_repo_fan_active_leg_ids
+                                .binary_search(&entry.id)
+                                .is_ok()
+                        })
+                        .map(|entry| (entry.inner, entry.hoon))
+                        .collect()
+                },
+                rib: self.fire_wet_rib.clone(),
+                vet: self.vet,
                 core_type,
                 poly,
                 arms_by_axis,
@@ -5762,11 +5839,25 @@ impl<'a> Ut<'a> {
         resolver_id: LazyResolverId,
         fragment: &BigUint,
     ) -> Result<Option<FormulaId>> {
+        if let Some(gate) = self.callable_resolvers.get(&resolver_id).copied() {
+            let sample = noun_biguint(self.slab, fragment.clone());
+            let unit = self.slam_resolver_gate(gate, sample)?;
+            if noun_is_zero(unit) {
+                return Ok(None);
+            }
+            let space = self.slab.noun_space();
+            let formula = unit
+                .in_space(&space)
+                .as_cell()
+                .map_err(|error| CompilerError::Decode(format!("lazy resolver result: {error}")))?
+                .tail()
+                .noun();
+            return self.formula_import(formula).map(Some);
+        }
         // hoon-138 `++laze`: the resolver answers exact arm axes only
         // (`(~(get by tal) axe)`). Any other fragment, including 1 (the whole
         // battery), produces `~`, which the caller treats as blocked.
-        // Completed cores never reach here: `mint_core` stores a
-        // materialized `[[%full ~] battery]` semi in the result type.
+        // Reflected types can retain a lazy resolver after the enclosing core completes.
         if let Some(ctx) = self.lazy_resolvers.get(&resolver_id) {
             if let Some(cached) = ctx.cached_formula_by_axis.get(fragment) {
                 return Ok(Some(*cached));
@@ -5779,6 +5870,53 @@ impl<'a> Ut<'a> {
     }
 
     fn lazy_resolver_compile_arm(
+        &mut self,
+        resolver_id: LazyResolverId,
+        fragment: BigUint,
+    ) -> Result<Option<FormulaId>> {
+        if self.dialect != hatch::ast::hoon::Dialect::Urbit {
+            return self.lazy_resolver_compile_arm_inner(resolver_id, fragment);
+        }
+        let Some(context) = self.lazy_resolvers.get(&resolver_id).cloned() else {
+            return Ok(None);
+        };
+        let vet = std::mem::replace(&mut self.vet, context.vet);
+        let fan = std::mem::replace(&mut self.hold_repo_fan_active_leg_ids, context.fan_leg_ids);
+        let fan_sum = self.hold_repo_fan_signature_sum;
+        let fan_xor = self.hold_repo_fan_signature_xor;
+        let fan_id = self.hold_repo_fan_context_id;
+        self.hold_repo_fan_signature_sum = 0;
+        self.hold_repo_fan_signature_xor = 0;
+        for leg in &self.hold_repo_fan_active_leg_ids {
+            let component = Self::hold_repo_fan_leg_signature_component(*leg);
+            self.hold_repo_fan_signature_sum =
+                self.hold_repo_fan_signature_sum.wrapping_add(component);
+            self.hold_repo_fan_signature_xor ^= component;
+        }
+        self.refresh_hold_repo_fan_context_id();
+        let rib = std::mem::replace(&mut self.fire_wet_rib, context.rib);
+        let captured_rib = self
+            .fire_wet_rib
+            .iter()
+            .map(|(sut, dox, hoon)| WetRibKey {
+                subject: sut.arena_id(),
+                secondary_subject: dox.arena_id(),
+                gene: NounIdentity::of(*hoon),
+            })
+            .collect();
+        let rib_raw = std::mem::replace(&mut self.fire_wet_rib_raw, captured_rib);
+        let result = self.lazy_resolver_compile_arm_inner(resolver_id, fragment);
+        self.vet = vet;
+        self.hold_repo_fan_active_leg_ids = fan;
+        self.hold_repo_fan_signature_sum = fan_sum;
+        self.hold_repo_fan_signature_xor = fan_xor;
+        self.hold_repo_fan_context_id = fan_id;
+        self.fire_wet_rib = rib;
+        self.fire_wet_rib_raw = rib_raw;
+        result
+    }
+
+    fn lazy_resolver_compile_arm_inner(
         &mut self,
         resolver_id: LazyResolverId,
         fragment: BigUint,
@@ -5916,7 +6054,7 @@ impl<'a> Ut<'a> {
                 self.semi_combine(head, tail)
             }
             Some(SEMI_TAG_LAZY) => {
-                let (fragment, resolver_id) = {
+                let (fragment, resolver) = {
                     let space = self.slab.noun_space();
                     let parts = tail.in_space(&space).as_cell().map_err(|err| {
                         CompilerError::Decode(format!("semi lazy mask tail not cell: {err}"))
@@ -5924,17 +6062,41 @@ impl<'a> Ut<'a> {
                     let fragment = parts.head().as_atom().map_err(|err| {
                         CompilerError::Decode(format!("semi lazy fragment not atom: {err}"))
                     })?;
-                    let resolver = parts.tail().as_atom().map_err(|err| {
-                        CompilerError::Decode(format!("semi lazy resolver not atom: {err}"))
+                    (noun_axis_atom_to_big(fragment), parts.tail().noun())
+                };
+                let resolver_id = if resolver.in_space(&self.slab.noun_space()).as_cell().is_ok() {
+                    let space = self.slab.noun_space();
+                    let gate = resolver.in_space(&space).as_cell().map_err(|error| {
+                        CompilerError::Decode(format!("lazy resolver gate: {error}"))
                     })?;
-                    (
-                        noun_axis_atom_to_big(fragment),
-                        resolver.as_u64().map_err(|err| {
-                            CompilerError::Decode(format!("semi lazy resolver not u64: {err}"))
-                        })?,
+                    gate.head().as_cell().map_err(|error| {
+                        CompilerError::Decode(format!("lazy resolver battery: {error}"))
+                    })?;
+                    gate.tail().as_cell().map_err(|error| {
+                        CompilerError::Decode(format!("lazy resolver payload: {error}"))
+                    })?;
+                    let identity = NounIdentity::of(resolver);
+                    if let Some(id) = self.callable_resolver_ids.get(&identity) {
+                        *id
+                    } else {
+                        let id = self.lazy_resolver_new_id();
+                        self.callable_resolver_ids.insert(identity, id);
+                        self.callable_resolvers.insert(id, resolver);
+                        id
+                    }
+                } else {
+                    let space = self.slab.noun_space();
+                    LazyResolverId(
+                        resolver
+                            .in_space(&space)
+                            .as_atom()
+                            .and_then(|atom| atom.as_u64())
+                            .map_err(|err| {
+                                CompilerError::Decode(format!("semi lazy resolver: {err}"))
+                            })?,
                     )
                 };
-                Ok(self.semi_arena.lazy(fragment, LazyResolverId(resolver_id)))
+                Ok(self.semi_arena.lazy(fragment, resolver_id))
             }
             _ => Ok(self.semi_full_blocked()),
         }
@@ -6865,11 +7027,10 @@ impl<'a> Ut<'a> {
         spec: &Spec,
         q: &Hoon,
     ) -> Result<(NRc<NTy>, FormulaId)> {
-        const HOON_VERSION: u64 = 138;
         let (ty, _formula) = self.mint(sut.clone(), gol, &Hoon::KetTar(Box::new(spec.clone())))?;
         // The minted type is embedded in a nock %12 hint formula (noun): lower it.
         let ty_noun = live_to_noun(&mut self.cx, &ty, self.slab);
-        let hint_inner = T(self.slab, &[D(HOON_VERSION), ty_noun]);
+        let hint_inner = T(self.slab, &[D(self.dialect.kelvin()), ty_noun]);
         let hint = T(self.slab, &[D(1), hint_inner]);
         let goal = cons_noun(&mut self.cx);
         let (_q_ty, q_formula) = self.mint(sut, goal, q)?;
@@ -7190,7 +7351,7 @@ impl<'a> Ut<'a> {
     }
 
     fn mint_hand(&mut self, typ: &Type, nock: &Nock) -> Result<(NRc<NTy>, FormulaId)> {
-        let typ_noun = type_to_noun(self.slab, typ)?;
+        let typ_noun = hatch::utils::type_to_noun_for_dialect(self.dialect, self.slab, typ);
         let typ_native = native_of(&mut self.cx, typ_noun, &self.slab.noun_space())?;
         let nock_noun = nock_to_noun(self.slab, nock);
         let formula = self.formula_import(nock_noun)?;
@@ -7199,7 +7360,7 @@ impl<'a> Ut<'a> {
 
     fn play_tune(&mut self, sut: NRc<NTy>, tune: &TermOrTune) -> Result<NRc<NTy>> {
         // Wraps the whole subject in a %face that shares `sut`'s `Rc`.
-        let tool = term_or_tune_to_noun(self.slab, tune)?;
+        let tool = hatch::utils::term_or_tune_to_noun_for_dialect(self.dialect, self.slab, tune);
         let tool_leaf = live_leaf_from_noun(&mut self.cx, tool, &self.slab.noun_space());
         Ok(cons_face(&mut self.cx, tool_leaf, sut))
     }
@@ -7342,11 +7503,7 @@ impl<'a> Ut<'a> {
         spec: &Spec,
         q: &Hoon,
     ) -> Result<(NRc<NTy>, FormulaId)> {
-        // Canonical hoon-138 open() lowering:
-        //   [%tsbr *] => [%tsls ~(example ax p.gen) q.gen]
-        // This is not `=+ *spec ...`: going through `%kttr` would add `%ktsg` folding,
-        // which `%tsbr` does not do.
-        let example = self.spec_example_cached(spec);
+        let example = self.tisbar_initial(spec);
         let expanded = Hoon::TisLus(Box::new(example.as_ref().clone()), Box::new(q.clone()));
         self.mint(sut, gol, &expanded)
     }
@@ -7541,7 +7698,7 @@ impl<'a> Ut<'a> {
         gol: NRc<NTy>,
         tune: &TermOrTune,
     ) -> Result<(NRc<NTy>, FormulaId)> {
-        let tool = term_or_tune_to_noun(self.slab, tune)?;
+        let tool = hatch::utils::term_or_tune_to_noun_for_dialect(self.dialect, self.slab, tune);
         // `%face` over the subject; `cons_face` collapses a void subject to void.
         let tool_leaf = live_leaf_from_noun(&mut self.cx, tool, &self.slab.noun_space());
         let ty = cons_face(&mut self.cx, tool_leaf, sut.clone());
@@ -7694,16 +7851,67 @@ impl<'a> Ut<'a> {
         expanded
     }
 
+    fn tisbar_initial(&mut self, spec: &Spec) -> Arc<Hoon> {
+        match self.dialect {
+            crate::native::Dialect::Nockchain => self.spec_example_cached(spec),
+            crate::native::Dialect::Urbit => Arc::new(Hoon::KetTar(Box::new(spec.clone()))),
+        }
+    }
+
+    fn open_in_dialect(&self, gen: Hoon) -> Hoon {
+        if let Hoon::ZapWut(arg, body) = gen {
+            let version = BigUint::from(self.dialect.kelvin());
+            let parse = |value: &str| value.parse::<BigUint>().ok();
+            let allowed = match arg {
+                ZpwtArg::ParsedAtom(upper) => parse(&upper).is_some_and(|upper| version <= upper),
+                ZpwtArg::Pair(upper, lower) => match (parse(&upper), parse(&lower)) {
+                    (Some(upper), Some(lower)) => lower <= version && version <= upper,
+                    _ => false,
+                },
+            };
+            return if allowed {
+                *body
+            } else {
+                Hoon::Eror("hoon-version".into())
+            };
+        }
+        if self.dialect == crate::native::Dialect::Urbit {
+            match gen {
+                Hoon::SigWut(priority, condition, message, body) => {
+                    return Hoon::TisLus(
+                        Box::new(Hoon::WutCol(
+                            condition,
+                            Box::new(Hoon::SigPam(
+                                priority,
+                                message,
+                                Box::new(Hoon::Bust(BaseType::Null)),
+                            )),
+                            Box::new(Hoon::Bust(BaseType::Null)),
+                        )),
+                        Box::new(Hoon::TisGar(Box::new(Hoon::Axis(3u64.into())), body)),
+                    );
+                }
+                Hoon::TisKet(skin, wing, value, body) => {
+                    let cell = Hoon::KetTar(Box::new(Spec::Base(BaseType::Cell)));
+                    let value = Hoon::KetCab(Box::new(cell), value);
+                    return open(Hoon::TisKet(skin, wing, Box::new(value), body));
+                }
+                _ => (),
+            }
+        }
+        open(gen)
+    }
+
     fn open_cached(&mut self, gen: &Hoon) -> Option<Arc<Hoon>> {
         let Some(sig) = self.mint_cache_signature(gen) else {
-            let opened = open(gen.clone());
+            let opened = self.open_in_dialect(gen.clone());
             return (&opened != gen).then(|| Arc::new(opened));
         };
         if let Some(id) = self.hoon_arena.id_for(gen) {
             if let Some(cached) = &self.hoon_arena.entry(id).opened {
                 return cached.clone();
             }
-            let opened = open(gen.clone());
+            let opened = self.open_in_dialect(gen.clone());
             let cached = (&opened != gen).then(|| Arc::new(opened));
             self.hoon_arena.entry_mut(id).opened = Some(cached.clone());
             return cached;
@@ -7713,7 +7921,7 @@ impl<'a> Ut<'a> {
             if *cached_sig == sig {
                 let cached = cached.clone();
                 if self.memo_verify.due(MemoSite::Open) {
-                    let opened = open(gen.clone());
+                    let opened = self.open_in_dialect(gen.clone());
                     let fresh = (&opened != gen).then_some(&opened);
                     verify::record(MemoSite::Open, cached.as_deref() == fresh, || {
                         verify::brief(format!("{gen:?}"))
@@ -7723,7 +7931,7 @@ impl<'a> Ut<'a> {
             }
         }
 
-        let opened = open(gen.clone());
+        let opened = self.open_in_dialect(gen.clone());
         let cached = (&opened != gen).then(|| Arc::new(opened));
         if !self.open_cache.contains_key(&ptr) {
             self.open_cache_order.push_back(ptr);
@@ -7948,7 +8156,10 @@ impl<'a> Ut<'a> {
                 .as_ref()
                 .map(|what| noun_expr_to_noun(self.slab, what))
                 .unwrap_or_else(|| D(0));
-            let tome_noun = T(self.slab, &[what, arms_map]);
+            let tome_noun = match self.dialect {
+                crate::native::Dialect::Nockchain => T(self.slab, &[what, arms_map]),
+                crate::native::Dialect::Urbit => arms_map,
+            };
             let key_noun = term_to_noun(self.slab, &key);
             map = map_put_mug(self.slab, map, key_noun, tome_noun)?;
         }
@@ -8089,11 +8300,8 @@ impl<'a> Ut<'a> {
         let Some((_chapter_axis, tome_noun)) = self.look(chapter_key, expected_tomes_map)? else {
             return Err(CompilerError::Noun("unexpcted-chapter".to_string()));
         };
-        let tome_cell = tome_noun
-            .in_space(&space)
-            .as_cell()
-            .map_err(|err| CompilerError::Decode(format!("goal chapter tome not cell: {err}")))?;
-        Ok(Some(tome_cell.tail().noun()))
+        let tome_arms = crate::native::noun::tome_arms(self.dialect, tome_noun, &space)?;
+        Ok(Some(tome_arms))
     }
 
     fn goal_arm_expected_type(
@@ -8190,11 +8398,8 @@ impl<'a> Ut<'a> {
             .as_cell()
             .map_err(|err| CompilerError::Decode(format!("tome node not cell: {err}")))?;
         let tome_noun = node_cell.tail().noun();
-        let tome_cell = tome_noun
-            .in_space(&space)
-            .as_cell()
-            .map_err(|err| CompilerError::Decode(format!("tome value not cell: {err}")))?;
-        let arms_map = tome_cell.tail().noun();
+        let tome_arms = crate::native::noun::tome_arms(self.dialect, tome_noun, &space)?;
+        let arms_map = tome_arms;
         let left_empty = noun_is_zero(left);
         let right_empty = noun_is_zero(right);
         let chapter_axis = if left_empty && right_empty {
@@ -8240,11 +8445,8 @@ impl<'a> Ut<'a> {
             .as_cell()
             .map_err(|err| CompilerError::Decode(format!("tome node not cell: {err}")))?;
         let tome_noun = node_cell.tail().noun();
-        let tome_cell = tome_noun
-            .in_space(&space)
-            .as_cell()
-            .map_err(|err| CompilerError::Decode(format!("tome value not cell: {err}")))?;
-        let arms_map = tome_cell.tail().noun();
+        let tome_arms = crate::native::noun::tome_arms(self.dialect, tome_noun, &space)?;
+        let arms_map = tome_arms;
         let chapter_key = node_cell.head().noun();
         let expected_arms_map =
             self.goal_chapter_expected_arms_map(expected_tomes_map, chapter_key)?;
@@ -8638,7 +8840,10 @@ impl<'a> Ut<'a> {
             return Ok(ast);
         }
         let space = self.slab.noun_space();
-        let ast = Arc::new(noun_to_hoon(hoon_noun.in_space(&space))?);
+        let ast = Arc::new(hatch::utils::noun_to_hoon_for_dialect(
+            self.dialect,
+            hoon_noun.in_space(&space),
+        )?);
         if !self.decoded_hold_hoon_cache_raw.contains_key(&hoon_raw) {
             self.decoded_hold_hoon_cache_order.push_back(hoon_raw);
             if self.decoded_hold_hoon_cache_order.len() > Self::HOON_CACHE_RAW_KEY_LIMIT {
@@ -8680,18 +8885,23 @@ impl<'a> Ut<'a> {
             }
         }
         let Some(id) = self.hoon_arena.id_for(gen) else {
-            return hoon_to_noun(self.slab, gen);
+            return hatch::utils::hoon_to_noun_for_dialect(self.dialect, self.slab, gen);
         };
         if let Some(noun) = self.hoon_arena.entry(id).noun {
             return noun;
         }
         let by_ptr = &self.hoon_arena.by_ptr;
         let entries = &mut self.hoon_arena.entries;
-        hoon_to_noun_with_cache(self.slab, gen, |ptr, noun| {
-            if let Some(id) = by_ptr.get(&HoonIdentity(ptr)) {
-                entries[id.0 as usize].noun = Some(noun);
-            }
-        })
+        hatch::utils::hoon_to_noun_with_cache_for_dialect(
+            self.dialect,
+            self.slab,
+            gen,
+            |ptr, noun| {
+                if let Some(id) = by_ptr.get(&HoonIdentity(ptr)) {
+                    entries[id.0 as usize].noun = Some(noun);
+                }
+            },
+        )
     }
 
     fn nest(&mut self, sut: NRc<NTy>, ref_: NRc<NTy>) -> Result<bool> {
@@ -8746,7 +8956,7 @@ impl<'a> Ut<'a> {
     }
 
     /// `nest` on noun types: decodes both with `native_of` and runs the native `nest`.
-    fn nest_noun(&mut self, sut: Noun, ref_: Noun) -> Result<bool> {
+    pub(crate) fn nest_noun(&mut self, sut: Noun, ref_: Noun) -> Result<bool> {
         let space = self.slab.noun_space();
         let sut_n = native_of(&mut self.cx, sut, &space)?;
         let ref_n = native_of(&mut self.cx, ref_, &space)?;
@@ -9331,16 +9541,10 @@ impl<'a> Ut<'a> {
         }
         let dom_tome = dom_node_cell.tail().noun();
         let vim_tome = vim_node_cell.tail().noun();
-        let dom_tome_cell = dom_tome
-            .in_space(&space)
-            .as_cell()
-            .map_err(|err| CompilerError::Decode(format!("deep tome value not cell: {err}")))?;
-        let vim_tome_cell = vim_tome
-            .in_space(&space)
-            .as_cell()
-            .map_err(|err| CompilerError::Decode(format!("deep tome value not cell: {err}")))?;
-        let dom_arms = dom_tome_cell.tail().noun();
-        let vim_arms = vim_tome_cell.tail().noun();
+        let dom_tome_arms = crate::native::noun::tome_arms(self.dialect, dom_tome, &space)?;
+        let vim_tome_arms = crate::native::noun::tome_arms(self.dialect, vim_tome, &space)?;
+        let dom_arms = dom_tome_arms;
+        let vim_arms = vim_tome_arms;
         self.nest_deep_arms(
             dom_arms, vim_arms, sut_dox, ref_dox, depth, seen_sut_holds, seen_ref_holds, gil, memo,
         )
@@ -9483,6 +9687,9 @@ impl<'a> Ut<'a> {
     }
 
     fn burp_fork_set_run(&mut self, set: Noun) -> Result<Noun> {
+        if self.dialect == crate::native::Dialect::Urbit {
+            self.export_fork_sets.insert(NounIdentity::of(set));
+        }
         let mut out = D(0);
         let mut stack = vec![set];
         while let Some(tree) = stack.pop() {
@@ -9494,6 +9701,9 @@ impl<'a> Ut<'a> {
             out = set_put_mug(self.slab, out, key)?;
             stack.push(right);
             stack.push(left);
+        }
+        if self.dialect == crate::native::Dialect::Urbit {
+            self.export_fork_sets.insert(NounIdentity::of(out));
         }
         Ok(out)
     }
@@ -9822,6 +10032,9 @@ impl<'a> Ut<'a> {
                 };
                 let (_axis, ty) = self.take(sut, &palo.vein, &duz)?;
                 Ok(ty)
+            }
+            Hoon::WutZap(inner) if self.dialect == crate::native::Dialect::Urbit => {
+                self.chip(!how, sut, inner)
             }
             Hoon::WutPam(list) if how => {
                 let mut acc = sut;
@@ -11084,6 +11297,9 @@ impl<'a> Ut<'a> {
             return Ok(key);
         }
         let tag = term_to_noun(self.slab, "fork");
+        if self.dialect == crate::native::Dialect::Urbit {
+            self.export_fork_sets.insert(NounIdentity::of(set));
+        }
         Ok(T(self.slab, &[tag, set]))
     }
 
@@ -11489,7 +11705,7 @@ impl<'a> Ut<'a> {
 
             // ---- Precomputed: %hand ----
             Hoon::Hand(typ, _nock) => {
-                let typ_noun = type_to_noun(self.slab, typ)?;
+                let typ_noun = hatch::utils::type_to_noun_for_dialect(self.dialect, self.slab, typ);
                 let typ_native = native_of(&mut self.cx, typ_noun, &self.slab.noun_space())?;
                 Ok((typ_native.clone(), typ_native))
             }
@@ -11506,6 +11722,13 @@ impl<'a> Ut<'a> {
             Hoon::KetDot(p, q) => {
                 let lowered = Self::lower_ktdt(p, q);
                 self.mull(sut, gol, dox, &lowered)
+            }
+
+            Hoon::KetCab(p, q) => {
+                let p_sut = self.play(sut.clone(), p)?;
+                let hif = self.mull_nice(sut.clone(), gol, p_sut)?;
+                let _q_dox = self.play(dox.clone(), p)?;
+                self.mull(sut, hif, dox, q)
             }
 
             // ---- Cast: %ktls ----
@@ -11527,7 +11750,8 @@ impl<'a> Ut<'a> {
 
             // ---- Face: %tune ----
             Hoon::Tune(tune) => {
-                let tool = term_or_tune_to_noun(self.slab, tune)?;
+                let tool =
+                    hatch::utils::term_or_tune_to_noun_for_dialect(self.dialect, self.slab, tune);
                 let tool_leaf = live_leaf_from_noun(&mut self.cx, tool, &self.slab.noun_space());
                 let p_ty = cons_face(&mut self.cx, tool_leaf.clone(), sut);
                 let q_ty = cons_face(&mut self.cx, tool_leaf, dox);
@@ -11565,7 +11789,7 @@ impl<'a> Ut<'a> {
 
             // ---- Hint: %sgbr ----
             Hoon::SigBar(p, q) => {
-                let lowered = Self::lower_sigbar(p, q);
+                let lowered = Self::lower_sigbar(self.dialect, p, q);
                 self.mull(sut, gol, dox, &lowered)
             }
 
@@ -12143,12 +12367,15 @@ fn noun_biguint(slab: &mut NounSlab, value: BigUint) -> Noun {
 // mack-core copies on this stack for the duration of an entry compile.
 const HONK_EVAL_STACK_SIZE: usize = NOCK_STACK_SIZE_MEDIUM; // 16GB
 
-fn create_musk_eval_context() -> NockContext {
+fn create_musk_eval_context(dialect: crate::native::Dialect) -> NockContext {
     let mut stack = NockStack::new(HONK_EVAL_STACK_SIZE, 0);
     let cold = Cold::new(&mut stack);
     create_context(
         stack,
-        native_hot_state(),
+        match dialect {
+            crate::native::Dialect::Nockchain => native_hot_state(),
+            crate::native::Dialect::Urbit => crate::native::hot135::HOT_STATE,
+        },
         cold,
         None,
         vec![],
@@ -12390,7 +12617,7 @@ fn set_uni_mug(slab: &mut NounSlab, a: Noun, b: Noun) -> Result<Noun> {
     }
 }
 
-fn map_put_mug(slab: &mut NounSlab, tree: Noun, key: Noun, value: Noun) -> Result<Noun> {
+pub(crate) fn map_put_mug(slab: &mut NounSlab, tree: Noun, key: Noun, value: Noun) -> Result<Noun> {
     if noun_is_zero(tree) {
         let node = T(slab, &[key, value]);
         return Ok(T(slab, &[node, D(0), D(0)]));
@@ -12477,6 +12704,7 @@ fn map_put_mug(slab: &mut NounSlab, tree: Noun, key: Noun, value: Noun) -> Resul
     }
 }
 
+#[cfg(test)]
 fn map_to_noun(slab: &mut NounSlab, pairs: Vec<(Noun, Noun)>) -> Result<Noun> {
     let mut map = D(0);
     for (key, val) in pairs {
@@ -13767,36 +13995,6 @@ fn spec_example(spec: &Spec) -> Hoon {
     example(spec, 1u64.into(), &hay, &cox, &bug, &nut, &def)
 }
 
-fn term_or_tune_to_noun(slab: &mut NounSlab, tot: &TermOrTune) -> Result<Noun> {
-    match tot {
-        TermOrTune::Term(name) => Ok(term_to_noun(slab, name)),
-        TermOrTune::Tune(tune) => tune_to_noun(slab, tune),
-    }
-}
-
-fn tune_to_noun(slab: &mut NounSlab, tune: &Tune) -> Result<Noun> {
-    let (map, vec) = tune;
-    let map_pairs: Vec<_> = map
-        .iter()
-        .map(|(key, opt_val)| {
-            let key_noun = term_to_noun(slab, key);
-            let val_noun = match opt_val {
-                None => D(0),
-                Some(hoon) => {
-                    let hoon_noun = hoon_to_noun(slab, hoon);
-                    T(slab, &[D(0), hoon_noun])
-                }
-            };
-            (key_noun, val_noun)
-        })
-        .collect();
-
-    let map_noun = map_to_noun(slab, map_pairs)?;
-    let vec_nouns: Vec<_> = vec.iter().map(|hoon| hoon_to_noun(slab, hoon)).collect();
-    let vec_noun = vec_to_list(slab, vec_nouns);
-    Ok(T(slab, &[map_noun, vec_noun]))
-}
-
 fn tagged1(slab: &mut NounSlab, tag: &str, a: Noun) -> Noun {
     let tag_noun = term_to_noun(slab, tag);
     T(slab, &[tag_noun, a])
@@ -13805,64 +14003,6 @@ fn tagged1(slab: &mut NounSlab, tag: &str, a: Noun) -> Noun {
 fn tagged2(slab: &mut NounSlab, tag: &str, a: Noun, b: Noun) -> Noun {
     let tag_noun = term_to_noun(slab, tag);
     T(slab, &[tag_noun, a, b])
-}
-
-fn type_to_noun(slab: &mut NounSlab, typ: &Type) -> Result<Noun> {
-    use Type::*;
-    match typ {
-        NounExpr => Ok(term_to_noun(slab, "noun")),
-        Void => Ok(term_to_noun(slab, "void")),
-        ParsedAtom(au, bits) => {
-            let au_noun = term_to_noun(slab, au);
-            let bits_noun = opt_to_noun(slab, bits.map(D));
-            Ok(tagged2(slab, "atom", au_noun, bits_noun))
-        }
-        Cell(l, r) => {
-            let l = type_to_noun(slab, l)?;
-            let r = type_to_noun(slab, r)?;
-            Ok(tagged2(slab, "cell", l, r))
-        }
-        Core(face, coil) => {
-            let face_noun = type_to_noun(slab, face)?;
-            let coil_noun = coil_to_noun(slab, coil)?;
-            Ok(tagged2(slab, "core", face_noun, coil_noun))
-        }
-        Face(face_type, inner) => {
-            let face_noun = face_type_to_noun(slab, face_type)?;
-            let inner_noun = type_to_noun(slab, inner)?;
-            Ok(tagged2(slab, "face", face_noun, inner_noun))
-        }
-        Fork(types) => {
-            let types_vec: Vec<_> = types
-                .iter()
-                .map(|t| type_to_noun(slab, t))
-                .collect::<Result<_>>()?;
-            let types_noun = vec_to_list(slab, types_vec);
-            Ok(tagged1(slab, "fork", types_noun))
-        }
-        Hint((inner, note), payload) => {
-            let inner_noun = type_to_noun(slab, inner)?;
-            let note_noun = note_to_noun(slab, note)?;
-            let payload_noun = type_to_noun(slab, payload)?;
-            let hint_inner = T(slab, &[inner_noun, note_noun]);
-            Ok(tagged2(slab, "hint", hint_inner, payload_noun))
-        }
-        Hold(typ, hoon) => {
-            let typ_noun = type_to_noun(slab, typ)?;
-            let hoon_noun = hoon_to_noun(slab, hoon);
-            Ok(tagged2(slab, "hold", typ_noun, hoon_noun))
-        }
-    }
-}
-
-fn face_type_to_noun(slab: &mut NounSlab, face_type: &FaceType) -> Result<Noun> {
-    match face_type {
-        FaceType::Term(name) => Ok(term_to_noun(slab, name)),
-        FaceType::Tune(tune) => {
-            let tune_noun = tune_to_noun(slab, tune)?;
-            Ok(tagged1(slab, "tune", tune_noun))
-        }
-    }
 }
 
 fn note_to_noun(slab: &mut NounSlab, note: &Note) -> Result<Noun> {
@@ -13922,101 +14062,6 @@ fn limb_to_noun(slab: &mut NounSlab, limb: &Limb) -> Result<Noun> {
     }
 }
 
-fn coil_to_noun(slab: &mut NounSlab, coil: &Coil) -> Result<Noun> {
-    let garb_noun = garb_to_noun(slab, &coil.p)?;
-    let type_noun = type_to_noun(slab, &coil.q)?;
-    let semi_noun = semi_noun_expr_to_noun(slab, &coil.r.0)?;
-
-    let tomes_entries: Vec<_> = coil
-        .r
-        .1
-        .iter()
-        .map(|(k, v)| {
-            let (what, inner_map) = v;
-            let k_noun = term_to_noun(slab, k);
-            let what_noun = what
-                .as_ref()
-                .map(|what| noun_expr_to_noun(slab, what))
-                .unwrap_or_else(|| D(0));
-            let inner_entries: Vec<_> = inner_map
-                .iter()
-                .map(|(kk, vv)| Ok((term_to_noun(slab, kk), hoon_to_noun(slab, vv))))
-                .collect::<Result<_>>()?;
-            let v_noun = map_to_noun(slab, inner_entries)?;
-            Ok((k_noun, T(slab, &[what_noun, v_noun])))
-        })
-        .collect::<Result<_>>()?;
-
-    let tomes_noun = map_to_noun(slab, tomes_entries)?;
-    Ok(T(slab, &[garb_noun, type_noun, semi_noun, tomes_noun]))
-}
-
-fn garb_to_noun(slab: &mut NounSlab, garb: &Garb) -> Result<Noun> {
-    let name_noun = match garb.name.as_ref() {
-        None => D(0),
-        Some(name) => {
-            let name_noun = term_to_noun(slab, name);
-            T(slab, &[D(0), name_noun])
-        }
-    };
-    let poly_noun = poly_to_noun(slab, &garb.poly);
-    let vair_noun = vair_to_noun(slab, &garb.vair);
-    Ok(T(slab, &[name_noun, poly_noun, vair_noun]))
-}
-
-fn poly_to_noun(slab: &mut NounSlab, poly: &AstPoly) -> Noun {
-    match poly {
-        AstPoly::Wet => term_to_noun(slab, "wet"),
-        AstPoly::Dry => term_to_noun(slab, "dry"),
-    }
-}
-
-fn vair_to_noun(slab: &mut NounSlab, vair: &AstVair) -> Noun {
-    match vair {
-        AstVair::Gold => term_to_noun(slab, "gold"),
-        AstVair::Iron => term_to_noun(slab, "iron"),
-        AstVair::Lead => term_to_noun(slab, "lead"),
-        AstVair::Zinc => term_to_noun(slab, "zinc"),
-    }
-}
-
-fn semi_noun_expr_to_noun(slab: &mut NounSlab, (stencil, expr): &SemiNounExpr) -> Result<Noun> {
-    let stencil_noun = stencil_to_noun(slab, stencil)?;
-    let expr_noun = noun_expr_to_noun(slab, expr);
-    Ok(T(slab, &[stencil_noun, expr_noun]))
-}
-
-fn stencil_to_noun(slab: &mut NounSlab, stencil: &Stencil) -> Result<Noun> {
-    match stencil {
-        Stencil::Half { left, rite } => {
-            let left = stencil_to_noun(slab, left)?;
-            let right = stencil_to_noun(slab, rite)?;
-            Ok(tagged2(slab, "half", left, right))
-        }
-        Stencil::Full { blocks } => {
-            let blocks_vec: Vec<_> = blocks
-                .iter()
-                .map(|block| block_to_noun(slab, block))
-                .collect::<Result<_>>()?;
-            let blocks_noun = vec_to_list(slab, blocks_vec);
-            Ok(tagged1(slab, "full", blocks_noun))
-        }
-        Stencil::Lazy { fragment, resolve } => {
-            let gate_noun = gate_to_noun(slab, resolve)?;
-            let fragment_noun = noun_biguint(slab, fragment.as_biguint().clone());
-            Ok(tagged2(slab, "lazy", fragment_noun, gate_noun))
-        }
-    }
-}
-
-fn block_to_noun(slab: &mut NounSlab, block: &Block) -> Result<Noun> {
-    let paths: Vec<_> = block
-        .iter()
-        .map(|path| path_to_noun(slab, path))
-        .collect::<Result<_>>()?;
-    Ok(vec_to_list(slab, paths))
-}
-
 fn path_to_noun(slab: &mut NounSlab, path: &Path) -> Result<Noun> {
     let knots: Vec<_> = path
         .iter()
@@ -14034,274 +14079,6 @@ fn cord_to_noun(slab: &mut NounSlab, cord: &Cord) -> Noun {
     parsed_atom_to_noun(slab, &atom)
 }
 
-fn gate_to_noun(slab: &mut NounSlab, gate: &Gate) -> Result<Noun> {
-    let (spec, body) = gate;
-    let spec_noun = spec_to_noun(slab, spec)?;
-    let body_noun = spec_to_noun(slab, body)?;
-    Ok(T(slab, &[spec_noun, body_noun]))
-}
-
-fn spec_to_noun(slab: &mut NounSlab, spec: &Spec) -> Result<Noun> {
-    use Spec::*;
-    Ok(match spec {
-        Base(bt) => {
-            let bt_noun = basetype_to_noun(slab, bt);
-            tagged1(slab, "base", bt_noun)
-        }
-        Dbug(spot, s) => {
-            let spot_noun = spot_to_noun(slab, spot)?;
-            let s_noun = spec_to_noun(slab, s)?;
-            tagged2(slab, "dbug", spot_noun, s_noun)
-        }
-        Gist(help, s) => {
-            let help_noun = noun_expr_to_noun(slab, help);
-            let help = tagged1(slab, "help", help_noun);
-            let s_noun = spec_to_noun(slab, s)?;
-            tagged2(slab, "gist", help, s_noun)
-        }
-        Leaf(tag, atom) => {
-            let tag_noun = term_to_noun(slab, tag);
-            let atom_noun = atom_to_noun(slab, atom);
-            tagged2(slab, "leaf", tag_noun, atom_noun)
-        }
-        Like(wing, wings) => {
-            let wing_noun = wing_to_noun(slab, wing)?;
-            let wings_vec: Vec<_> = wings
-                .iter()
-                .map(|w| wing_to_noun(slab, w))
-                .collect::<Result<_>>()?;
-            let wings_noun = vec_to_list(slab, wings_vec);
-            tagged2(slab, "like", wing_noun, wings_noun)
-        }
-        Loop(name) => {
-            let name_noun = term_to_noun(slab, name);
-            tagged1(slab, "loop", name_noun)
-        }
-        Made((name, args), s) => {
-            let name_noun = term_to_noun(slab, name);
-            let args_vec: Vec<_> = args.iter().map(|a| term_to_noun(slab, a)).collect();
-            let args_noun = vec_to_list(slab, args_vec);
-            let s_noun = spec_to_noun(slab, s)?;
-            let inner = T(slab, &[name_noun, args_noun]);
-            tagged2(slab, "made", inner, s_noun)
-        }
-        Make(hoon, specs) => {
-            let hoon_noun = hoon_to_noun(slab, hoon);
-            let specs_vec: Vec<_> = specs
-                .iter()
-                .map(|s| spec_to_noun(slab, s))
-                .collect::<Result<_>>()?;
-            let specs_noun = vec_to_list(slab, specs_vec);
-            tagged2(slab, "make", hoon_noun, specs_noun)
-        }
-        Name(name, s) => {
-            let name_noun = term_to_noun(slab, name);
-            let s_noun = spec_to_noun(slab, s)?;
-            tagged2(slab, "name", name_noun, s_noun)
-        }
-        Over(wing, s) => {
-            let wing_noun = wing_to_noun(slab, wing)?;
-            let s_noun = spec_to_noun(slab, s)?;
-            tagged2(slab, "over", wing_noun, s_noun)
-        }
-        BucGar(a, b) => {
-            let a_noun = spec_to_noun(slab, a)?;
-            let b_noun = spec_to_noun(slab, b)?;
-            tagged2(slab, "bcgr", a_noun, b_noun)
-        }
-        BucBuc(a, map) => {
-            let a_noun = spec_to_noun(slab, a)?;
-            let entries: Vec<_> = map
-                .iter()
-                .map(|(k, v)| Ok((term_to_noun(slab, k), spec_to_noun(slab, v)?)))
-                .collect::<Result<_>>()?;
-            let map_noun = map_to_noun(slab, entries)?;
-            tagged2(slab, "bcbc", a_noun, map_noun)
-        }
-        BucBar(a, h) => {
-            let a_noun = spec_to_noun(slab, a)?;
-            let h_noun = hoon_to_noun(slab, h);
-            tagged2(slab, "bcbr", a_noun, h_noun)
-        }
-        BucCab(h) => {
-            let h_noun = hoon_to_noun(slab, h);
-            tagged1(slab, "bccb", h_noun)
-        }
-        BucCol(a, specs) => {
-            let a_noun = spec_to_noun(slab, a)?;
-            let specs_vec: Vec<_> = specs
-                .iter()
-                .map(|s| spec_to_noun(slab, s))
-                .collect::<Result<_>>()?;
-            let specs_noun = vec_to_list(slab, specs_vec);
-            tagged2(slab, "bccl", a_noun, specs_noun)
-        }
-        BucCen(a, specs) => {
-            let a_noun = spec_to_noun(slab, a)?;
-            let specs_vec: Vec<_> = specs
-                .iter()
-                .map(|s| spec_to_noun(slab, s))
-                .collect::<Result<_>>()?;
-            let specs_noun = vec_to_list(slab, specs_vec);
-            tagged2(slab, "bccn", a_noun, specs_noun)
-        }
-        BucDot(a, map) => {
-            let a_noun = spec_to_noun(slab, a)?;
-            let entries: Vec<_> = map
-                .iter()
-                .map(|(k, v)| Ok((term_to_noun(slab, k), spec_to_noun(slab, v)?)))
-                .collect::<Result<_>>()?;
-            let map_noun = map_to_noun(slab, entries)?;
-            tagged2(slab, "bcdt", a_noun, map_noun)
-        }
-        BucGal(a, b) => {
-            let a_noun = spec_to_noun(slab, a)?;
-            let b_noun = spec_to_noun(slab, b)?;
-            tagged2(slab, "bcgl", a_noun, b_noun)
-        }
-        BucHep(a, b) => {
-            let a_noun = spec_to_noun(slab, a)?;
-            let b_noun = spec_to_noun(slab, b)?;
-            tagged2(slab, "bchp", a_noun, b_noun)
-        }
-        BucKet(a, b) => {
-            let a_noun = spec_to_noun(slab, a)?;
-            let b_noun = spec_to_noun(slab, b)?;
-            tagged2(slab, "bckt", a_noun, b_noun)
-        }
-        BucLus(tag, s) => {
-            let tag_noun = term_to_noun(slab, tag);
-            let s_noun = spec_to_noun(slab, s)?;
-            tagged2(slab, "bcls", tag_noun, s_noun)
-        }
-        BucFas(a, map) => {
-            let a_noun = spec_to_noun(slab, a)?;
-            let entries: Vec<_> = map
-                .iter()
-                .map(|(k, v)| Ok((term_to_noun(slab, k), spec_to_noun(slab, v)?)))
-                .collect::<Result<_>>()?;
-            let map_noun = map_to_noun(slab, entries)?;
-            tagged2(slab, "bcfs", a_noun, map_noun)
-        }
-        BucMic(h) => {
-            let inner = hoon_to_noun(slab, h);
-            tagged1(slab, "bcmc", inner)
-        }
-        BucPam(a, h) => {
-            let a_noun = spec_to_noun(slab, a)?;
-            let h_noun = hoon_to_noun(slab, h);
-            tagged2(slab, "bcpm", a_noun, h_noun)
-        }
-        BucSig(h, a) => {
-            let h_noun = hoon_to_noun(slab, h);
-            let a_noun = spec_to_noun(slab, a)?;
-            tagged2(slab, "bcsg", h_noun, a_noun)
-        }
-        BucTic(a, map) => {
-            let a_noun = spec_to_noun(slab, a)?;
-            let entries: Vec<_> = map
-                .iter()
-                .map(|(k, v)| Ok((term_to_noun(slab, k), spec_to_noun(slab, v)?)))
-                .collect::<Result<_>>()?;
-            let map_noun = map_to_noun(slab, entries)?;
-            tagged2(slab, "bctc", a_noun, map_noun)
-        }
-        BucTis(skin, a) => {
-            let skin_noun = skin_to_noun(slab, skin)?;
-            let a_noun = spec_to_noun(slab, a)?;
-            tagged2(slab, "bcts", skin_noun, a_noun)
-        }
-        BucPat(a, b) => {
-            let a_noun = spec_to_noun(slab, a)?;
-            let b_noun = spec_to_noun(slab, b)?;
-            tagged2(slab, "bcpt", a_noun, b_noun)
-        }
-        BucWut(a, specs) => {
-            let a_noun = spec_to_noun(slab, a)?;
-            let specs_vec: Vec<_> = specs
-                .iter()
-                .map(|s| spec_to_noun(slab, s))
-                .collect::<Result<_>>()?;
-            let specs_noun = vec_to_list(slab, specs_vec);
-            tagged2(slab, "bcwt", a_noun, specs_noun)
-        }
-        BucZap(a, map) => {
-            let a_noun = spec_to_noun(slab, a)?;
-            let entries: Vec<_> = map
-                .iter()
-                .map(|(k, v)| Ok((term_to_noun(slab, k), spec_to_noun(slab, v)?)))
-                .collect::<Result<_>>()?;
-            let map_noun = map_to_noun(slab, entries)?;
-            tagged2(slab, "bczp", a_noun, map_noun)
-        }
-    })
-}
-
-fn basetype_to_noun(slab: &mut NounSlab, bt: &BaseType) -> Noun {
-    match bt {
-        BaseType::NounExpr => term_to_noun(slab, "noun"),
-        BaseType::Cell => term_to_noun(slab, "cell"),
-        BaseType::Flag => term_to_noun(slab, "flag"),
-        BaseType::Null => term_to_noun(slab, "null"),
-        BaseType::Void => term_to_noun(slab, "void"),
-        BaseType::Atom(au) => {
-            let at = term_to_noun(slab, au);
-            tagged1(slab, "atom", at)
-        }
-    }
-}
-
-fn skin_to_noun(slab: &mut NounSlab, skin: &Skin) -> Result<Noun> {
-    use Skin::*;
-    Ok(match skin {
-        Term(s) => term_to_noun(slab, s),
-        Base(bt) => {
-            let inner = basetype_to_noun(slab, bt);
-            tagged1(slab, "base", inner)
-        }
-        Cell(l, r) => {
-            let l = skin_to_noun(slab, l)?;
-            let r = skin_to_noun(slab, r)?;
-            tagged2(slab, "cell", l, r)
-        }
-        Dbug(spot, s) => {
-            let spot_noun = spot_to_noun(slab, spot)?;
-            let s_noun = skin_to_noun(slab, s)?;
-            tagged2(slab, "dbug", spot_noun, s_noun)
-        }
-        Help(help, s) => {
-            let help_noun = noun_expr_to_noun(slab, help);
-            let s_noun = skin_to_noun(slab, s)?;
-            tagged2(slab, "help", help_noun, s_noun)
-        }
-        Leaf(tag, atom) => {
-            let tag_noun = term_to_noun(slab, tag);
-            let atom_noun = atom_to_noun(slab, atom);
-            tagged2(slab, "leaf", tag_noun, atom_noun)
-        }
-        Name(name, s) => {
-            let name_noun = term_to_noun(slab, name);
-            let s_noun = skin_to_noun(slab, s)?;
-            tagged2(slab, "name", name_noun, s_noun)
-        }
-        Over(wing, s) => {
-            let wing_noun = wing_to_noun(slab, wing)?;
-            let s_noun = skin_to_noun(slab, s)?;
-            tagged2(slab, "over", wing_noun, s_noun)
-        }
-        Spec(spec, s) => {
-            let spec_noun = spec_to_noun(slab, spec)?;
-            let s_noun = skin_to_noun(slab, s)?;
-            tagged2(slab, "spec", spec_noun, s_noun)
-        }
-        Wash(n) => {
-            let n_noun = noun_u64(slab, *n);
-            tagged1(slab, "wash", n_noun)
-        }
-    })
-}
-
-/// `[%spot %1 spot]`, the hint clue `mint` puts on a `%dbug` node's formula.
 fn spot_hint_clue(slab: &mut NounSlab, spot: &Spot) -> Result<Noun> {
     let spot_noun = spot_to_noun(slab, spot)?;
     let hint_inner = T(slab, &[D(1), spot_noun]);
@@ -14330,10 +14107,6 @@ fn pint_to_noun(slab: &mut NounSlab, pint: &Pint) -> Result<Noun> {
     let p = T(slab, &[p0, p1]);
     let q = T(slab, &[q0, q1]);
     Ok(T(slab, &[p, q]))
-}
-
-fn atom_to_noun(slab: &mut NounSlab, atom: &ParsedAtom) -> Noun {
-    parsed_atom_to_noun(slab, atom)
 }
 
 fn nock_to_noun(slab: &mut NounSlab, nock: &Nock) -> Noun {

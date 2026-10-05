@@ -1,0 +1,11 @@
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "files",
+    srcs = glob(["cases/*", "desk/**", "environment/*", "kernel/*", "reference/*", "reject/*"]),
+)
+
+filegroup(
+    name = "kernel_source",
+    srcs = ["kernel/hoon.hoon"],
+)

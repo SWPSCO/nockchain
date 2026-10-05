@@ -122,9 +122,17 @@ pub struct HoldKey<T> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct LazyCoreKey {
+    pub scope: LazyScopeId,
     pub subject: TypeId,
     pub tomes: TomesSignature,
     pub poly: PolyKey,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct LazyScopeKey {
+    pub vet: bool,
+    pub fan: FanContextId,
+    pub rib: Vec<WetRibKey>,
 }
 
 /// A `miss` memo key. `assumptions` is the hold-pair set `gil` the verdict was
@@ -333,6 +341,6 @@ mod tests {
         // `MissKey` also carries its assumption set, which is part of the verdict.
         assert!(size_of::<MissKey>() <= size_of::<(u64, u64, u8, Vec<(TypeId, TypeId)>)>());
         assert!(size_of::<WetRibKey>() <= size_of::<(usize, usize, u64)>());
-        assert!(size_of::<LazyCoreKey>() <= size_of::<(usize, u64, u8)>());
+        assert!(size_of::<LazyCoreKey>() <= size_of::<(usize, u64, u8, u64)>());
     }
 }

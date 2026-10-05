@@ -1,5 +1,5 @@
 load("@crates//:defs.bzl", "aliases", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 load("//:lints/cargo_lint_sources.bzl", "cargo_lint_sources")
 
 package(default_visibility = ["//visibility:public"])
@@ -17,12 +17,15 @@ rust_library(
     ),
     aliases = aliases(),
     crate_name = "honk",
+    compile_data = ["assets/laze-135.jam"],
     edition = "2021",
+    rustc_env_files = [":native_compiler_fingerprint_env"],
     proc_macro_deps = [
         "//crates/nockvm/rust/nockvm_macros",
     ] + all_crate_deps(proc_macro = True),
     deps = [
         "//crates/hatch",
+        "//crates/hatcher",
         "//crates/honc-cold-138",
         "//crates/hoonc:hoonc_lib",
         "//crates/nockapp",
@@ -48,9 +51,11 @@ genrule(
         "src/**/*.rs",
         "build.rs",
         "Cargo.toml",
+        "assets/laze-135.jam",
     ]) + [
         "//:Cargo.lock",
         "//crates/hatch:fingerprint_srcs",
+        "//crates/hatcher:fingerprint_srcs",
         "//crates/nockapp:fingerprint_srcs",
         "//crates/nockvm/rust/nockvm:fingerprint_srcs",
     ],
@@ -93,10 +98,33 @@ rust_binary(
     deps = [
         ":honk_lib",
         "//crates/hatch",
+        "//crates/hatcher",
         "//crates/honc-cold-138",
         "//crates/hoonc:hoonc_lib",
         "//crates/nockapp",
         "//crates/nockvm/rust/nockvm",
         "//crates/zkvm-jetpack",
     ] + all_crate_deps(),
+)
+
+rust_test(
+    name = "urbit135_parity_test",
+    srcs = ["tests/hoon135.rs"],
+    crate_root = "tests/hoon135.rs",
+    aliases = aliases(),
+    compile_data = ["//crates/hatcher:rune_catalog", "assets/laze-135.hoon", "assets/laze-135.jam"],
+    data = [":honk", "//crates/honk/test-assets/urbit135:files"],
+    env = {"HONK_BINARY": "$(rootpath :honk)"},
+    args = ["--test-threads=1"],
+    rustc_env = {
+        "CARGO_MANIFEST_DIR": "crates/honk",
+        "URBIT135_ASSETS": "crates/honk/test-assets/urbit135",
+    },
+    deps = [
+        ":honk_lib",
+        "//crates/hatch",
+        "//crates/nockapp",
+        "//crates/nockvm/rust/nockvm",
+    ] + all_crate_deps(normal = True, normal_dev = True),
+    size = "large",
 )

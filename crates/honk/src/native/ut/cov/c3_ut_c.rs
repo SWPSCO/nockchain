@@ -1445,7 +1445,11 @@ fn type_zoo() -> Type {
 #[test]
 fn c3_type_to_noun_lowers_every_ast_form() {
     let mut slab = NounSlab::new();
-    let noun = type_to_noun(&mut slab, &type_zoo()).unwrap();
+    let noun = hatch::utils::type_to_noun_for_dialect(
+        crate::native::Dialect::Nockchain,
+        &mut slab,
+        &type_zoo(),
+    );
     let text = show(&slab, noun);
     for needle in [
         "%fork", "%noun", "%void", "%cell", "%core", "%face", "%tune", "%hint", "%hold", "%help",
@@ -1530,7 +1534,11 @@ fn c3_note_to_noun_made_wings_and_tunes() {
     let mut map = HashMap::new();
     map.insert("x".to_string(), None);
     let tune: Tune = (map, Vec::new());
-    let n = tune_to_noun(&mut slab, &tune).unwrap();
+    let n = hatch::utils::term_or_tune_to_noun_for_dialect(
+        crate::native::Dialect::Nockchain,
+        &mut slab,
+        &TermOrTune::Tune(tune),
+    );
     assert_eq!(show(&slab, n), "[[[%x 0] [0 0]] 0]");
 }
 

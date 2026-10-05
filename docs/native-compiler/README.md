@@ -1,5 +1,7 @@
 # Native Hoon compiler notes
 
+For Hoon 135 projects and mixed source roots, see [Urbit support](urbit.md).
+
 These notes are for open-source native compiler work. Paths are relative to the
 repository root. Parser details belong here when they affect compiler artifact
 parity; parser-only notes belong in `docs/native-parser/`.

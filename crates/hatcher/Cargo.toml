@@ -1,0 +1,20 @@
+[package]
+name = "hatcher"
+version.workspace = true
+edition.workspace = true
+license = "MIT OR Apache-2.0"
+description = "Urbit Hoon 135 parser"
+
+[dependencies]
+bitvec = "1"
+bytes = { workspace = true }
+chumsky = "0.10"
+either = { workspace = true }
+num-bigint = { workspace = true, features = ["serde"] }
+num-traits = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

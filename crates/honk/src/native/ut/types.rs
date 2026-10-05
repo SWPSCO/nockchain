@@ -875,6 +875,10 @@ pub struct LazyResolverArmEntry {
 
 #[derive(Clone, Debug)]
 pub struct LazyResolverContext {
+    pub fan_leg_ids: Vec<FanLegId>,
+    pub fan: Vec<(Noun, Noun)>,
+    pub rib: Vec<(NRc<NTy>, NRc<NTy>, Noun)>,
+    pub vet: bool,
     // The native deepening core built in `mint_core`. It lives in the type
     // arena, not the slab, so it needs no relocation, and it shares pointer
     // identity with the in-progress entries pushed while its arms build.

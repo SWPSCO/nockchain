@@ -21,11 +21,21 @@ on:
     branches: ["master", "nightly"]
     paths:
       - "crates/honk/**"
+      - "crates/hatch/**"
+      - "crates/hatcher/**"
+      - "tools/urbit135/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - ".github/workflows/parity.yml"
   pull_request:
     branches: ["master", "nightly"]
     paths:
       - "crates/honk/**"
+      - "crates/hatch/**"
+      - "crates/hatcher/**"
+      - "tools/urbit135/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - ".github/workflows/parity.yml"
 
 permissions:
@@ -37,6 +47,7 @@ concurrency:
 
 jobs:
   kernel-parity:
+    needs: urbit135-artifacts
     name: ${{ matrix.kernel }} kernel parity
     runs-on: ubuntu-latest
     timeout-minutes: 180
@@ -48,6 +59,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: urbit135-jams
+          path: crates/honk
+
       # Build the hoonc reference before the test so the two ~10GB kernel
       # compiles (hoonc + honk) never run concurrently on a 16GB runner; the
       # test step reuses this action result from the job's local cache.
@@ -58,6 +74,7 @@ jobs:
         run: bazel test //assets/native:${{ matrix.kernel }}_parity_test
 
   type-probe-parity:
+    needs: urbit135-artifacts
     # Small probe pairings: curated type probes, compiler fixtures, and the
     # coverage probe packages (strict cmp of hoonc-vs-honk builds, mostly
     # --arbitrary with an empty deps dir), the correctness regressions, and
@@ -72,10 +89,16 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: urbit135-jams
+          path: crates/honk
+
       - name: Test type-checking parity probes (hoonc vs honk, strict cmp)
         run: bazel test //crates/honk/test-assets/type-probes:all_parity_test
 
   hoon-138-parity:
+    needs: urbit135-artifacts
     # The honk native self-mint peaks ~14GB RSS; ubuntu-latest (16GB) is
     # tight but the resource_set declaration serializes it against the hoonc
     # reference build. Move to a larger runner class if it OOMs.
@@ -86,6 +109,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: urbit135-jams
+          path: crates/honk
+
       # Serialize the two heavy compiles (see the kernel job note); the honk
       # self-mint alone peaks ~14GB RSS.
       - name: Build hoonc hoon-138 reference
@@ -93,3 +121,41 @@ jobs:
 
       - name: Test hoon-138 self-mint parity (hoonc vs honk native, strict cmp)
         run: bazel test //crates/honk/test-assets:hoon_138_arbitrary_parity_test
+
+  urbit135-artifacts:
+    name: Generate Hoon 135 artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Zig
+        run: |
+          curl --fail --location --output "$RUNNER_TEMP/zig.tar.xz" https://ziglang.org/download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz
+          echo "02aa270f183da276e5b5920b1dac44a63f1a49e55050ebde3aecc9eb82f93239  $RUNNER_TEMP/zig.tar.xz" | sha256sum --check
+          tar --extract --xz --file "$RUNNER_TEMP/zig.tar.xz" --directory "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/zig-x86_64-linux-0.15.2" >> "$GITHUB_PATH"
+      - name: Test artifact generation
+        run: python3 -m unittest discover -s tools/urbit135 -p 'test_*.py'
+      - name: Generate pinned JAMs
+        run: python3 tools/urbit135/verify.py --build-evaluator --artifacts "$RUNNER_TEMP/urbit135"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: urbit135-jams
+          path: |
+            crates/honk/assets/laze-135.jam
+            crates/honk/test-assets/urbit135/reference/*.jam
+          if-no-files-found: error
+
+  hoon-135-parity:
+    name: Hoon 135 parser, compiler, and system parity
+    needs: urbit135-artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: urbit135-jams
+          path: crates/honk
+      - name: Compare native artifacts byte for byte
+        run: bazel test //crates/hatcher:parser135_test //crates/honk:urbit135_parity_test

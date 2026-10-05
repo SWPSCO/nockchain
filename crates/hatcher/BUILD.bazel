@@ -1,0 +1,42 @@
+load("@crates//:defs.bzl", "aliases", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("//:lints/cargo_lint_sources.bzl", "cargo_lint_sources")
+
+package(default_visibility = ["//visibility:public"])
+
+cargo_lint_sources()
+
+exports_files(["Cargo.toml"])
+
+filegroup(
+    name = "fingerprint_srcs",
+    srcs = glob(["src/**/*.rs"]),
+)
+
+rust_library(
+    name = "hatcher",
+    srcs = glob(["src/**/*.rs"]),
+    aliases = aliases(),
+    crate_name = "hatcher",
+    edition = "2021",
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    deps = all_crate_deps(),
+)
+
+filegroup(
+    name = "rune_catalog",
+    srcs = ["tests/fixtures/runes135.json"],
+)
+
+rust_test(
+    name = "parser135_test",
+    srcs = ["tests/parser135.rs"],
+    crate_root = "tests/parser135.rs",
+    edition = "2021",
+    aliases = aliases(),
+    compile_data = [
+        "tests/fixtures/runes135.json",
+        "//crates/honk/test-assets/urbit135:kernel_source",
+    ],
+    deps = [":hatcher"] + all_crate_deps(normal = True, normal_dev = True),
+)

@@ -9,12 +9,6 @@ use num_bigint::BigUint;
 
 use crate::errors::{CompilerError, CompilerErrorLocation, CompilerErrorMetadata, Result};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ScopeMode {
-    Standard,
-    Urbit,
-}
-
 #[derive(Clone)]
 pub struct CompileRequest {
     pub entry: PathBuf,
@@ -50,37 +44,13 @@ pub async fn build_jam(req: CompileRequest) -> Result<Vec<u8>> {
 }
 
 pub fn parse_native_hoon(path: &Path, deps_dir: &Path, dbug: bool) -> Result<ast::Hoon> {
-    parse_native_hoon_with_mode(path, deps_dir, dbug, ScopeMode::Standard)
-}
-
-pub fn parse_native_hoon_with_mode(
-    path: &Path,
-    deps_dir: &Path,
-    dbug: bool,
-    scope_mode: ScopeMode,
-) -> Result<ast::Hoon> {
-    let wer_base = wer_base_dir_for_mode(path, deps_dir, scope_mode);
-    let mut resolver = NativeImportResolver::new(wer_base, dbug, scope_mode);
-    resolver.parse(path)
+    NativeImportResolver::new(deps_dir.to_path_buf(), dbug).parse(path)
 }
 
 pub fn parse_native_hoon_leaf(path: &Path, deps_dir: &Path, dbug: bool) -> Result<ast::Hoon> {
-    parse_native_hoon_leaf_with_mode(path, deps_dir, dbug, ScopeMode::Standard)
-}
-
-pub fn parse_native_hoon_leaf_with_mode(
-    path: &Path,
-    deps_dir: &Path,
-    dbug: bool,
-    scope_mode: ScopeMode,
-) -> Result<ast::Hoon> {
     let source = std::fs::read_to_string(path)?;
-    let source = sanitize_urbit_sys_header(scope_mode, path, source.as_str());
-    let wer_base = wer_base_dir_for_mode(path, deps_dir, scope_mode);
-    let wer = hoon_path_for_any(path, &wer_base);
-    let expr = parse_native_hoon_source_with_wer_and_dbug(path, source.as_str(), wer, dbug)?;
-    Ok(NativeImportResolver::new(wer_base, dbug, scope_mode)
-        .synthetic_urbit_scope_faces(path, expr))
+    let wer = hoon_path_for_any(path, deps_dir);
+    parse_native_hoon_source_with_wer_and_dbug(path, &source, wer, dbug)
 }
 
 pub fn parse_native_hoon_source(
@@ -101,14 +71,9 @@ pub fn parse_native_hoon_source_without_docs(
     parse_native_hoon_source_with_wer_dbug_and_docs(path, source, wer, dbug, false)
 }
 
-pub fn resolve_native_imports(
-    path: &Path,
-    deps_dir: &Path,
-    scope_mode: ScopeMode,
-) -> Result<Vec<ResolvedNativeImport>> {
-    let wer_base = wer_base_dir_for_mode(path, deps_dir, scope_mode);
-    let resolver = NativeImportResolver::new(wer_base, true, scope_mode);
-    resolver.resolve_imports_for(path, true)
+pub fn resolve_native_imports(path: &Path, deps_dir: &Path) -> Result<Vec<ResolvedNativeImport>> {
+    let resolver = NativeImportResolver::new(deps_dir.to_path_buf(), true);
+    resolver.resolve_imports_for(path)
 }
 
 /// Parses a whole dependency-tree file, as hoonc's `+parse-dir` does for
@@ -153,17 +118,15 @@ pub struct ResolvedNativeImport {
 struct NativeImportResolver {
     wer_base: PathBuf,
     dbug: bool,
-    scope_mode: ScopeMode,
     cache: HashMap<PathBuf, ast::Hoon>,
     visiting: HashSet<PathBuf>,
 }
 
 impl NativeImportResolver {
-    fn new(wer_base: PathBuf, dbug: bool, scope_mode: ScopeMode) -> Self {
+    fn new(wer_base: PathBuf, dbug: bool) -> Self {
         Self {
             wer_base,
             dbug,
-            scope_mode,
             cache: HashMap::new(),
             visiting: HashSet::new(),
         }
@@ -180,10 +143,9 @@ impl NativeImportResolver {
                 canonical.display()
             )));
         }
-        let is_root = self.visiting.is_empty();
         self.visiting.insert(canonical.clone());
 
-        let parsed = self.parse_uncached(path, is_root);
+        let parsed = self.parse_uncached(path);
         let _ = self.visiting.remove(&canonical);
         if let Ok(expr) = &parsed {
             self.cache.insert(canonical, expr.clone());
@@ -191,19 +153,13 @@ impl NativeImportResolver {
         parsed
     }
 
-    fn parse_uncached(&mut self, path: &Path, is_root: bool) -> Result<ast::Hoon> {
+    fn parse_uncached(&mut self, path: &Path) -> Result<ast::Hoon> {
         let source = std::fs::read_to_string(path)?;
-        let source = sanitize_urbit_sys_header(self.scope_mode, path, source.as_str());
         let wer = hoon_path_for_any(path, &self.wer_base);
         let mut expr =
             parse_native_hoon_source_with_wer_and_dbug(path, source.as_str(), wer, self.dbug)?;
-        expr = self.synthetic_urbit_scope_faces(path, expr);
 
-        let mut imports = parse_leading_imports(source.as_str())?;
-        let synthetic = self.synthetic_urbit_scope_imports(path, is_root);
-        if !synthetic.is_empty() {
-            imports.splice(0..0, synthetic);
-        }
+        let imports = parse_leading_imports(source.as_str())?;
 
         for import in imports.iter().rev() {
             let dep_path = self.resolve_import(path, import.kind, import.suffix.as_str())?;
@@ -225,14 +181,9 @@ impl NativeImportResolver {
         Ok(expr)
     }
 
-    fn resolve_imports_for(&self, path: &Path, is_root: bool) -> Result<Vec<ResolvedNativeImport>> {
+    fn resolve_imports_for(&self, path: &Path) -> Result<Vec<ResolvedNativeImport>> {
         let source = std::fs::read_to_string(path)?;
-        let source = sanitize_urbit_sys_header(self.scope_mode, path, source.as_str());
-        let mut imports = parse_leading_imports(source.as_str())?;
-        let synthetic = self.synthetic_urbit_scope_imports(path, is_root);
-        if !synthetic.is_empty() {
-            imports.splice(0..0, synthetic);
-        }
+        let imports = parse_leading_imports(source.as_str())?;
 
         imports
             .into_iter()
@@ -324,64 +275,6 @@ impl NativeImportResolver {
         let path = self.wer_base.join(rel);
         path.is_file().then_some(path)
     }
-
-    fn synthetic_urbit_scope_faces(&self, path: &Path, expr: ast::Hoon) -> ast::Hoon {
-        if self.scope_mode != ScopeMode::Urbit {
-            return expr;
-        }
-        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
-            return expr;
-        };
-        let faces: &[&str] = match stem {
-            // /sys/hoon and /sys/arvo expect +ride in ambient context.
-            "hoon" => &["ride"],
-            "arvo" => &["ride", "zuse"],
-            _ => &[],
-        };
-        faces.iter().rev().fold(expr, |inner, face| {
-            ast::Hoon::TisLus(
-                Box::new(ast::Hoon::KetTis(
-                    ast::Skin::Term((*face).to_string()),
-                    Box::new(ast::Hoon::Wing(vec![])),
-                )),
-                Box::new(inner),
-            )
-        })
-    }
-
-    fn synthetic_urbit_scope_imports(&self, path: &Path, is_root: bool) -> Vec<ScopedImport> {
-        if self.scope_mode != ScopeMode::Urbit {
-            return Vec::new();
-        }
-        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
-            return Vec::new();
-        };
-        let required_sys: Vec<(&str, Option<&str>)> = match stem {
-            // Urbit-mode prelude: non-sys files get zuse in scope, zuse
-            // depends on lull, and lull expects `..part` from /sys/hoon.
-            "zuse" => vec![("lull", Some("lull"))],
-            "lull" => vec![("hoon", Some("part"))],
-            "hoon" => Vec::new(),
-            _ => {
-                if is_root {
-                    vec![("zuse", None)]
-                } else {
-                    Vec::new()
-                }
-            }
-        };
-
-        required_sys
-            .into_iter()
-            .filter(|(name, _)| urbit_sys_file_exists(&self.wer_base, name))
-            .map(|(name, face)| ScopedImport {
-                kind: ImportKind::Sys,
-                face: face.map(std::string::ToString::to_string),
-                mark: None,
-                suffix: name.to_string(),
-            })
-            .collect()
-    }
 }
 
 /// Directories hoonc's dependency walk skips (`BLACKLISTED_DIRS` in
@@ -423,13 +316,6 @@ fn path_knots(path: &str) -> Option<Vec<String>> {
     }
     let knots: Vec<String> = rest.split('/').map(ToString::to_string).collect();
     (!knots.iter().any(String::is_empty)).then_some(knots)
-}
-
-fn urbit_sys_file_exists(wer_base: &Path, name: &str) -> bool {
-    if name == "hoon" {
-        return vendored_hoon_sys_path().is_some();
-    }
-    wer_base.join("sys").join(format!("{name}.hoon")).is_file()
 }
 
 fn vendored_hoon_sys_path() -> Option<PathBuf> {
@@ -896,48 +782,6 @@ fn parse_native_hoon_source_with_wer_dbug_and_docs(
     Ok(parsed)
 }
 
-fn sanitize_urbit_sys_header(scope_mode: ScopeMode, path: &Path, source: &str) -> String {
-    if scope_mode != ScopeMode::Urbit {
-        return source.to_string();
-    }
-    let parent_is_sys = path
-        .parent()
-        .and_then(Path::file_name)
-        .and_then(|seg| seg.to_str())
-        == Some("sys");
-    if !parent_is_sys {
-        return source.to_string();
-    }
-
-    let mut out = String::with_capacity(source.len());
-    let mut in_header = true;
-    for line in source.split_inclusive('\n') {
-        let trimmed = line.trim_start();
-        if in_header {
-            if trimmed.starts_with("=>") && trimmed.contains("..") {
-                continue;
-            }
-            if trimmed.starts_with("~%") {
-                continue;
-            }
-            if trimmed.starts_with("|%")
-                || trimmed.starts_with("|_")
-                || trimmed.starts_with("|=")
-                || trimmed.starts_with("|*")
-            {
-                in_header = false;
-            }
-        }
-        out.push_str(line);
-    }
-
-    if out.is_empty() {
-        source.to_string()
-    } else {
-        out
-    }
-}
-
 fn hoon_path_for_any(path: &Path, deps_dir: &Path) -> Vec<String> {
     if let Ok(rel) = path.strip_prefix(deps_dir) {
         return hoon_path_for_absolute(rel);
@@ -991,56 +835,6 @@ fn hoon_path_for_absolute(path: &Path) -> Vec<String> {
         .collect()
 }
 
-fn wer_base_dir_for_mode(path: &Path, deps_dir: &Path, scope_mode: ScopeMode) -> PathBuf {
-    match scope_mode {
-        ScopeMode::Standard => deps_dir.to_path_buf(),
-        ScopeMode::Urbit => {
-            resolve_urbit_arvo_root(path, deps_dir).unwrap_or_else(|| deps_dir.to_path_buf())
-        }
-    }
-}
-
-#[cfg(test)]
-fn parse_roots_for_mode(entry: &Path, deps_dir: &Path, scope_mode: ScopeMode) -> Vec<PathBuf> {
-    let mut roots = vec![deps_dir.to_path_buf()];
-    if scope_mode == ScopeMode::Urbit {
-        if let Some(arvo_root) = resolve_urbit_arvo_root(entry, deps_dir) {
-            let sys_root = arvo_root.join("sys");
-            if sys_root.is_dir() && !roots.iter().any(|root| root == &sys_root) {
-                roots.push(sys_root);
-            }
-        }
-    }
-    roots
-}
-
-fn resolve_urbit_arvo_root(path: &Path, deps_dir: &Path) -> Option<PathBuf> {
-    if let Some(root) = find_urbit_arvo_root(deps_dir) {
-        return Some(root);
-    }
-    find_urbit_arvo_root(path)
-}
-
-fn find_urbit_arvo_root(path: &Path) -> Option<PathBuf> {
-    for ancestor in path.ancestors() {
-        if ancestor.file_name().and_then(|seg| seg.to_str()) != Some("arvo") {
-            continue;
-        }
-        if ancestor
-            .parent()
-            .and_then(|parent| parent.file_name())
-            .and_then(|seg| seg.to_str())
-            != Some("pkg")
-        {
-            continue;
-        }
-        if ancestor.join("sys").is_dir() {
-            return Some(ancestor.to_path_buf());
-        }
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -1048,10 +842,9 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{
-        hyphen_segment_variants, parse_leading_imports, parse_native_hoon_with_mode,
-        parse_native_hoon_with_wer_and_dbug, parse_roots_for_mode, sanitize_urbit_sys_header,
-        suffix_path_candidates, vendored_hoon_sys_path, ImportKind, NativeImportResolver,
-        ScopeMode, ScopedImport,
+        hyphen_segment_variants, parse_leading_imports, parse_native_hoon,
+        parse_native_hoon_with_wer_and_dbug, suffix_path_candidates, vendored_hoon_sys_path,
+        ImportKind, NativeImportResolver, ScopedImport,
     };
     use crate::errors::CompilerError;
 
@@ -1096,25 +889,6 @@ mod tests {
         assert!(location.end_col.is_some(), "end col should exist");
 
         let _ = fs::remove_file(path);
-    }
-
-    #[test]
-    fn urbit_scope_includes_sys_parse_root() {
-        let tmp = std::env::temp_dir().join("honk-urbit-scope-test");
-        let arvo = tmp.join("pkg").join("arvo");
-        let sys = arvo.join("sys");
-        let app = arvo.join("app");
-        let _ = fs::create_dir_all(&sys);
-        let _ = fs::create_dir_all(&app);
-        let entry = app.join("ping.hoon");
-        let _ = fs::write(&entry, "|=([a=@ b=@] a)\n");
-
-        let roots = parse_roots_for_mode(&entry, &arvo, ScopeMode::Urbit);
-        assert!(roots.iter().any(|root| root == &arvo));
-        assert!(roots.iter().any(|root| root == &sys));
-
-        let _ = fs::remove_file(&entry);
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]
@@ -1317,8 +1091,8 @@ mod tests {
         let _ = fs::write(&dep, "|=([a=@ b=@] (add a b))\n");
         let _ = fs::write(&entry, "/+  helper\n|=([a=@ b=@] (helper a b))\n");
 
-        let expr = parse_native_hoon_with_mode(&entry, &tmp, false, ScopeMode::Standard)
-            .expect("native parse should resolve /+ imports");
+        let expr =
+            parse_native_hoon(&entry, &tmp, false).expect("native parse should resolve /+ imports");
         match expr {
             super::ast::Hoon::TisLus(left, _) => match *left {
                 super::ast::Hoon::KetTis(super::ast::Skin::Term(face), _) => {
@@ -1344,8 +1118,8 @@ mod tests {
         let _ = fs::write(&dep, "|%\n++  keep  1\n--\n");
         let _ = fs::write(&entry, "/=  *  /common/wrapper\nkeep\n");
 
-        let expr = parse_native_hoon_with_mode(&entry, &tmp, false, ScopeMode::Standard)
-            .expect("native parse should resolve /= imports");
+        let expr =
+            parse_native_hoon(&entry, &tmp, false).expect("native parse should resolve /= imports");
         match expr {
             super::ast::Hoon::TisLus(_, _) => {}
             other => panic!("expected top-level TisLus raw import wrapper, got {other:?}"),
@@ -1357,93 +1131,7 @@ mod tests {
     }
 
     #[test]
-    fn urbit_synthetic_import_chain_matches_bootstrap_order() {
-        let tmp = std::env::temp_dir().join("honk-urbit-chain-test");
-        let arvo = tmp.join("pkg").join("arvo");
-        let sys = arvo.join("sys");
-        let app = arvo.join("app");
-        let _ = fs::create_dir_all(&sys);
-        let _ = fs::create_dir_all(&app);
-        let _ = fs::write(sys.join("lull.hoon"), "|=(a=@ a)\n");
-        let _ = fs::write(sys.join("zuse.hoon"), "|=(a=@ a)\n");
-        let entry = app.join("ping.hoon");
-        let _ = fs::write(&entry, "|=(a=@ a)\n");
-
-        let resolver = NativeImportResolver::new(arvo.clone(), false, ScopeMode::Urbit);
-
-        let root_imports = resolver.synthetic_urbit_scope_imports(&entry, true);
-        assert_eq!(root_imports.len(), 1);
-        assert_eq!(root_imports[0].kind, ImportKind::Sys);
-        assert_eq!(root_imports[0].suffix, "zuse");
-
-        let zuse_imports = resolver.synthetic_urbit_scope_imports(&sys.join("zuse.hoon"), false);
-        assert_eq!(zuse_imports.len(), 1);
-        assert_eq!(zuse_imports[0].kind, ImportKind::Sys);
-        assert_eq!(zuse_imports[0].suffix, "lull");
-        assert_eq!(zuse_imports[0].face.as_deref(), Some("lull"));
-
-        let lull_imports = resolver.synthetic_urbit_scope_imports(&sys.join("lull.hoon"), false);
-        assert_eq!(lull_imports.len(), 1);
-        assert_eq!(lull_imports[0].kind, ImportKind::Sys);
-        assert_eq!(lull_imports[0].suffix, "hoon");
-        assert_eq!(lull_imports[0].face.as_deref(), Some("part"));
-
-        let _ = fs::remove_dir_all(&tmp);
-    }
-
-    #[test]
-    fn urbit_synthetic_faces_match_bootstrap_expectations() {
-        let tmp = std::env::temp_dir().join("honk-urbit-faces-test");
-        let arvo = tmp.join("pkg").join("arvo");
-        let sys = arvo.join("sys");
-        let _ = fs::create_dir_all(&sys);
-        let resolver = NativeImportResolver::new(arvo, false, ScopeMode::Urbit);
-
-        let wrapped = resolver
-            .synthetic_urbit_scope_faces(&sys.join("lull.hoon"), super::ast::Hoon::Wing(vec![]));
-        assert!(
-            matches!(wrapped, super::ast::Hoon::Wing(_)),
-            "lull should not need direct face wrapper"
-        );
-
-        let wrapped = resolver
-            .synthetic_urbit_scope_faces(&sys.join("zuse.hoon"), super::ast::Hoon::Wing(vec![]));
-        assert!(
-            matches!(wrapped, super::ast::Hoon::Wing(_)),
-            "zuse should not need direct face wrapper"
-        );
-
-        let _ = fs::remove_dir_all(&tmp);
-    }
-
-    #[test]
-    fn urbit_parse_wraps_zuse_with_lull_face() {
-        let tmp = std::env::temp_dir().join("honk-urbit-zuse-wrap-test");
-        let arvo = tmp.join("pkg").join("arvo");
-        let sys = arvo.join("sys");
-        let _ = fs::create_dir_all(&sys);
-        let _ = fs::write(sys.join("lull.hoon"), "|=(a=@ a)\n");
-        let _ = fs::write(sys.join("zuse.hoon"), "=>  ..lull\n|=(a=@ a)\n");
-
-        let expr =
-            parse_native_hoon_with_mode(&sys.join("zuse.hoon"), &arvo, false, ScopeMode::Urbit)
-                .expect("urbit zuse parse should succeed");
-
-        match expr {
-            super::ast::Hoon::TisLus(left, _) => match *left {
-                super::ast::Hoon::KetTis(super::ast::Skin::Term(face), _) => {
-                    assert_eq!(face, "lull");
-                }
-                other => panic!("expected KetTis(lull) binding, got {other:?}"),
-            },
-            other => panic!("expected top-level TisLus(lull), got {other:?}"),
-        }
-
-        let _ = fs::remove_dir_all(&tmp);
-    }
-
-    #[test]
-    fn urbit_sys_hoon_resolves_to_vendored_hoon_file() {
+    fn sys_hoon_resolves_to_vendored_hoon_file() {
         let Some(vendored) = vendored_hoon_sys_path() else {
             panic!("expected vendored hoon-138.hoon to exist");
         };
@@ -1454,7 +1142,7 @@ mod tests {
         let from = app.join("ping.hoon");
         let _ = fs::write(&from, "|=(a=@ a)\n");
 
-        let resolver = NativeImportResolver::new(arvo.clone(), false, ScopeMode::Urbit);
+        let resolver = NativeImportResolver::new(arvo.clone(), false);
         let resolved = resolver
             .resolve_import(&from, ImportKind::Sys, "hoon")
             .expect("sys hoon should resolve");
@@ -1464,32 +1152,6 @@ mod tests {
             "resolved sys/hoon should point at vendored hoon-138 file"
         );
 
-        let _ = fs::remove_dir_all(&tmp);
-    }
-
-    #[test]
-    fn urbit_sys_header_sanitizer_drops_part_registration_lines() {
-        let tmp = std::env::temp_dir().join("honk-urbit-sanitize-header-test");
-        let sys = tmp.join("sys");
-        let _ = fs::create_dir_all(&sys);
-        let path = sys.join("lull.hoon");
-        let source = "!:\n=>  ..part\n~%  %lull  ..part  ~\n|%\n++  x  1\n--\n";
-        let sanitized = sanitize_urbit_sys_header(ScopeMode::Urbit, &path, source);
-        assert!(!sanitized.contains("..part"));
-        assert!(sanitized.starts_with("!:\n|%\n"));
-        assert!(sanitized.contains("++  x  1\n"));
-        let _ = fs::remove_dir_all(&tmp);
-    }
-
-    #[test]
-    fn urbit_header_sanitizer_keeps_non_sys_files() {
-        let tmp = std::env::temp_dir().join("honk-urbit-sanitize-nonsys-test");
-        let app = tmp.join("app");
-        let _ = fs::create_dir_all(&app);
-        let path = app.join("ping.hoon");
-        let source = "=>  ..part\n~%  %demo  ..part  ~\n|=([a=@] a)\n";
-        let sanitized = sanitize_urbit_sys_header(ScopeMode::Urbit, &path, source);
-        assert_eq!(sanitized, source);
         let _ = fs::remove_dir_all(&tmp);
     }
 }

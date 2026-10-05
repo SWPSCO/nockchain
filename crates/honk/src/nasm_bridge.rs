@@ -11,7 +11,8 @@
 //! before any parent is built). No whole subtree is compared or hashed; every
 //! node costs O(1) map work.
 
-use nockvm::noun::{Noun, NounSpace};
+use nockapp::noun::slab::NounSlab;
+use nockvm::noun::{Atom, Noun, NounSpace, D, DIRECT_MAX, T};
 
 use crate::errors::{CompilerError, Result};
 use crate::native::identity::{AtomValue, CellKey, NounIdentity};
@@ -158,6 +159,157 @@ impl SlabToNockasm {
     }
 }
 
+/// Build slab nouns for `root` and everything reachable from it, reusing any
+/// nodes hydrated by earlier reads of the same pack. Node ids are
+/// topologically ordered by construction (`NasmBundle::from_bytes` rejects
+/// forward references), so one forward pass hydrates children before parents.
+/// Mirrors `nockasm`'s `lower_root_node` for every node kind but builds
+/// directly into the slab, with no lower/jam/cue round trip.
+///
+/// `nodes` and `root` must belong to a validated bundle. `values` must have one
+/// slot per node and contain only nouns hydrated from that bundle into `slab`.
+pub fn hydrate_pack_root(
+    slab: &mut NounSlab,
+    nodes: &[nockasm::DagNode],
+    root: nockasm::DagId,
+    values: &mut [Option<Noun>],
+) -> Noun {
+    if let Some(value) = values[root.index()] {
+        return value;
+    }
+    let mut reachable = vec![false; nodes.len()];
+    let mut stack = vec![root];
+    while let Some(id) = stack.pop() {
+        let index = id.index();
+        // Already-hydrated nodes stop the walk: their children are hydrated too.
+        if reachable[index] || values[index].is_some() {
+            continue;
+        }
+        reachable[index] = true;
+        push_pack_children(&nodes[index], &mut stack);
+    }
+    for index in 0..nodes.len() {
+        if !reachable[index] || values[index].is_some() {
+            continue;
+        }
+        values[index] = Some(build_pack_node(slab, &nodes[index], values));
+    }
+    values[root.index()].expect("pack root hydrates after its children")
+}
+
+fn push_pack_children(node: &nockasm::DagNode, output: &mut Vec<nockasm::DagId>) {
+    use nockasm::{DagNode, DagOp};
+    match node {
+        DagNode::Atom(_) | DagNode::Op(DagOp::Slot(_)) => {}
+        DagNode::Cell(a, b)
+        | DagNode::Op(DagOp::Eval(a, b))
+        | DagNode::Op(DagOp::Eq(a, b))
+        | DagNode::Op(DagOp::Comp(a, b))
+        | DagNode::Op(DagOp::Push(a, b))
+        | DagNode::Op(DagOp::Hint(a, b))
+        | DagNode::Op(DagOp::Scry(a, b))
+        | DagNode::Op(DagOp::Edit(_, a, b)) => output.extend([*a, *b]),
+        DagNode::Nock(a)
+        | DagNode::Op(DagOp::Const(a))
+        | DagNode::Op(DagOp::Isa(a))
+        | DagNode::Op(DagOp::Inc(a))
+        | DagNode::Op(DagOp::Call(_, a)) => output.push(*a),
+        DagNode::Op(DagOp::If(a, b, c)) | DagNode::Op(DagOp::Hintd(a, b, c)) => {
+            output.extend([*a, *b, *c]);
+        }
+    }
+}
+
+/// Builds one node into the slab. Children are hydrated first (topological
+/// order), so the lookups cannot miss. The op arms reproduce nockasm's
+/// `lower_op` noun shapes. Cache packs are written in `Noun` mode and should
+/// hold only atoms and cells, but a pack is untrusted input, so every node kind
+/// is lowered.
+fn build_pack_node(slab: &mut NounSlab, node: &nockasm::DagNode, values: &[Option<Noun>]) -> Noun {
+    use nockasm::{DagNode, DagOp};
+    let get =
+        |id: &nockasm::DagId| values[id.index()].expect("pack children hydrate before parents");
+    match node {
+        DagNode::Atom(atom) => nasm_atom_to_slab(slab, atom),
+        DagNode::Cell(head, tail) => {
+            let (head, tail) = (get(head), get(tail));
+            T(slab, &[head, tail])
+        }
+        DagNode::Nock(raw) => get(raw),
+        DagNode::Op(op) => match op {
+            DagOp::Slot(axis) => {
+                let axis = nasm_atom_to_slab(slab, axis);
+                T(slab, &[D(0), axis])
+            }
+            DagOp::Const(value) => {
+                let value = get(value);
+                T(slab, &[D(1), value])
+            }
+            DagOp::Eval(subject, formula) => {
+                let (subject, formula) = (get(subject), get(formula));
+                T(slab, &[D(2), subject, formula])
+            }
+            DagOp::Isa(formula) => {
+                let formula = get(formula);
+                T(slab, &[D(3), formula])
+            }
+            DagOp::Inc(formula) => {
+                let formula = get(formula);
+                T(slab, &[D(4), formula])
+            }
+            DagOp::Eq(left, right) => {
+                let (left, right) = (get(left), get(right));
+                T(slab, &[D(5), left, right])
+            }
+            DagOp::If(condition, then_, else_) => {
+                let (condition, then_, else_) = (get(condition), get(then_), get(else_));
+                T(slab, &[D(6), condition, then_, else_])
+            }
+            DagOp::Comp(first, second) => {
+                let (first, second) = (get(first), get(second));
+                T(slab, &[D(7), first, second])
+            }
+            DagOp::Push(value, body) => {
+                let (value, body) = (get(value), get(body));
+                T(slab, &[D(8), value, body])
+            }
+            DagOp::Call(axis, formula) => {
+                let formula = get(formula);
+                let axis = nasm_atom_to_slab(slab, axis);
+                T(slab, &[D(9), axis, formula])
+            }
+            DagOp::Edit(axis, value, formula) => {
+                let (value, formula) = (get(value), get(formula));
+                let axis = nasm_atom_to_slab(slab, axis);
+                let target = T(slab, &[axis, value]);
+                T(slab, &[D(10), target, formula])
+            }
+            DagOp::Hint(tag, formula) => {
+                let (tag, formula) = (get(tag), get(formula));
+                T(slab, &[D(11), tag, formula])
+            }
+            DagOp::Hintd(tag, clue, formula) => {
+                let (tag, clue, formula) = (get(tag), get(clue), get(formula));
+                let pair = T(slab, &[tag, clue]);
+                T(slab, &[D(11), pair, formula])
+            }
+            DagOp::Scry(reference, path) => {
+                let (reference, path) = (get(reference), get(path));
+                T(slab, &[D(12), reference, path])
+            }
+        },
+    }
+}
+
+fn nasm_atom_to_slab(slab: &mut NounSlab, atom: &nockasm::Atom) -> Noun {
+    if let Some(value) = atom.as_u64() {
+        if value <= DIRECT_MAX {
+            return D(value);
+        }
+    }
+    <Atom as nockvm::ext::AtomExt>::from_bytes(slab, &atom.to_le_bytes()).as_noun()
+}
+
 #[cfg(test)]
 mod tests {
     use nockapp::noun::slab::NounSlab;
@@ -165,6 +317,92 @@ mod tests {
     use nockvm::noun::{Atom, NounAllocator, D, T};
 
     use super::*;
+
+    #[test]
+    fn packs_hydrate_every_node_kind() {
+        let mut slab: NounSlab = NounSlab::new();
+        let big = Atom::new(&mut slab, DIRECT_MAX + 1).as_noun();
+        let huge = Atom::from_bytes(&mut slab, &[0xabu8; 12]).as_noun();
+        let memo = Atom::from_bytes(&mut slab, b"memo").as_noun();
+        let spot = Atom::from_bytes(&mut slab, b"spot").as_noun();
+        let mut f = |cells: &[Noun]| T(&mut slab, cells);
+        let s1 = f(&[D(0), D(1)]);
+        let s2 = f(&[D(0), D(2)]);
+        let s3 = f(&[D(0), D(3)]);
+        let k0 = f(&[D(1), D(0)]);
+        let k1 = f(&[D(1), D(1)]);
+        let konst = f(&[D(42), D(43)]);
+        let edit = f(&[D(6), s3]);
+        let clue_body = f(&[D(1), D(0)]);
+        let clue = f(&[spot, clue_body]);
+        let formulas = vec![
+            s1,
+            f(&[D(0), big]),
+            f(&[D(1), konst]),
+            f(&[D(1), huge]),
+            f(&[D(2), s1, k0]),
+            f(&[D(3), s1]),
+            f(&[D(4), s1]),
+            f(&[D(5), s2, s3]),
+            f(&[D(6), s1, k0, k1]),
+            f(&[D(7), s1, s2]),
+            f(&[D(8), s1, s2]),
+            f(&[D(9), D(2), s1]),
+            f(&[D(10), edit, s2]),
+            f(&[D(11), memo, s1]),
+            f(&[D(11), clue, s1]),
+            f(&[D(12), s1, s2]),
+            f(&[s1, s2]),
+            f(&[D(99), D(1)]),
+        ];
+        let space = slab.noun_space();
+        let mut bridge = SlabToNockasm::new();
+        let converted: Vec<nockasm::Noun> = formulas
+            .iter()
+            .map(|formula| bridge.convert(*formula, &space).expect("convert"))
+            .collect();
+        let names: Vec<String> = (0..converted.len()).map(|i| format!("f{i}")).collect();
+        let inputs: Vec<nockasm::DagInput<'_>> = converted
+            .iter()
+            .zip(&names)
+            .map(|(noun, name)| nockasm::DagInput {
+                name,
+                noun,
+                mode: nockasm::DagMode::Formula,
+            })
+            .collect();
+        let bundle = nockasm::lift_bundle(&inputs).expect("lift");
+        let mut children = Vec::new();
+        for node in bundle.nodes() {
+            push_pack_children(node, &mut children);
+        }
+        assert!(!children.is_empty());
+
+        let mut target: NounSlab = NounSlab::new();
+        let mut values = vec![None; bundle.nodes().len()];
+        for (root, formula) in bundle.roots().iter().zip(&formulas) {
+            hydrate_pack_root(&mut target, bundle.nodes(), root.id(), &mut values);
+            // A second hydration of the same root is a no-op.
+            hydrate_pack_root(&mut target, bundle.nodes(), root.id(), &mut values);
+            let hydrated = values[root.id().index()].expect("root value");
+            target.set_root(hydrated);
+            slab.set_root(*formula);
+            assert_eq!(target.jam(), slab.jam(), "{}", root.name());
+        }
+        for (value, direct) in [(DIRECT_MAX, true), (DIRECT_MAX + 1, false)] {
+            let atom = nockasm::Atom::from(value);
+            let noun = nasm_atom_to_slab(&mut target, &atom);
+            assert_eq!(noun.is_direct(), direct);
+            assert_eq!(
+                noun.in_space(&target.noun_space())
+                    .as_atom()
+                    .unwrap()
+                    .as_u64()
+                    .unwrap(),
+                value
+            );
+        }
+    }
 
     /// The direct converter must agree with a jam/cue round trip: equal nouns,
     /// equal jam bytes, and the same lifted bundle.

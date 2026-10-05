@@ -14,9 +14,8 @@ use super::*;
 use crate::errors::CompilerError;
 use crate::native::noun::term_to_noun;
 use crate::pipeline::{
-    parse_native_hoon, parse_native_hoon_leaf, parse_native_hoon_leaf_with_mode,
-    parse_native_hoon_source, parse_native_hoon_with_mode, resolve_native_imports, CompileRequest,
-    NativeImportKind, ResolvedNativeImport, ScopeMode,
+    parse_native_hoon, parse_native_hoon_leaf, parse_native_hoon_source, resolve_native_imports,
+    CompileRequest, NativeImportKind, ResolvedNativeImport,
 };
 use crate::types::TypeNoun;
 
@@ -85,14 +84,13 @@ fn canon(path: &Path) -> PathBuf {
 }
 
 fn resolved(entry: &Path, deps: &Path) -> Vec<ResolvedNativeImport> {
-    resolve_native_imports(entry, deps, ScopeMode::Standard).expect("imports resolve")
+    resolve_native_imports(entry, deps).expect("imports resolve")
 }
 
 fn resolve_err(source: &str) -> CompilerError {
     let tree = Tree::new();
     let entry = tree.write("entry.hoon", source);
-    resolve_native_imports(&entry, tree.root(), ScopeMode::Standard)
-        .expect_err("import block should be rejected")
+    resolve_native_imports(&entry, tree.root()).expect_err("import block should be rejected")
 }
 
 /// The first `%spot` path in a parsed AST, read from its debug rendering.
@@ -465,8 +463,8 @@ fn import_block_ends_at_the_first_non_import_line() {
     // gap) is left for the body, where hoonc cannot parse it.
     for source in ["/=  raw  /common/raw\n/+  util,\n    star-lib\n", "/+  util,\n    star-lib"] {
         let entry = tree.write("app/order.hoon", source);
-        let err = resolve_native_imports(&entry, tree.root(), ScopeMode::Standard)
-            .expect_err("clause outside the header");
+        let err =
+            resolve_native_imports(&entry, tree.root()).expect_err("clause outside the header");
         assert!(
             err.to_string().contains("malformed /+"),
             "{source:?}: {err}"
@@ -590,8 +588,7 @@ fn missing_imports_name_their_rune() {
         ("/+  dbl--dash\n", "`/+ dbl--dash`"),
     ] {
         let entry = tree.write("app/missing.hoon", source);
-        let err = resolve_native_imports(&entry, tree.root(), ScopeMode::Standard)
-            .expect_err("missing import");
+        let err = resolve_native_imports(&entry, tree.root()).expect_err("missing import");
         let message = err.to_string();
         assert!(
             message.contains("native import not found") && message.contains(rune),
@@ -607,7 +604,7 @@ fn missing_entries_are_io_errors() {
     for err in [
         parse_native_hoon(&missing, tree.root(), false).expect_err("parse"),
         parse_native_hoon_leaf(&missing, tree.root(), false).expect_err("leaf"),
-        resolve_native_imports(&missing, tree.root(), ScopeMode::Standard).expect_err("resolve"),
+        resolve_native_imports(&missing, tree.root()).expect_err("resolve"),
     ] {
         assert!(matches!(err, CompilerError::Io(_)), "{err:?}");
     }
@@ -780,136 +777,4 @@ fn spot_paths_handle_relative_and_cwd_relative_inputs() {
     let mut expected = vec![scratch.rel.to_string_lossy().into_owned()];
     expected.extend(["other".to_string(), "b.hoon".to_string()]);
     assert_eq!(first_spot_path(&expr), expected);
-}
-
-// ---------------------------------------------------------------------------
-// pipeline.rs: Urbit scope mode
-
-fn arvo_tree() -> (Tree, PathBuf) {
-    let tree = Tree::new();
-    let arvo = tree.path("pkg/arvo");
-    tree.write("pkg/arvo/sys/hoon.hoon", "|%\n++  part  ~\n--\n");
-    tree.write(
-        "pkg/arvo/sys/lull.hoon",
-        concat!(
-            "!:\n", "=>  ..part\n", "~%  %lull  ..part  ~\n", "|%\n", "++  l  1\n", "++  m\n",
-            "  ~%  %keep  ..part  ~\n", "  |=(a=@ a)\n", "--\n",
-        ),
-    );
-    tree.write(
-        "pkg/arvo/sys/zuse.hoon", "=>  ..lull\n|_  a=@\n++  z  a\n--\n",
-    );
-    tree.write("pkg/arvo/sys/arvo.hoon", "=>  +\n|*  a=@\na\n");
-    tree.write("pkg/arvo/lib/helper.hoon", "|%\n++  h  1\n--\n");
-    tree.write("pkg/arvo/app/ping.hoon", "/+  helper\n|=(a=@ a)\n");
-    (tree, arvo)
-}
-
-#[test]
-fn urbit_scope_chains_zuse_lull_and_hoon() {
-    let (tree, arvo) = arvo_tree();
-    let ping = tree.path("pkg/arvo/app/ping.hoon");
-
-    // The root file gets zuse ahead of its own imports; the library does not.
-    let imports = resolve_native_imports(&ping, &arvo, ScopeMode::Urbit).expect("resolve");
-    let summary: Vec<(Option<&str>, PathBuf)> = imports
-        .iter()
-        .map(|import| (import.face.as_deref(), canon(&import.path)))
-        .collect();
-    assert_eq!(
-        summary,
-        [
-            (None, canon(&arvo.join("sys/zuse.hoon"))),
-            (Some("helper"), canon(&arvo.join("lib/helper.hoon"))),
-        ]
-    );
-
-    let expr = parse_native_hoon_with_mode(&ping, &arvo, false, ScopeMode::Urbit).expect("parse");
-    let (zuse, rest) = tislus(&expr);
-    assert!(term_face(zuse).is_none());
-    let (helper, _) = tislus(rest);
-    assert_eq!(term_face(helper), Some("helper"));
-    // zuse <- lull (as `lull`) <- hoon (as `part`), and /sys/hoon gets `ride`.
-    let (lull, _) = tislus(zuse);
-    assert_eq!(term_face(lull), Some("lull"));
-    let Hoon::KetTis(_, lull) = lull else {
-        unreachable!()
-    };
-    let (part, _) = tislus(lull);
-    assert_eq!(term_face(part), Some("part"));
-    let Hoon::KetTis(_, hoon) = part else {
-        unreachable!()
-    };
-    let (ride, _) = tislus(hoon);
-    assert_eq!(term_face(ride), Some("ride"));
-
-    // The deps root need not be the arvo root: it is found from the entry.
-    let elsewhere = Tree::new();
-    let again = parse_native_hoon_with_mode(&ping, elsewhere.root(), false, ScopeMode::Urbit)
-        .expect("parse from entry-derived root");
-    assert_eq!(again, expr);
-}
-
-#[test]
-fn urbit_leaf_parse_adds_ambient_faces_and_sanitizes_sys_headers() {
-    let (tree, arvo) = arvo_tree();
-
-    // /sys/arvo gets ride and zuse; its `=>  +` header line is kept because
-    // it does not reach into a named core.
-    let arvo_file = arvo.join("sys/arvo.hoon");
-    let expr = parse_native_hoon_leaf_with_mode(&arvo_file, &arvo, false, ScopeMode::Urbit)
-        .expect("arvo parses");
-    let (ride, rest) = tislus(&expr);
-    assert_eq!(term_face(ride), Some("ride"));
-    let (zuse, _) = tislus(rest);
-    assert_eq!(term_face(zuse), Some("zuse"));
-
-    // lull's `=>  ..part` and `~%` registration lines are dropped only
-    // before the first core; the `~%` inside an arm stays.
-    let lull = arvo.join("sys/lull.hoon");
-    let sanitized =
-        parse_native_hoon_leaf_with_mode(&lull, &arvo, false, ScopeMode::Urbit).expect("lull");
-    let verbatim =
-        parse_native_hoon_leaf_with_mode(&lull, &arvo, false, ScopeMode::Standard).expect("raw");
-    assert_ne!(sanitized, verbatim);
-    let sanitized_debug = format!("{sanitized:?}");
-    let verbatim_debug = format!("{verbatim:?}");
-    // Dropping the two header runes leaves a strictly smaller tree.
-    assert!(sanitized_debug.len() < verbatim_debug.len());
-
-    // A header-only sys file sanitizes to nothing and falls back to the
-    // original source, which does not parse.
-    let header_only = tree.write(
-        "pkg/arvo/sys/header.hoon", "=>  ..part\n~%  %x  ..part  ~\n",
-    );
-    assert!(
-        parse_native_hoon_leaf_with_mode(&header_only, &arvo, false, ScopeMode::Urbit).is_err()
-    );
-
-    // Outside a pkg/arvo tree that has a sys directory, the deps dir is the
-    // root and no ambient imports are added.
-    let loose = Tree::new();
-    let not_pkg = loose.write("notpkg/arvo/sys/zuse.hoon", "|%\n++  z  1\n--\n");
-    let no_sys = loose.write("pkg/arvo/app/x.hoon", "42\n");
-    for (entry, deps) in [(not_pkg, loose.path("notpkg/arvo")), (no_sys, loose.path("pkg/arvo"))] {
-        let imports = resolve_native_imports(&entry, &deps, ScopeMode::Urbit).expect("resolve");
-        assert!(imports.is_empty(), "{entry:?}: {imports:?}");
-    }
-}
-
-#[cfg(target_os = "linux")]
-#[test]
-fn urbit_scope_skips_files_without_a_utf8_stem() {
-    use std::ffi::OsStr;
-    use std::os::unix::ffi::OsStrExt;
-
-    let (_tree, arvo) = arvo_tree();
-    let name = OsStr::from_bytes(b"\xff\xfe.hoon");
-    let path = arvo.join("app").join(name);
-    fs::write(&path, "42\n").expect("write non-utf8 name");
-    let imports = resolve_native_imports(&path, &arvo, ScopeMode::Urbit).expect("resolve");
-    assert!(imports.is_empty());
-    let expr =
-        parse_native_hoon_leaf_with_mode(&path, &arvo, false, ScopeMode::Urbit).expect("parse");
-    assert!(!matches!(expr, Hoon::TisLus(..)));
 }

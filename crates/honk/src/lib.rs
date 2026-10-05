@@ -14,7 +14,11 @@ pub mod errors;
 pub mod nasm_bridge;
 pub mod native;
 pub mod pipeline;
+pub mod project;
 pub mod types;
+pub mod urbit;
+pub mod urbit_path;
+pub mod urbit_workspace;
 
 use hatch::ast::hoon::Hoon;
 use nockapp::noun::slab::NounSlab;

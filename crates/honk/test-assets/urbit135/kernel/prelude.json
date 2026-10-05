@@ -1,0 +1,18 @@
+{
+  "repository": "https://github.com/urbit/urbit",
+  "revision": "5a187fededc4582a34fcd6055c67bb63e0917b94",
+  "files": {
+    "arvo.hoon": {
+      "source": "pkg/arvo/sys/arvo.hoon",
+      "sha256": "1aea3ec9e9a9324b6247695503c90c0de1e6f73dde70b4bf5b7d134c7823fdc6"
+    },
+    "lull.hoon": {
+      "source": "pkg/arvo/sys/lull.hoon",
+      "sha256": "98b9c80b7722df1fbb54357d200577c045705198b2fa5df998fd32cd1dacfef3"
+    },
+    "zuse.hoon": {
+      "source": "pkg/arvo/sys/zuse.hoon",
+      "sha256": "eeb392d750757ec91aa3848d5a35ad4ba20557be85e62293fc63f72933343d73"
+    }
+  }
+}

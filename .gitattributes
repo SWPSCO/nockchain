@@ -1,0 +1,2 @@
+*.jam binary
+tools/urbit135/vere-eval.patch whitespace=-blank-at-eol

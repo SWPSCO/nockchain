@@ -18,13 +18,13 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 use hatch::ast::hoon::{Hoon, Limb, Spot as HoonSpot};
 use hatch::utils::hoon_to_noun;
 use honk::build_cache::{BuildCache, CacheObjectKind, CacheRead, CacheWrite};
-use honk::nasm_bridge::SlabToNockasm;
+use honk::nasm_bridge::{hydrate_pack_root, SlabToNockasm};
 use honk::native::formula::comb;
 use honk::native::hot::native_hot_state;
 use honk::native::noun::term_to_noun;
 use honk::native::ut::{spot_hint_formula, ty_noun, Ut};
 use honk::pipeline;
-use honk::pipeline::{NativeImportKind, ScopeMode};
+use honk::pipeline::NativeImportKind;
 use nockapp::noun::slab::{NockJammer, NounSlab};
 use nockapp::noun::{BrandedEvalExt, BrandedNounSpaceExt, NounAllocatorExt};
 use nockapp::utils::{create_context, NOCK_STACK_SIZE_MEDIUM};
@@ -38,7 +38,7 @@ use nockvm::jets::warm::Warm;
 use nockvm::jets::JetDispatchMode;
 use nockvm::mem::{AllocationError, NockStack};
 use nockvm::mug::{calc_atom_mug_u32, calc_cell_mug_u32, get_mug, set_mug};
-use nockvm::noun::{Atom, Cell, Noun, NounAllocator, NounSpace, D, DIRECT_MAX, T};
+use nockvm::noun::{Atom, Cell, Noun, NounAllocator, NounSpace, D, T};
 use nockvm::serialization::jam as nock_jam;
 use tracing::{debug, info};
 use tracing_subscriber::EnvFilter;
@@ -74,6 +74,7 @@ struct BundleIdentity(usize);
 #[derive(Clone, Debug)]
 struct Cli {
     entry: Option<PathBuf>,
+    project: Option<honk::project::Project>,
     directory: PathBuf,
     output: Option<PathBuf>,
     prelude: PathBuf,
@@ -144,6 +145,7 @@ fn usage(program: &str) -> String {
          Usage: {program} [--new] --batch-manifest <file> --prelude <hoon.hoon> [--sut-jam <file>] <deps_dir>\n\
          Usage: {program} --dump-wrapper-assets <dir> --prelude <hoon.hoon> <deps_dir>\n\
          Usage: {program} --dump-native-wrapper-assets <dir> --prelude <hoon.hoon> <deps_dir>\n\
+         Usage: {program} [--config <honk.toml>] [--dynock|--dynock-typed] --output <file> <entry>\n\
          Usage: {program} nockasm <export|verify|diff> ...\n\
          Usage: {program} cache <stats|gc> --cache-dir <dir>\n\
          --cache-dir enables the persistent content-addressed Nockasm cache; --new bypasses reads and atomically repopulates it. Vet checking is enabled by default and applies to the whole build (entry and dependency files, matching hoonc); pass --no-vet to disable strict/nice type-checking.\n\
@@ -153,6 +155,7 @@ fn usage(program: &str) -> String {
 
 fn parse_args() -> std::result::Result<Cli, String> {
     let mut args = env::args().skip(1);
+    let mut config: Option<PathBuf> = None;
     let mut output: Option<PathBuf> = None;
     let mut prelude: Option<PathBuf> = None;
     let mut sut_jam: Option<PathBuf> = None;
@@ -183,6 +186,11 @@ fn parse_args() -> std::result::Result<Cli, String> {
                     .next()
                     .ok_or_else(|| "missing value after --output".to_string())?;
                 output = Some(PathBuf::from(value));
+            }
+            "--config" => {
+                config = Some(PathBuf::from(
+                    args.next().ok_or("missing value after --config")?,
+                ));
             }
             "--prelude" => {
                 let value = args
@@ -229,6 +237,13 @@ fn parse_args() -> std::result::Result<Cli, String> {
     }
 
     let mode = CompileMode::from_flags(arbitrary, dynock, dynock_typed)?;
+    if config.is_some()
+        && (batch_manifest.is_some()
+            || wrapper_asset_dump.is_some()
+            || native_wrapper_asset_dump.is_some())
+    {
+        return Err("--config requires a single entry".into());
+    }
 
     if wrapper_asset_dump.is_some() && native_wrapper_asset_dump.is_some() {
         return Err(
@@ -254,6 +269,7 @@ fn parse_args() -> std::result::Result<Cli, String> {
         }
         return Ok(Cli {
             entry: None,
+            project: None,
             directory: positionals.remove(0),
             output: None,
             prelude: prelude.ok_or_else(|| "missing required --prelude".to_string())?,
@@ -287,6 +303,7 @@ fn parse_args() -> std::result::Result<Cli, String> {
         }
         return Ok(Cli {
             entry: None,
+            project: None,
             directory: positionals.remove(0),
             output: None,
             prelude: prelude.ok_or_else(|| "missing required --prelude".to_string())?,
@@ -317,6 +334,7 @@ fn parse_args() -> std::result::Result<Cli, String> {
         }
         return Ok(Cli {
             entry: None,
+            project: None,
             directory: positionals.remove(0),
             output: None,
             prelude: prelude.ok_or_else(|| "missing required --prelude".to_string())?,
@@ -332,15 +350,45 @@ fn parse_args() -> std::result::Result<Cli, String> {
         });
     }
 
-    if positionals.len() != 2 {
-        return Err("expected <entry> and <deps_dir>".to_string());
+    if positionals.is_empty() || positionals.len() > 2 {
+        return Err("expected <entry> and optional configured <deps_dir>".into());
+    }
+    let entry = positionals.remove(0);
+    let workspace = match config {
+        Some(path) => {
+            Some(honk::project::Workspace::load(&path).map_err(|error| error.to_string())?)
+        }
+        None => honk::project::Workspace::discover(&entry).map_err(|error| error.to_string())?,
+    };
+    let project = workspace
+        .as_ref()
+        .map(|workspace| workspace.project_for(&entry).cloned())
+        .transpose()
+        .map_err(|error| error.to_string())?;
+    let directory = positionals
+        .pop()
+        .or_else(|| project.as_ref().map(|project| project.root.clone()))
+        .ok_or("expected <entry> and <deps_dir>, or honk.toml")?;
+    let prelude = prelude
+        .or_else(|| project.as_ref().map(|project| project.prelude.clone()))
+        .ok_or("missing required --prelude or honk.toml")?;
+    if let Some(project) = &project {
+        if directory
+            .canonicalize()
+            .map_err(|error| error.to_string())?
+            != project.root
+            || prelude.canonicalize().map_err(|error| error.to_string())? != project.prelude
+        {
+            return Err("explicit paths conflict with the selected honk.toml project".into());
+        }
     }
 
     Ok(Cli {
-        entry: Some(positionals.remove(0)),
-        directory: positionals.remove(0),
+        entry: Some(entry),
+        project,
+        directory,
         output: Some(output.ok_or_else(|| "missing required --output".to_string())?),
-        prelude: prelude.ok_or_else(|| "missing required --prelude".to_string())?,
+        prelude,
         sut_jam,
         mode,
         batch_manifest: None,
@@ -618,6 +666,46 @@ fn main() {
 }
 
 async fn run(cli: Cli) -> Result<()> {
+    if let Some(project) = cli
+        .project
+        .as_ref()
+        .filter(|project| project.dialect == honk::native::Dialect::Urbit)
+    {
+        if cli.mode == CompileMode::Arbitrary || cli.sut_jam.is_some() {
+            return Err("Urbit projects support standard, --dynock, and --dynock-typed output without --sut-jam".into());
+        }
+        let entry = cli
+            .entry
+            .as_deref()
+            .ok_or("Urbit project requires an entry")?;
+        let output = cli
+            .output
+            .as_deref()
+            .ok_or("Urbit project requires --output")?;
+        let cache = cli
+            .cache_dir
+            .clone()
+            .map(|directory| BuildCache::new(directory, cli.fresh));
+        let mut builder = honk::urbit_workspace::Builder::new(project, cli.dbug, cli.vet, cache)?;
+        let output_mode = match cli.mode {
+            CompileMode::Standard => honk::urbit_workspace::Output::Value,
+            CompileMode::Dynock => honk::urbit_workspace::Output::Dynock,
+            CompileMode::DynockTyped => honk::urbit_workspace::Output::DynockTyped,
+            CompileMode::Arbitrary => unreachable!("arbitrary mode is rejected above"),
+        };
+        let jam = builder.build(entry, output_mode)?;
+        if let Some(stats) = builder.cache_stats() {
+            tracing::info!(?stats, "Hoon 135 mint cache");
+        }
+        if let Some(parent) = output
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(output, jam)?;
+        return Ok(());
+    }
     let batch_entries = cli
         .batch_manifest
         .as_ref()
@@ -626,6 +714,11 @@ async fn run(cli: Cli) -> Result<()> {
     if let Some(entries) = batch_entries.as_deref() {
         let mut requires_reference = false;
         for entry in entries {
+            if let Some(workspace) = honk::project::Workspace::discover(&entry.entry)? {
+                if workspace.project_for(&entry.entry)?.dialect == honk::native::Dialect::Urbit {
+                    return Err("compile configured Urbit entries individually; batch manifests use a Nockchain prelude".into());
+                }
+            }
             requires_reference |=
                 entry_uses_unpinned_softed_constraints(&entry.entry, &cli.directory)?;
         }
@@ -834,11 +927,10 @@ fn check_dependency_tree(
         let imports = match memo.imports.get(&canonical) {
             Some(imports) => imports.clone(),
             None => {
-                let imports =
-                    pipeline::resolve_native_imports(&file, directory, ScopeMode::Standard)?
-                        .into_iter()
-                        .map(|import| import.path.canonicalize())
-                        .collect::<std::io::Result<Vec<_>>>()?;
+                let imports = pipeline::resolve_native_imports(&file, directory)?
+                    .into_iter()
+                    .map(|import| import.path.canonicalize())
+                    .collect::<std::io::Result<Vec<_>>>()?;
                 memo.imports.insert(canonical.clone(), imports.clone());
                 imports
             }
@@ -2097,8 +2189,7 @@ impl<'a> NativeBuildContext<'a> {
         let result = (|| -> Result<DependencyMerkle> {
             let source = fs::read(path)?;
             let logical_source = build_import_wer(path, &self.directory).join("/");
-            let imports =
-                pipeline::resolve_native_imports(path, &self.directory, ScopeMode::Standard)?;
+            let imports = pipeline::resolve_native_imports(path, &self.directory)?;
             let mut dependency_keys = Vec::with_capacity(imports.len());
             let mut hash = blake3::Hasher::new();
             hash.update(b"honk-native-dependency-merkle-v1\0");
@@ -2157,6 +2248,7 @@ impl<'a> NativeBuildContext<'a> {
         hash.update(&[match kind {
             CacheObjectKind::DependencyVase => 0,
             CacheObjectKind::EntryProduct => 1,
+            CacheObjectKind::MintProduct => 2,
         }]);
         hash.update(&[u8::from(need_eval)]);
         hash.finalize()
@@ -2174,8 +2266,12 @@ impl<'a> NativeBuildContext<'a> {
             .pack_hydration
             .entry(BundleIdentity(std::rc::Rc::as_ptr(bundle) as usize))
             .or_insert_with(|| vec![None; bundle.nodes().len()]);
-        hydrate_pack_root(&mut *self.ut.slab, bundle.nodes(), root_id, values)?;
-        values[root_id.index()].ok_or_else(|| "cache pack root failed to hydrate".into())
+        Ok(hydrate_pack_root(
+            &mut *self.ut.slab,
+            bundle.nodes(),
+            root_id,
+            values,
+        ))
     }
 
     fn cached_vase_noun(&mut self, vase: &NativeVase) -> Noun {
@@ -2483,11 +2579,7 @@ impl<'a> NativeBuildContext<'a> {
         let _compile_log = TimedHoonPathLog::new(path, HoonLogOperation::Compile);
         trace_native(format!("compiling {}", path.display()));
         let imports = trace_timed(format!("resolving imports {}", path.display()), || {
-            Ok(pipeline::resolve_native_imports(
-                path,
-                &self.directory,
-                ScopeMode::Standard,
-            )?)
+            Ok(pipeline::resolve_native_imports(path, &self.directory)?)
         })?;
         let mut imported_vases = Vec::new();
         let imports_need_eval = evaluate_value || needs_subject;
@@ -3563,7 +3655,7 @@ fn entry_uses_unpinned_softed_constraints(entry: &Path, directory: &Path) -> Res
         if path.file_name().and_then(|name| name.to_str()) == Some("softed-constraints.hoon") {
             return Ok(!softed_constraints_pins_match(&path, directory)?);
         }
-        for import in pipeline::resolve_native_imports(&path, directory, ScopeMode::Standard)? {
+        for import in pipeline::resolve_native_imports(&path, directory)? {
             if import.kind == NativeImportKind::Hoon {
                 pending.push(import.path);
             }
@@ -3988,154 +4080,6 @@ fn jam_slab_noun(slab: &mut NounSlab<NockJammer>, noun: Noun) -> Vec<u8> {
 fn jam_ut_noun(ut: &mut Ut<'_>, noun: Noun) -> Vec<u8> {
     ut.slab.set_root(noun);
     ut.slab.jam().to_vec()
-}
-
-/// Build slab nouns for `root` and everything reachable from it, reusing any
-/// nodes hydrated by earlier reads of the same pack. Node ids are
-/// topologically ordered by construction (`NasmBundle::from_bytes` rejects
-/// forward references), so one forward pass hydrates children before parents.
-/// Mirrors `nockasm`'s `lower_root_node` for every node kind but builds
-/// directly into the slab, with no lower/jam/cue round trip.
-fn hydrate_pack_root(
-    slab: &mut NounSlab,
-    nodes: &[nockasm::DagNode],
-    root: nockasm::DagId,
-    values: &mut [Option<Noun>],
-) -> Result<()> {
-    if values[root.index()].is_some() {
-        return Ok(());
-    }
-    let mut reachable = vec![false; nodes.len()];
-    let mut stack = vec![root];
-    while let Some(id) = stack.pop() {
-        let index = id.index();
-        // Already-hydrated nodes stop the walk: their children are hydrated too.
-        if reachable[index] || values[index].is_some() {
-            continue;
-        }
-        reachable[index] = true;
-        push_pack_children(&nodes[index], &mut stack);
-    }
-    for index in 0..nodes.len() {
-        if !reachable[index] || values[index].is_some() {
-            continue;
-        }
-        values[index] = Some(build_pack_node(slab, &nodes[index], values));
-    }
-    Ok(())
-}
-
-fn push_pack_children(node: &nockasm::DagNode, output: &mut Vec<nockasm::DagId>) {
-    use nockasm::{DagNode, DagOp};
-    match node {
-        DagNode::Atom(_) | DagNode::Op(DagOp::Slot(_)) => {}
-        DagNode::Cell(a, b)
-        | DagNode::Op(DagOp::Eval(a, b))
-        | DagNode::Op(DagOp::Eq(a, b))
-        | DagNode::Op(DagOp::Comp(a, b))
-        | DagNode::Op(DagOp::Push(a, b))
-        | DagNode::Op(DagOp::Hint(a, b))
-        | DagNode::Op(DagOp::Scry(a, b))
-        | DagNode::Op(DagOp::Edit(_, a, b)) => output.extend([*a, *b]),
-        DagNode::Nock(a)
-        | DagNode::Op(DagOp::Const(a))
-        | DagNode::Op(DagOp::Isa(a))
-        | DagNode::Op(DagOp::Inc(a))
-        | DagNode::Op(DagOp::Call(_, a)) => output.push(*a),
-        DagNode::Op(DagOp::If(a, b, c)) | DagNode::Op(DagOp::Hintd(a, b, c)) => {
-            output.extend([*a, *b, *c]);
-        }
-    }
-}
-
-/// Builds one node into the slab. Children are hydrated first (topological
-/// order), so the lookups cannot miss. The op arms reproduce nockasm's
-/// `lower_op` noun shapes. Cache packs are written in `Noun` mode and should
-/// hold only atoms and cells, but a pack is untrusted input, so every node kind
-/// is lowered.
-fn build_pack_node(slab: &mut NounSlab, node: &nockasm::DagNode, values: &[Option<Noun>]) -> Noun {
-    use nockasm::{DagNode, DagOp};
-    let get =
-        |id: &nockasm::DagId| values[id.index()].expect("pack children hydrate before parents");
-    match node {
-        DagNode::Atom(atom) => nasm_atom_to_slab(slab, atom),
-        DagNode::Cell(head, tail) => {
-            let (head, tail) = (get(head), get(tail));
-            T(slab, &[head, tail])
-        }
-        DagNode::Nock(raw) => get(raw),
-        DagNode::Op(op) => match op {
-            DagOp::Slot(axis) => {
-                let axis = nasm_atom_to_slab(slab, axis);
-                T(slab, &[D(0), axis])
-            }
-            DagOp::Const(value) => {
-                let value = get(value);
-                T(slab, &[D(1), value])
-            }
-            DagOp::Eval(subject, formula) => {
-                let (subject, formula) = (get(subject), get(formula));
-                T(slab, &[D(2), subject, formula])
-            }
-            DagOp::Isa(formula) => {
-                let formula = get(formula);
-                T(slab, &[D(3), formula])
-            }
-            DagOp::Inc(formula) => {
-                let formula = get(formula);
-                T(slab, &[D(4), formula])
-            }
-            DagOp::Eq(left, right) => {
-                let (left, right) = (get(left), get(right));
-                T(slab, &[D(5), left, right])
-            }
-            DagOp::If(condition, then_, else_) => {
-                let (condition, then_, else_) = (get(condition), get(then_), get(else_));
-                T(slab, &[D(6), condition, then_, else_])
-            }
-            DagOp::Comp(first, second) => {
-                let (first, second) = (get(first), get(second));
-                T(slab, &[D(7), first, second])
-            }
-            DagOp::Push(value, body) => {
-                let (value, body) = (get(value), get(body));
-                T(slab, &[D(8), value, body])
-            }
-            DagOp::Call(axis, formula) => {
-                let formula = get(formula);
-                let axis = nasm_atom_to_slab(slab, axis);
-                T(slab, &[D(9), axis, formula])
-            }
-            DagOp::Edit(axis, value, formula) => {
-                let (value, formula) = (get(value), get(formula));
-                let axis = nasm_atom_to_slab(slab, axis);
-                let target = T(slab, &[axis, value]);
-                T(slab, &[D(10), target, formula])
-            }
-            DagOp::Hint(tag, formula) => {
-                let (tag, formula) = (get(tag), get(formula));
-                T(slab, &[D(11), tag, formula])
-            }
-            DagOp::Hintd(tag, clue, formula) => {
-                let (tag, clue, formula) = (get(tag), get(clue), get(formula));
-                let pair = T(slab, &[tag, clue]);
-                T(slab, &[D(11), pair, formula])
-            }
-            DagOp::Scry(reference, path) => {
-                let (reference, path) = (get(reference), get(path));
-                T(slab, &[D(12), reference, path])
-            }
-        },
-    }
-}
-
-fn nasm_atom_to_slab(slab: &mut NounSlab, atom: &nockasm::Atom) -> Noun {
-    if let Some(value) = atom.as_u64() {
-        if value <= DIRECT_MAX {
-            return D(value);
-        }
-    }
-    <Atom as nockvm::ext::AtomExt>::from_bytes(slab, &atom.to_le_bytes()).as_noun()
 }
 
 fn cue_subject_type_to_slab(slab: &mut NounSlab<NockJammer>, raw: &[u8]) -> Result<Noun> {

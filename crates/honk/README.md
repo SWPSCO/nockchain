@@ -2,6 +2,9 @@
 
 Native Rust compiler from Hoon to Nock with byte-for-byte parity with `hoonc`, verified mainly against `hoon-138` and this project's kernels.
 
+For Hoon 135 desk configuration, caching, and independent Vere comparisons,
+see [Urbit support](../../docs/native-compiler/urbit.md).
+
 Canonical compiler reference file:
 
 - `crates/hoonc/hoon/hoon-138.hoon`
@@ -117,6 +120,16 @@ bazel test //assets/native:kernel_parity_test --test_output=errors
 When changing compiler performance code, run parity first and profile second. When changing parser spot behavior for compiler parity, run parser unit tests and at least one byte-for-byte compiler artifact parity target.
 
 ## CLI examples
+
+Generate the embedded Hoon 135 resolver before building Honk from a fresh
+checkout (requires Zig 0.15.2):
+
+```bash
+just laze-135-asset
+```
+
+The script builds pinned Vere, compiles the resolver from Hoon source, and
+checks its committed SHA-256 identity. The generated JAM stays ignored.
 
 Build the native compiler binary:
 

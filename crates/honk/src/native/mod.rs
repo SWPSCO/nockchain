@@ -4,12 +4,14 @@
 
 pub mod formula;
 pub mod hot;
+pub mod hot135;
 pub mod identity;
 // Native compiler IR; see docs/native-compiler for design and performance notes.
 pub mod ir;
 pub mod noun;
 pub mod ut;
 
+pub use hatch::ast::hoon::Dialect;
 use hatch::ast::hoon::Hoon;
 use nockapp::noun::slab::NounSlab;
 use nockvm::noun::{Noun, NounAllocator};
@@ -19,7 +21,9 @@ use crate::errors::Result;
 use crate::native::ut::Ut;
 use crate::types::TypeNoun;
 
-pub struct NativeCompiler;
+pub struct NativeCompiler {
+    dialect: Dialect,
+}
 
 impl NativeCompiler {
     fn with_large_stack<R>(f: impl FnOnce() -> Result<R>) -> Result<R> {
@@ -27,7 +31,11 @@ impl NativeCompiler {
     }
 
     pub async fn new() -> Result<Self> {
-        Ok(Self)
+        Ok(Self::with_dialect(Dialect::Nockchain))
+    }
+
+    pub fn with_dialect(dialect: Dialect) -> Self {
+        Self { dialect }
     }
 
     pub fn compile_expr(&mut self, expr: &Hoon) -> Result<CompiledNative> {
@@ -43,7 +51,7 @@ impl NativeCompiler {
             let mut slab = NounSlab::new();
             let sut = crate::native::ut::ty_noun(&mut slab);
             let gol = crate::native::ut::ty_noun(&mut slab);
-            let mut ut = Ut::new(&mut slab);
+            let mut ut = Ut::new_for_dialect(&mut slab, self.dialect);
             ut.set_vet(vet);
             // `mint_noun` returns the noun type that `CompiledNative` carries.
             let (ty, formula) = ut.mint_noun(sut, gol, expr)?;
@@ -56,7 +64,7 @@ impl NativeCompiler {
 
             let ty_noun = TypeNoun::new(ty);
             let space = slab.noun_space();
-            let arm_map = ArmMap::from_type(&ty_noun, &space)?;
+            let arm_map = ArmMap::from_type_for_dialect(&ty_noun, &space, self.dialect)?;
             Ok(CompiledNative {
                 slab,
                 ty: ty_noun,
