@@ -99,7 +99,7 @@ jobs:
     - name: Create Dockerfile
       run: |
         cat << 'EOF' > Dockerfile
-        FROM rust:1.87-slim-bookworm as builder
+        FROM rust:1.87-slim-bookworm AS builder
         ARG BUILD_LABEL="production"
         ARG BUILD_HOST
         ARG BUILD_USER
@@ -136,8 +136,8 @@ jobs:
             echo 'git-fetch-with-cli = true' >> ~/.cargo/config.toml
         RUN mkdir -p hoon assets
         RUN cp .env_example .env
-        RUN cargo install --target x86_64-unknown-linux-gnu --locked --force --path crates/hoonc --bin hoonc
-        RUN make build-hoon-all
+        RUN cargo install --target x86_64-unknown-linux-gnu --locked --force --path crates/tools/hoonc --bin hoonc
+        RUN make build-hoon-all HOONC=/usr/local/cargo/bin/hoonc
         RUN cargo build --release --locked --target x86_64-unknown-linux-gnu --bin nockchain
         RUN cargo build --release --locked --target x86_64-unknown-linux-gnu \
             -p ai-pow-miner --features node --bin ai-pow-mine
